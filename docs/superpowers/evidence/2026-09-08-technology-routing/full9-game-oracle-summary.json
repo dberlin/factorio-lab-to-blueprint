@@ -1,0 +1,23 @@
+[
+  {
+    "file": "fixture-post.json",
+    "cases": 4,
+    "drop_rejected": 0,
+    "exit_rejected": 0,
+    "existing_belt_clause_rejected": 0
+  },
+  {
+    "file": "fixture-pre.json",
+    "cases": 4,
+    "drop_rejected": 4,
+    "exit_rejected": 0,
+    "existing_belt_clause_rejected": 4
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "cases": 84,
+    "drop_rejected": 0,
+    "exit_rejected": 0,
+    "existing_belt_clause_rejected": 0
+  }
+]

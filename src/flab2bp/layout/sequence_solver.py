@@ -5371,7 +5371,7 @@ def _production_run(
                 pack,
                 power=power,
                 policy=band_policy,
-                ramped=not belt_rules.vertical_construction,
+                belt_rules=belt_rules,
                 **preparation_kwargs,
             )
         except _PreparationDeadline, finalize.ProjectionCancelled:

@@ -1,10 +1,12 @@
 """How a Spray Coater is placed.
 
 ``placed`` -- the default and the production model.  One free-standing
-four-tile belt run per sprayed input lane, sited after the pack on free ground
+five-tile belt run per sprayed input lane, sited after the pack on free ground
 beside the consumer lane head, with the addon riding its third tile.  Every
 producer net and external run sinks into the node's IN-PORT, one tile west of
-the body, so a many-to-one merge lands off the body BY CONSTRUCTION.
+the body; its OUT-PORT is one tile east of the body. Merges and turns stay
+outside the coater. The raised proliferator terminal is fed transversely,
+along the game's addon-area-1 axis.
 
 ``off`` -- a GEOMETRY control, retained for one release as the A/B control.
 It restores the old siting: the addon rides the interior of the consumer

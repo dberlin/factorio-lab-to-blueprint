@@ -41,6 +41,7 @@ from flab2bp.layout.routing_domain import (
     PortAccessEvidence,
     PortAccessReservation,
     _Canvas,
+    _CompositionProjection,
     _lane_stacks_for,
     _Net,
     _place_power,
@@ -48,7 +49,6 @@ from flab2bp.layout.routing_domain import (
     _port_access_inventory,
     _power_reservation,
     _PreparationDeadline,
-    _prepare_coater_junction_geometry,
     _reserve_coater_belt_ban,
     _reserve_port_access,
     _route_all,
@@ -370,7 +370,11 @@ def _belt_model_for(spec: BuildSpec) -> int:
 
 
 def canvas_for(
-    spec: BuildSpec, buildings: list[PlacedBuilding], *, ramped: bool, margin: int
+    spec: BuildSpec,
+    buildings: list[PlacedBuilding],
+    *,
+    belt_rules: catalog.BeltAltitudeRules,
+    margin: int,
 ) -> _Canvas:
     """The composed buildings as a routing canvas, sized to their own extent.
 
@@ -398,7 +402,7 @@ def canvas_for(
     """
     tower = catalog.power_tower_building(spec.power_tower_item_id)
     canvas = _Canvas(
-        ramped=ramped,
+        belt_rules=belt_rules,
         sorter_tiers=_sorter_tiers_for(spec),
         sorter_stacks=_sorter_stacks_for(spec),
         lane_stacks=_lane_stacks_for(spec),
@@ -673,7 +677,7 @@ def _pack_at(
     spec: BuildSpec,
     *,
     gap: int,
-    ramped: bool,
+    belt_rules: catalog.BeltAltitudeRules,
     margin: int,
     envelope: BandPolicySearchEnvelope,
 ) -> _Packing:
@@ -700,7 +704,7 @@ def _pack_at(
     fallback_machine_counts = [
         sum(building.recipe_id != 0 for building in block.placement.buildings) for block in blocks
     ]
-    canvas = canvas_for(spec, buildings, ramped=ramped, margin=margin)
+    canvas = canvas_for(spec, buildings, belt_rules=belt_rules, margin=margin)
 
     nets: list[_Net] = []
     for ordinal, flow in enumerate(flows):
@@ -886,7 +890,7 @@ def pack_with_access(
     flows: list[LaneFlow],
     spec: BuildSpec,
     *,
-    ramped: bool,
+    belt_rules: catalog.BeltAltitudeRules,
     deadline: float | None,
     margin: int,
     envelope: BandPolicySearchEnvelope,
@@ -962,7 +966,13 @@ def pack_with_access(
             break
         rung_deadline = deadline if first else ladder_deadline
         packing = _pack_at(
-            placements, flows, spec, gap=rung, ramped=ramped, margin=margin, envelope=envelope
+            placements,
+            flows,
+            spec,
+            gap=rung,
+            belt_rules=belt_rules,
+            margin=margin,
+            envelope=envelope,
         )
         bounds = packing.canvas.limit
         assert bounds is not None  # canvas_for always sets it
@@ -1170,7 +1180,7 @@ def compose(
     spec: BuildSpec,
     *,
     gap: int,
-    ramped: bool,
+    belt_rules: catalog.BeltAltitudeRules,
     deadline: float | None,
     policy: BandPolicy = _PORTABLE_POLICY,
     _limit_margin: int = 8,
@@ -1191,7 +1201,7 @@ def compose(
             placements,
             flows,
             spec,
-            ramped=ramped,
+            belt_rules=belt_rules,
             deadline=deadline,
             margin=_limit_margin,
             gap=gap,
@@ -1225,16 +1235,16 @@ def compose(
     belt_id = _belt_id_for(spec)
     belt_model = _belt_model_for(spec)
     try:
-        junction_ban, junction_frame_bans = _prepare_coater_junction_geometry(
+        projection = _CompositionProjection(
             canvas.buildings,
             bounds,
             policy,
-            already_banned=frozenset(canvas.junction_ban),
+            belt_rules=canvas.belt_rules,
             cancelled=partial(_spent, deadline),
         )
+        canvas.junction_projection = projection
     except _PreparationDeadline:
         return _budget_refusal(_Packing(packed.buildings, blocks, canvas, nets))
-    canvas.junction_ban.update(junction_ban)
     result = _route_all(
         canvas,
         nets,
@@ -1242,7 +1252,6 @@ def compose(
         belt_model,
         bounds,
         deadline=deadline,
-        junction_frame_bans=junction_frame_bans,
     )
 
     failures.extend(
@@ -1283,7 +1292,9 @@ def compose(
     # into a message-less "composition crashed: _PreparationDeadline: " --
     # would destroy the very refusal this pass exists to improve.
     try:
-        infill_sites, unpowered = plan_power_infill(canvas, cancelled=partial(_spent, deadline))
+        infill_sites, unpowered = plan_power_infill(
+            canvas, policy=policy, cancelled=partial(_spent, deadline)
+        )
     except _PreparationDeadline:
         infill_sites, unpowered = [], ()
         failures.append(

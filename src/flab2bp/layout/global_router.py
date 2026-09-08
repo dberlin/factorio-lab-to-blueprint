@@ -5,14 +5,15 @@ import math
 from array import array
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import lru_cache
 from types import MappingProxyType
 from typing import cast
 
-from flab2bp.layout import route_kernel
+from flab2bp.dsp import catalog
+from flab2bp.layout import junction, route_kernel
 from flab2bp.layout.route_feedback import Cell, FeedbackState, NetId, NetRole
 from flab2bp.layout.routing_domain import (
     _STEPS,
-    LEVELS,
     _canvas_span,
     _cut_loops,
     _Grid,
@@ -22,6 +23,7 @@ from flab2bp.layout.routing_domain import (
     _route_box,
     _routing_flags,
     _routing_transitions,
+    _RoutingTransition,
 )
 
 _PRESENT_COST = 1.0
@@ -243,6 +245,9 @@ def _route_round(
         grid = external_grid if net.net_id.role is NetRole.EXTERNAL else internal_grid
         flags, starts, goals = _route_ends(net, grid, reserved_by_owner)
         compatible = frozenset((*net.src_group, *net.dst_group))
+        movement = _relaxed_transitions(
+            grid.xstep, grid.levels, grid.vertical_construction, canvas.belt_rules
+        )
         searched = _search_relaxed(
             grid,
             flags,
@@ -254,6 +259,7 @@ def _route_round(
             net.net_id,
             remaining,
             cancelled,
+            movement=movement,
         )
         remaining -= searched.expansions
         expansions += searched.expansions
@@ -356,7 +362,7 @@ def _hot_summary(
                 if value > 0.0
                 and x0 <= cell[0] <= x1
                 and y0 <= cell[1] <= y1
-                and 0 <= cell[2] < LEVELS
+                and 0 <= cell[2] < grid.levels
             ),
             key=lambda cell: (-history[cell], grid.index(cell)),
         )[:_HOT_CELL_LIMIT]
@@ -459,7 +465,7 @@ def _adjacent_port(port: tuple[int, int, int]) -> tuple[Cell, ...]:
 def _live_index(grid: _Grid, flags: bytearray, cell: Cell) -> int | None:
     x, y, level = cell
     x0, y0, x1, y1 = grid.span
-    if not (x0 <= x <= x1 and y0 <= y <= y1 and 0 <= level < LEVELS):
+    if not (x0 <= x <= x1 and y0 <= y <= y1 and 0 <= level < grid.levels):
         return None
     index = grid.index(cell)
     return index if flags[index] else None
@@ -507,6 +513,47 @@ def _kernel_bounds_hold(
     return True
 
 
+@lru_cache(maxsize=32)
+def _relaxed_transitions(
+    xstep: int,
+    levels: int,
+    vertical_construction: bool,
+    belt_rules: catalog.BeltAltitudeRules,
+) -> tuple[tuple[_RoutingTransition, ...], ...]:
+    """Ordinary moves plus a conservative physical Splitter displacement graph.
+
+    Every connector comes from the actual supported model/port geometry and
+    save ceiling. Ignoring stack footprints, foreign reservations, and support
+    siting deliberately makes this a SUPERSET of detailed physical admission.
+    A relaxed path is only congestion guidance, never an emission witness; an
+    empty relaxed heap cannot overlook an admitted Splitter shortcut.
+    """
+    ordinary = _routing_transitions(xstep, levels, vertical_construction)
+    connectors: list[dict[tuple[int, int, int], float]] = [{} for _ in range(levels)]
+    for carry_level in range(levels):
+        for yaw in (0.0, 90.0, 180.0, 270.0):
+            for candidate in junction.splitter_route_candidates(
+                0, 0, carry_level, yaw=yaw, altitude_rules=belt_rules, carries_item=""
+            ):
+                sx, sy, source_level = candidate.entry.dock
+                tx, ty, target_level = candidate.exit.dock
+                dx, dy = tx - sx, ty - sy
+                dz = target_level - source_level
+                # Nonnegative construction cost and Manhattan-dominating XY
+                # travel keep the relaxed kernel's geometric heuristic valid.
+                connectors[source_level][(dx, dy, dz)] = float(abs(dx) + abs(dy) + abs(dz))
+    return tuple(
+        (
+            *ordinary[level],
+            *(
+                (dx * xstep + dy * levels + dz, 0, dx, dy, cost)
+                for (dx, dy, dz), cost in sorted(connectors[level].items())
+            ),
+        )
+        for level in range(levels)
+    )
+
+
 def _search_relaxed(
     grid: _Grid,
     flags: bytearray,
@@ -518,6 +565,8 @@ def _search_relaxed(
     net_id: NetId,
     budget: int,
     cancelled: Callable[[], bool] | None,
+    *,
+    movement: tuple[tuple[_RoutingTransition, ...], ...] | None = None,
 ) -> _SearchResult:
     if cancelled is not None and cancelled():
         return _SearchResult(None, 0, False, True)
@@ -529,7 +578,11 @@ def _search_relaxed(
     goal_set = frozenset(goals)
     sorted_goals = sorted(goal_set)
     goal_coordinates = tuple(_local_xy(grid, goal) for goal in sorted_goals)
-    transitions = _routing_transitions(grid.xstep)
+    transitions = (
+        _routing_transitions(grid.xstep, grid.levels, grid.vertical_construction)
+        if movement is None
+        else movement
+    )
     history = grid.hist
     weight = 1.0 + feedback.net_weight.get(net_id, 0.0)
 
@@ -582,7 +635,7 @@ def _search_relaxed(
                 array("q", sorted_goals),
                 goal_xy,
                 grid.gh,
-                LEVELS,
+                grid.levels,
                 budget,
                 cancelled,
             ),
@@ -639,13 +692,17 @@ def _search_relaxed(
                 False,
             )
 
-        _column, level = divmod(current, LEVELS)
-        for target_offset, via_offset, _dx, _dy, base_cost in transitions[level]:
+        column, level = divmod(current, grid.levels)
+        x, y = divmod(column, grid.gh)
+        width = grid.size // grid.xstep
+        for target_offset, via_offset, dx, dy, base_cost in transitions[level]:
+            if not (0 <= x + dx < width and 0 <= y + dy < grid.gh):
+                continue
             target = current + target_offset
-            if not flags[target]:
+            if not 0 <= target < grid.size or not flags[target]:
                 continue
             run = current + via_offset if via_offset else -1
-            if run != -1 and not flags[run]:
+            if run != -1 and (not 0 <= run < grid.size or not flags[run]):
                 continue
             next_cost = cost + base_cost + congestion(target)
             if run != -1:
@@ -688,11 +745,11 @@ def _reconstruct(
 
 
 def _local_xy(grid: _Grid, index: int) -> tuple[int, int]:
-    column, _level = divmod(index, LEVELS)
+    column, _level = divmod(index, grid.levels)
     return divmod(column, grid.gh)
 
 
 def _decode_cell(grid: _Grid, index: int) -> Cell:
-    column, level = divmod(index, LEVELS)
+    column, level = divmod(index, grid.levels)
     x, y = divmod(column, grid.gh)
     return x + grid.gx0, y + grid.gy0, level

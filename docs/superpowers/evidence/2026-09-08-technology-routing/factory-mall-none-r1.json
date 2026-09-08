@@ -1,0 +1,33 @@
+{
+  "case": "mall-none",
+  "argv": [
+    "taskset",
+    "-c",
+    "2,6,10,14,18,22,26,30,34,38,42,46,50,54,58,62,66,70,74,78,82,86,90,94,98,102,106,110,114,118,122,126",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.venv/bin/python",
+    "-m",
+    "flab2bp.cli",
+    "https://factoriolab.github.io/dsp/list?z=eJwlx7uOwjAUhOG3OcUUKAYWhWKaY4mgVRaBEBAogRQWayVyuKTys6PEzf.NNNzAZHkmDdcnzBbD0ArTXBp-YH6kod0PtyZ-hxQSqHsgk8Bd4pLQG2Ak0Fbp223yL1Em1sfkMpEPeFoY8TyPdWPLsd3YFkZc3VMn4q41rbjuybmEuucWJ5xxxwMv9FhAN9ADtILeoI-o.9Ap7CraQrwP7GIbXSzFtx0LedOYL5cQRDE_&v=11",
+    "--strategy",
+    "hierarchical",
+    "--budget",
+    "60",
+    "--band",
+    "portable",
+    "--candidate-policy",
+    "no-proliferator",
+    "-o",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/factory-mall-none-r1.blueprint.txt",
+    "--workers",
+    "32",
+    "--machine-rank",
+    "exact",
+    "-v"
+  ],
+  "exit": 3,
+  "timeout": false,
+  "wall_s": 27.329904734157026,
+  "source_manifest": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/factory-source-manifest-r1.json",
+  "source_unchanged": true,
+  "emitted_bytes": 0
+}

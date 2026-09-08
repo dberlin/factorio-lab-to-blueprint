@@ -1,0 +1,45 @@
+Tue Sep  8 18:05:21 2026    /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/iron-profile.pstats
+
+         9636625 function calls (9607588 primitive calls) in 7.288 seconds
+
+   Ordered by: cumulative time
+   List reduced from 7648 to 35 due to restriction <35>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+   1788/1    0.245    0.000    7.694    7.694 {built-in method builtins.exec}
+        1    0.000    0.000    7.694    7.694 <string>:1(<module>)
+        1    0.000    0.000    7.694    7.694 <frozen runpy>:206(run_module)
+        1    0.000    0.000    7.693    7.693 <frozen runpy>:65(_run_code)
+        1    0.000    0.000    7.692    7.692 cli.py:1(<module>)
+      183    0.007    0.000    5.543    0.030 __init__.py:1(<module>)
+        1    0.001    0.001    5.129    5.129 cli.py:496(main)
+        1    0.000    0.000    5.115    5.115 pipeline.py:673(build)
+        2    0.000    0.000    5.004    2.502 pipeline.py:998(_solve_serially)
+        1    0.000    0.000    5.004    5.004 pipeline.py:964(_solve_one)
+        1    0.000    0.000    5.004    5.004 freeform.py:4499(lay_out)
+        1    0.000    0.000    4.991    4.991 freeform.py:4930(_sweep)
+        1    0.001    0.001    4.983    4.983 freeform.py:3655(_build)
+        1    0.001    0.001    4.983    4.983 routing_domain.py:14259(_prepare_routing_problem)
+        1    0.000    0.000    4.552    4.552 routing_domain.py:2300(_prepared_junction_ban)
+        2    0.005    0.002    4.551    2.276 routing_domain.py:2242(_cancellable_junction_ban_offsets)
+     4018    0.013    0.000    4.543    0.001 routing_domain.py:2170(_junction_site_is_clear)
+    27412    0.024    0.000    3.678    0.000 routing_domain.py:2177(<genexpr>)
+    23394    0.187    0.000    3.654    0.000 routing_domain.py:1938(_building_collider_hits)
+    19674    1.602    0.000    3.188    0.000 colliders.py:1065(collisions)
+  1575/10    0.012    0.000    2.565    0.256 <frozen importlib._bootstrap>:1360(_find_and_load)
+  1568/10    0.014    0.000    2.564    0.256 <frozen importlib._bootstrap>:1308(_find_and_load_unlocked)
+  1517/11    0.008    0.000    2.562    0.233 <frozen importlib._bootstrap>:914(_load_unlocked)
+  1409/11    0.005    0.000    2.562    0.233 <frozen importlib._bootstrap_external>:753(exec_module)
+  4396/20    0.006    0.000    2.557    0.128 <frozen importlib._bootstrap>:483(_call_with_frames_removed)
+   1631/9    0.004    0.000    2.541    0.282 {built-in method builtins.__import__}
+ 2016/164    0.005    0.000    2.540    0.015 <frozen importlib._bootstrap>:1409(_handle_fromlist)
+        1    0.000    0.000    2.535    2.535 pipeline.py:1(<module>)
+        1    0.000    0.000    0.892    0.892 strategy_race.py:1(<module>)
+     4019    0.004    0.000    0.852    0.000 routing_domain.py:2096(_splitter_stack_geometry)
+     4019    0.066    0.000    0.848    0.000 junction.py:247(make_splitter_stack)
+        1    0.000    0.000    0.760    0.760 candidates.py:1(<module>)
+        1    0.000    0.000    0.755    0.755 solve.py:1(<module>)
+        1    0.000    0.000    0.676    0.676 compact_seed.py:1(<module>)
+     1410    0.016    0.000    0.637    0.000 <frozen importlib._bootstrap_external>:826(get_code)
+
+

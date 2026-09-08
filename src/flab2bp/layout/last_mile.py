@@ -25,10 +25,11 @@ from __future__ import annotations
 
 import heapq
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import cache
+from itertools import chain
 from typing import TYPE_CHECKING
 
 from flab2bp.layout.route_feedback import ClusterRelationNoGood, RouteFailureKind
@@ -133,10 +134,10 @@ def _anchor_cells(
 def _source_lane(index: int, src_group: Mapping[int, tuple[int, ...]]) -> frozenset[int]:
     """The identity of the source lane ``index`` sits on.
 
-    ``src_group`` names a net's lane SIBLINGS rather than the lane, and the
-    router keys it by ``(item, cargo domain, source.y, source.x0, source.z)`` --
-    deliberately not by ``source.x``, because two nets can tap one belt at
-    different tiles.  The membership set is therefore the lane's name.
+    ``src_group`` names a net's supply SIBLINGS rather than the supply itself.
+    The router keeps material and cargo domain separate, then groups declared
+    physical supplies or ordinary lanes, regardless of their fixed attachment
+    tiles.  The membership set is therefore the lane's name.
     """
     return frozenset((index, *src_group.get(index, ())))
 
@@ -374,6 +375,9 @@ class ClusterEnvironment:
     the caller's own ends, its own rejected-commit cells UNIONED with
     ``forbidden``, and the cluster's paths absent from the grid.  The search
     never touches a canvas itself; the caller owns every mutation.
+    ``extra_occupancy(path)`` supplies physical body resources not represented
+    by route cells. The low-level search must also honor ``forbidden`` for
+    those resources, so a body-cell constraint removes its connector.
 
     ``offers`` re-queries one net's ``_ends`` offer maps.  :func:`solve_cluster`
     never calls it; it is here because the caller needs it at STAKE time and
@@ -390,6 +394,7 @@ class ClusterEnvironment:
     expired: Callable[[], bool]
     max_nodes: int = B_MAX_CBS_NODES
     max_constraints: int = B_MAX_CONSTRAINTS
+    extra_occupancy: Callable[[Sequence[Cell]], Collection[Cell]] | None = None
 
 
 _Constraints = tuple[tuple[int, Cell], ...]
@@ -403,20 +408,23 @@ def _cost(problem: ClusterProblem, paths: Mapping[int, tuple[Cell, ...]]) -> int
 def _first_conflict(
     problem: ClusterProblem,
     paths: Mapping[int, tuple[Cell, ...]],
+    extra_occupancy: Callable[[Sequence[Cell]], Collection[Cell]] | None = None,
 ) -> tuple[int, int, Cell] | None:
-    """The first cell two cluster paths share, scanning nets in index order.
+    """The first resource two paths share, scanning nets in index order.
 
-    A cell is ``(x, y, level)``, which is the whole resource: a ramp's ``via``
-    cell is already spliced into the path by ``_astar`` and de-duplicated by
-    ``_cut_loops``, so ramps need no separate model, and two paths crossing one
-    column at different levels are correctly not a conflict.
+    Route cells retain their path order; additional physical body cells are
+    sorted so unordered keepout collections cannot change CBS branching.
+    A resource is the complete ``(x, y, level)`` cell, so crossing a column
+    on different levels does not conflict. Ramp via cells already occur in
+    the path; physical connectors supply their otherwise invisible keepouts.
     """
     seen: dict[Cell, int] = {}
     for index in problem.nets:
         path = paths.get(index)
         if path is None:
             continue
-        for cell in path:
+        resources = path if extra_occupancy is None else chain(path, sorted(extra_occupancy(path)))
+        for cell in resources:
             holder = seen.get(cell)
             if holder is not None and holder != index:
                 return (holder, index, cell)
@@ -498,7 +506,7 @@ def solve_cluster(
             return done(ClusterOutcome.BOUNDED, {}, nodes, bound)
         _key, constraints, paths = heapq.heappop(heap)
         nodes += 1
-        conflict = _first_conflict(problem, paths)
+        conflict = _first_conflict(problem, paths, environment.extra_occupancy)
         if conflict is None:
             if len(paths) == len(problem.nets):
                 return done(ClusterOutcome.SOLVED, paths, nodes)

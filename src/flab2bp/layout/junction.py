@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from functools import lru_cache
 
@@ -39,6 +39,7 @@ from flab2bp.dsp.rules import (
     SPLITTER_OUTPUT_FROM_SLOT,
     SPLITTER_OUTPUT_TO_SLOT,
 )
+from flab2bp.layout import slots
 from flab2bp.layout.base import PlacedBuilding
 
 # The splitter's slot indices and its port count are the GAME's rules, stated
@@ -158,9 +159,9 @@ def make_splitter(
 ) -> PlacedBuilding:
     """A junction at ``(x, y, z)``, ready for belts to attach to it.
 
-    The item selects model 38 by default.  ``model_index`` is explicit for the
-    game's mixed-height model 40, whose elevated opposite ports carry the
-    straight run while the two lower ports provide an orthogonal branch.
+    The item selects model 38 by default.  ``model_index`` also selects model
+    39's parallel two-height ports or model 40's elevated opposite ports with
+    two lower orthogonal ports.
     """
     model = (
         catalog.building(catalog.SPLITTER_ID).model_index if model_index is None else model_index
@@ -290,6 +291,142 @@ def make_splitter_stack(
             splitter = replace(splitter, input_obj=first_index + offset - 1)
         buildings.append(splitter)
     return tuple(buildings)
+
+
+@dataclass(frozen=True, slots=True)
+class SplitterRoutePort:
+    """A physical attachment and the lattice belt immediately outside it.
+
+    ``physical_pose`` is the exact prefab pose rotated into layout axes, still
+    in WORLD units relative to the top member's anchor.  It is not a blueprint
+    coordinate: final spherical projection belongs to the existing encoder.
+    ``dock`` is the adjoining integer belt cell at the port's carry altitude.
+    The attachment belt itself retains the top member's integer x/y until
+    emission moves it to this physical port.
+    """
+
+    slot: int
+    dock: tuple[int, int, int]
+    physical_pose: catalog.SlotPose
+
+
+@dataclass(frozen=True, slots=True)
+class SplitterRouteCandidate:
+    """One cargo stream traversing two distinct ports of one supported top.
+
+    The support members carry no cargo.  Their ``input_obj`` values use the
+    ``first_index`` supplied to :func:`splitter_route_candidates`; a candidate
+    built with zero must be rebased before appending it to another placement.
+    ``foreign_keepout`` reserves the WHOLE stack against unrelated belts, not
+    just the two selected ports.  A four-port Splitter is not two independent
+    crossing channels.
+    """
+
+    stack_members: tuple[PlacedBuilding, ...]
+    entry: SplitterRoutePort
+    exit: SplitterRoutePort
+    foreign_keepout: frozenset[tuple[int, int, int]]
+
+
+@lru_cache(maxsize=12)
+def _route_ports(model_index: int, yaw: float) -> tuple[SplitterRoutePort, ...]:
+    """Local integer docks and unrounded rotated physical poses."""
+    ports: list[SplitterRoutePort] = []
+    for slot, pose in enumerate(catalog.port_poses_for_model(model_index)):
+        dx, dy = slots.to_world((pose.dx, pose.dy), yaw)
+        fx, fy = slots.to_world((pose.fx, pose.fy), yaw)
+        # Asset port heights are rounded Unity values (1.3333 world units for
+        # one level).  The lattice dock is integral; the physical pose is not
+        # rounded, so final emission retains the exact game-backed attachment.
+        height = pose.dz * float(catalog.BELT_Z_PER_WORLD_UNIT)
+        level = round(height)
+        outward = (round(fx), round(fy))
+        if abs(height - level) > 1e-4 or outward not in _CARDINAL_YAW:
+            raise RuntimeError(f"Splitter model {model_index} has a non-lattice port")
+        ports.append(
+            SplitterRoutePort(
+                slot,
+                (*outward, level),
+                catalog.SlotPose(dx, dy, pose.dz, fx, fy, pose.fz),
+            )
+        )
+    return tuple(ports)
+
+
+def splitter_route_candidates(
+    x: int,
+    y: int,
+    level: int,
+    *,
+    yaw: float,
+    altitude_rules: catalog.BeltAltitudeRules,
+    carries_item: str,
+    first_index: int = 0,
+) -> tuple[SplitterRouteCandidate, ...]:
+    """Enumerate legal single-stream routes touching carry altitude ``level``.
+
+    All three game models are considered at the ground-supported top anchor.
+    Model 38 has four coplanar cardinal ports; model 39 has parallel N/S pairs
+    at two heights; model 40 has upper N/S and lower E/W pairs.  Rotation uses
+    their actual poses, not a shared guessed cardinal-port order.
+
+    Only a selected port is subject to the belt ceiling; stack anchors are
+    independently admitted by the save's storage-stack technology.  Internal
+    Splitter height changes do not require the vertical BELT slope unlock.
+    Cargo never moves through a slot-15 support link to another stack member.
+
+    Emit separate co-located input/output attachment belts, at entry/exit
+    dock z respectively.  The input names the top in ``output_obj`` and entry
+    slot in ``output_to_slot``.  The output names the top in ``input_obj`` and
+    exit slot in ``input_from_slot``, with ``BELT_PORT_DRAW_TO_SLOT`` on its
+    own ``input_to_slot``.  Their outside neighbours occupy the two docks.
+    Never coalesce the attachment records even when their lattice cells match.
+    """
+    if not math.isfinite(yaw) or yaw % 90.0:
+        raise ValueError(f"Splitter route yaw {yaw} is not cardinal")
+    if first_index < 0:
+        raise ValueError("Splitter stack first index must be non-negative")
+    levels = splitter_stack_levels(level)
+    if level > altitude_rules.max_z:
+        return ()
+    top_anchor = levels[-1]
+    if not catalog.vertical_construction_allowed(catalog.SPLITTER_ID, top_anchor, altitude_rules):
+        return ()
+    yaw %= 360.0
+    supported = make_splitter_stack(
+        x, y, top_anchor, first_index=first_index, carries_item=carries_item
+    )
+    candidates: list[SplitterRouteCandidate] = []
+    for model_index in sorted(catalog.SPLITTER_MODEL_INDICES):
+        ports = tuple(
+            SplitterRoutePort(
+                port.slot,
+                (x + port.dock[0], y + port.dock[1], top_anchor + port.dock[2]),
+                port.physical_pose,
+            )
+            for port in _route_ports(model_index, yaw)
+            if 0 <= top_anchor + port.dock[2] <= altitude_rules.max_z
+        )
+        if not any(port.dock[2] == level for port in ports):
+            continue
+        members = (
+            *supported[:-1],
+            replace(supported[-1], model_index=model_index, yaw=yaw),
+        )
+        footprint = frozenset(
+            cell
+            for member in members
+            for cell in keepout_cells(
+                x, y, int(member.z), model_index=member.model_index, yaw=member.yaw
+            )
+        )
+        candidates.extend(
+            SplitterRouteCandidate(members, entry, exit, footprint)
+            for entry in ports
+            for exit in ports
+            if entry.slot != exit.slot and level in (entry.dock[2], exit.dock[2])
+        )
+    return tuple(candidates)
 
 
 def check_ports(buildings: list[PlacedBuilding] | tuple[PlacedBuilding, ...]) -> None:

@@ -178,6 +178,9 @@ def to_world[Offset: (float, Fraction)](
     return _unrotate(local[0], local[1], -yaw)
 
 
+_WORLD_UNITS_PER_TILE = Fraction(colliders.GRID_ARC)
+
+
 def addon_supply_position(
     item_id: int,
     *,
@@ -187,10 +190,18 @@ def addon_supply_position(
     yaw: float,
     area: int = 1,
 ) -> tuple[Fraction, Fraction, Fraction]:
-    """Resolve an addon's area centre in the project's exact grid frame."""
+    """Resolve an addon centre in the flat grid frame, not prefab world units.
+
+    Horizontal prefab offsets need the same world-to-grid conversion as slot
+    offsets. The catalog has already normalized ``dz`` to altitude levels.
+    """
     pose = cat.addon_supply_pose(item_id, area=area)
     wx, wy = to_world((pose.dx, pose.dy), yaw)
-    return (Fraction(x) + wx, Fraction(y) + wy, Fraction(z) + pose.dz)
+    return (
+        Fraction(x) + wx / _WORLD_UNITS_PER_TILE,
+        Fraction(y) + wy / _WORLD_UNITS_PER_TILE,
+        Fraction(z) + pose.dz,
+    )
 
 
 def addon_supply_cell(

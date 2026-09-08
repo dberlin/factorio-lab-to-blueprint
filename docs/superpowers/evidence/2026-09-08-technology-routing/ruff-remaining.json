@@ -1,0 +1,237 @@
+[
+  {
+    "cell": null,
+    "code": "B905",
+    "end_location": {
+      "column": 74,
+      "row": 77
+    },
+    "filename": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/src/flab2bp/layout/route_primitives.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": ", strict=False",
+          "end_location": {
+            "column": 73,
+            "row": 77
+          },
+          "location": {
+            "column": 73,
+            "row": 77
+          }
+        }
+      ],
+      "message": "Add explicit value for parameter `strict=`"
+    },
+    "location": {
+      "column": 55,
+      "row": 77
+    },
+    "message": "`zip()` without an explicit `strict=` parameter",
+    "name": "zip-without-explicit-strict",
+    "noqa_row": 77,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/zip-without-explicit-strict"
+  },
+  {
+    "cell": null,
+    "code": "B905",
+    "end_location": {
+      "column": 69,
+      "row": 7084
+    },
+    "filename": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/src/flab2bp/layout/routing_domain.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": ", strict=False",
+          "end_location": {
+            "column": 68,
+            "row": 7084
+          },
+          "location": {
+            "column": 68,
+            "row": 7084
+          }
+        }
+      ],
+      "message": "Add explicit value for parameter `strict=`"
+    },
+    "location": {
+      "column": 38,
+      "row": 7084
+    },
+    "message": "`zip()` without an explicit `strict=` parameter",
+    "name": "zip-without-explicit-strict",
+    "noqa_row": 7084,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/zip-without-explicit-strict"
+  },
+  {
+    "cell": null,
+    "code": "B905",
+    "end_location": {
+      "column": 58,
+      "row": 9510
+    },
+    "filename": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/src/flab2bp/layout/routing_domain.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": ", strict=False",
+          "end_location": {
+            "column": 57,
+            "row": 9510
+          },
+          "location": {
+            "column": 57,
+            "row": 9510
+          }
+        }
+      ],
+      "message": "Add explicit value for parameter `strict=`"
+    },
+    "location": {
+      "column": 39,
+      "row": 9510
+    },
+    "message": "`zip()` without an explicit `strict=` parameter",
+    "name": "zip-without-explicit-strict",
+    "noqa_row": 9510,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/zip-without-explicit-strict"
+  },
+  {
+    "cell": null,
+    "code": "B008",
+    "end_location": {
+      "column": 48,
+      "row": 13535
+    },
+    "filename": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/src/flab2bp/layout/routing_domain.py",
+    "fix": null,
+    "location": {
+      "column": 26,
+      "row": 13535
+    },
+    "message": "Do not perform function call `BandPolicy` in argument defaults; instead, perform the call within the function, or read the default from a module-level singleton variable",
+    "name": "function-call-in-default-argument",
+    "noqa_row": 13535,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/function-call-in-default-argument"
+  },
+  {
+    "cell": null,
+    "code": "F821",
+    "end_location": {
+      "column": 40,
+      "row": 16783
+    },
+    "filename": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/tests/layout/test_freeform.py",
+    "fix": null,
+    "location": {
+      "column": 34,
+      "row": 16783
+    },
+    "message": "Undefined name `banned`",
+    "name": "undefined-name",
+    "noqa_row": 16783,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+  },
+  {
+    "cell": null,
+    "code": "F821",
+    "end_location": {
+      "column": 40,
+      "row": 16865
+    },
+    "filename": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/tests/layout/test_freeform.py",
+    "fix": null,
+    "location": {
+      "column": 34,
+      "row": 16865
+    },
+    "message": "Undefined name `banned`",
+    "name": "undefined-name",
+    "noqa_row": 16865,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+  },
+  {
+    "cell": null,
+    "code": "F821",
+    "end_location": {
+      "column": 40,
+      "row": 16928
+    },
+    "filename": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/tests/layout/test_freeform.py",
+    "fix": null,
+    "location": {
+      "column": 34,
+      "row": 16928
+    },
+    "message": "Undefined name `banned`",
+    "name": "undefined-name",
+    "noqa_row": 16928,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+  },
+  {
+    "cell": null,
+    "code": "F821",
+    "end_location": {
+      "column": 40,
+      "row": 16934
+    },
+    "filename": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/tests/layout/test_freeform.py",
+    "fix": null,
+    "location": {
+      "column": 34,
+      "row": 16934
+    },
+    "message": "Undefined name `banned`",
+    "name": "undefined-name",
+    "noqa_row": 16934,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+  },
+  {
+    "cell": null,
+    "code": "B905",
+    "end_location": {
+      "column": 70,
+      "row": 313
+    },
+    "filename": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/tests/layout/test_native_routing_transitions.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": ", strict=False",
+          "end_location": {
+            "column": 69,
+            "row": 313
+          },
+          "location": {
+            "column": 69,
+            "row": 313
+          }
+        }
+      ],
+      "message": "Add explicit value for parameter `strict=`"
+    },
+    "location": {
+      "column": 35,
+      "row": 313
+    },
+    "message": "`zip()` without an explicit `strict=` parameter",
+    "name": "zip-without-explicit-strict",
+    "noqa_row": 313,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/zip-without-explicit-strict"
+  }
+]

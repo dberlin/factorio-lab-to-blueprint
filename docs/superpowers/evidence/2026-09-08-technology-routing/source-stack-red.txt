@@ -1,0 +1,1 @@
+{'belt_level4_free': True, 'source_junction_level4_admitted': True, 'game_stack_level4_allowed': False}

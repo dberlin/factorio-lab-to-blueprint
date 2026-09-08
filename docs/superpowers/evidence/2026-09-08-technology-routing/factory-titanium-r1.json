@@ -1,0 +1,33 @@
+{
+  "case": "titanium",
+  "argv": [
+    "taskset",
+    "-c",
+    "0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64,68,72,76,80,84,88,92,96,100,104,108,112,116,120,124",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.venv/bin/python",
+    "-m",
+    "flab2bp.cli",
+    "https://factoriolab.github.io/dsp/list?z=eJzLt3Uq0zI1MFDLt3VK1jI0MNDSMgSxs5DYkQi2uZaRAVzcScsYSb0RjF2CYDolaxmZwtiVIOUIvYZwThUSuwCJHQFmw3SUI.PCtAwtLS2hMoEgC0GMMCijFEWjIdzIzKRUW2e1otQK23i13Nwi28g6pzrXukC1MltDQwBw4z6V&v=11",
+    "--strategy",
+    "hierarchical",
+    "--budget",
+    "60",
+    "--band",
+    "portable",
+    "--candidate-policy",
+    "all-products",
+    "-o",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/factory-titanium-r1.blueprint.txt",
+    "--workers",
+    "32",
+    "--machine-rank",
+    "exact",
+    "-v"
+  ],
+  "exit": 3,
+  "timeout": false,
+  "wall_s": 38.80845727305859,
+  "source_manifest": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/factory-source-manifest-r1.json",
+  "source_unchanged": true,
+  "emitted_bytes": 0
+}

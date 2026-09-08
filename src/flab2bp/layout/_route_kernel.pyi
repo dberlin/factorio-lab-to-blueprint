@@ -21,11 +21,20 @@ def astar_flat(
     deadline_every: int,
     deadline: float | None,
     expired: Callable[[float | None], bool],
+    transitions: tuple[tuple[tuple[int, int, int, int, float], ...], ...],
+    extra_edges: dict[int, tuple[tuple[int, float], ...]],
 ) -> tuple[array[int] | None, int, int, array[int], int]:
     """(path indices with via cells spliced, oldest first, or None;
     expansions; exit kind 0 found / 1 budget / 2 sealed;
     settled cell indices in index order when sealed, else empty;
-    budget_left after the same write-back rules as the Python loop)."""
+    budget_left after the same write-back rules as the Python loop).
+
+    ``transitions`` is grouped by source level; rows contain target offset,
+    via offset (zero for direct edges), dx, dy and finite nonnegative base cost.
+    Base costs already include height tolls; ``level_toll`` is retained but
+    does not affect those supplied costs. ``extra_edges`` maps source indices
+    to caller-admitted direct (landing index, base cost) physical connectors;
+    their physical witnesses remain with the caller."""
 
 def relaxed_search_flat(
     flags: bytearray,

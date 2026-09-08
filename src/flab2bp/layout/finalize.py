@@ -1203,7 +1203,7 @@ class _AddonProjectionContext:
     belts: tuple[tuple[int, PlacedBuilding], ...]
     belt_position_by_index: dict[int, int]
     predecessor_by_position: dict[int, int]
-    wanted_areas: tuple[tuple[int, int, float, float, float], ...]
+    wanted_areas: tuple[tuple[int, catalog.AddonSupplyPose, PlacedBuilding, float, float], ...]
 
 
 def _addon_projection_context(
@@ -1228,7 +1228,7 @@ def _addon_projection_context(
         )
         if target_position is not None:
             predecessor_by_position[target_position] = belt_position
-    wanted_areas: list[tuple[int, int, float, float, float]] = []
+    wanted_areas: list[tuple[int, catalog.AddonSupplyPose, PlacedBuilding, float, float]] = []
     for addon_index, addon, areas in addons:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
@@ -1244,10 +1244,10 @@ def _addon_projection_context(
             wanted_areas.append(
                 (
                     addon_index,
-                    area.area,
+                    area,
+                    addon,
                     float(wanted[0]),
                     float(wanted[1]),
-                    float(wanted[2]),
                 )
             )
     return _AddonProjectionContext(
@@ -1301,10 +1301,22 @@ def _projected_addon_failure_from_context(
         belt_positions[belt_position] = projected
         return projected
 
-    for addon_index, area, wanted_x, wanted_y, wanted_z in context.wanted_areas:
+    for addon_index, area, addon, wanted_x, wanted_y in context.wanted_areas:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        target = projection.position(wanted_x, wanted_y, wanted_z)
+        # Addon poses are prefab-local WORLD offsets, not blueprint grid
+        # offsets. One grid step is ~1.257 world units and varies by latitude.
+        # Projecting (addon.x + area.dx, addon.y + area.dy) made a transverse
+        # supply miss the game's center by ~0.314 units even at the equator.
+        position, rotation = projection.pose(addon.x, addon.y, float(addon.z), addon.yaw)
+        offset = colliders._qrot(
+            rotation, (float(area.dx), float(area.dz) * 4.0 / 3.0, float(area.dy))
+        )
+        target = (
+            position[0] + offset[0],
+            position[1] + offset[1],
+            position[2] + offset[2],
+        )
         longitude, latitude = transformed(wanted_x, wanted_y)
         target_column = math.floor(longitude) % projection.band.columns
         target_row = math.floor(latitude)
@@ -1368,7 +1380,7 @@ def _projected_addon_failure_from_context(
                 check="game.addon_supply",
                 buildings=(addon_index, belt_index),
                 detail=(
-                    f"addon area {area} misses belt {belt_index}'s line by "
+                    f"addon area {area.area} misses belt {belt_index}'s line by "
                     f"{line_distance:.4f} world units"
                 ),
                 band=projection.band.area_segments,
@@ -1376,7 +1388,9 @@ def _projected_addon_failure_from_context(
         return ProjectionFailure(
             check="game.addon_supply",
             buildings=(addon_index,),
-            detail=(f"addon area {area} has no belt within {rules.ADDON_AREA_RADIUS} world unit"),
+            detail=(
+                f"addon area {area.area} has no belt within {rules.ADDON_AREA_RADIUS} world unit"
+            ),
             band=projection.band.area_segments,
         )
     return None

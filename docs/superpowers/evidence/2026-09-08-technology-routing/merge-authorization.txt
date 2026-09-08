@@ -1,0 +1,15 @@
+User direction: "Merge please, and then continue hierarchy".
+
+Merge the current technology-routing implementation despite the disclosed failures. No push authorized.
+
+Verified before this decision:
+- Focused routing/integration batch: 108 passed.
+- Ruff passes; mypy passes on 107 source files.
+- Independent projection and witness/CBS reviews: no remaining findings within their scopes.
+- Exact captured child, with only its monotonic deadline rebased: 1479 buildings in 8.4803s with original 11.9298s allowance.
+- Frozen r3 original full9 CLI: PASS, 39.8514s, 29550 emitted bytes.
+- Frozen r3 original titanium and both mall policies: FAIL, no blueprint.
+- Comprehensive Python suite: failures observed; 145s timeout near 99%, not passing.
+- Earlier full9 r1 regenerated coater neighborhoods: shipped AddonPass accepts 84/84; not full Unity Physics/CheckBuildConditions or live paste certification. This is not game-method verification of the newer r3 blueprint.
+
+Continue hierarchy and failure diagnosis on the merged source without increasing the approved budgets, changing recipes, weakening certification, or treating partial placements as completed factories.

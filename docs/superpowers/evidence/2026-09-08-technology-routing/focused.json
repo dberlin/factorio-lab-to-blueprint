@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.venv/bin/python",
+    "-m",
+    "pytest",
+    "tests/layout/test_native_routing_transitions.py",
+    "tests/layout/test_splitter_route_primitives.py",
+    "tests/layout/test_routing_height_domain.py",
+    "tests/layout/test_technology_routing_search.py",
+    "tests/layout/test_route_primitives.py",
+    "--tb=short",
+    "--junitxml=/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/focused.xml"
+  ],
+  "exit": 0,
+  "wall": 25.603085056878626
+}

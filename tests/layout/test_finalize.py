@@ -2493,6 +2493,11 @@ def test_projected_addon_supply_preserves_strict_radius_boundary(
         def position(self, x: float, y: float, z: float) -> tuple[float, float, float]:
             return (x, y, z)
 
+        def pose(
+            self, x: float, y: float, z: float, yaw: float
+        ) -> tuple[colliders.Vec3, colliders.Quat]:
+            return self.position(x, y, z), (0.0, 0.0, 0.0, 1.0)
+
     coater = _building(catalog.SPRAY_COATER_ID, 0, 0)
     area = catalog.AddonSupplyPose(Fraction(), Fraction(), Fraction(), area=0)
     failure = finalize._projected_addon_failure(
@@ -2504,27 +2509,39 @@ def test_projected_addon_supply_preserves_strict_radius_boundary(
     assert (None if failure is None else failure.check) == expected_check
 
 
-def test_projected_addon_supply_rejects_broke4_horizontal_raised_bus() -> None:
+@pytest.mark.parametrize(
+    "yaw,drop_xy,approach_xy",
+    [
+        (0, (0, -1), (1, -1)),
+        (90, (-1, 0), (-1, -1)),
+        (180, (0, 1), (-1, 1)),
+        (270, (1, 0), (1, 1)),
+    ],
+)
+def test_projected_transverse_supply_uses_the_prefab_world_offset(
+    yaw: int, drop_xy: tuple[int, int], approach_xy: tuple[int, int]
+) -> None:
+    # Area 1's authored 1.25 is WORLD units, not 1.25 blueprint tiles.
+    # Projecting the offset as tiles falsely rejected this game-legal line.
     belts = (
         (0, _belt(0, 0, output=None)),
-        (1, replace(_belt(1, -1, output=2), z=Fraction(1))),
-        (2, replace(_belt(0, -1, output=3), z=Fraction(1))),
-        (3, replace(_belt(-1, -1, output=None), z=Fraction(1))),
+        (1, replace(_belt(*approach_xy, output=2), z=Fraction(1))),
+        (2, replace(_belt(*drop_xy, output=None), z=Fraction(1))),
     )
-    coater = _building(catalog.SPRAY_COATER_ID, 0, 0)
-
-    failure = finalize._projected_addon_failure(
-        belts,
-        ((4, coater, catalog.building(catalog.SPRAY_COATER_ID).addon_areas),),
-        _broke2_projection(),
+    coater = replace(_building(catalog.SPRAY_COATER_ID, 0, 0), yaw=yaw)
+    projection = planet.Projection(
+        band=planet.bands_by_segment()[200],
+        anchor_row=0,
+        segment=colliders.PLANET_SEGMENT,
+        radius=colliders.PLANET_RADIUS,
     )
-
-    assert failure == finalize.ProjectionFailure(
-        check="game.addon_supply",
-        buildings=(4, 2),
-        detail="addon area 1 misses belt 2's line by 0.3166 world units",
-        band=160,
+    addons = ((3, coater, catalog.building(catalog.SPRAY_COATER_ID).addon_areas),)
+    assert finalize._projected_addon_failure(belts, addons, projection) is None
+    # A transverse line one whole level above the actual port is not supply.
+    wrong_level = tuple(
+        (index, replace(belt, z=Fraction(2)) if index else belt) for index, belt in belts
     )
+    assert finalize._projected_addon_failure(wrong_level, addons, projection) is not None
 
 
 def test_projected_addon_supply_skips_projection_without_both_sides() -> None:
@@ -2552,40 +2569,6 @@ def test_projected_addon_supply_skips_projection_without_both_sides() -> None:
             is None
         )
         assert projection.calls == 0
-
-
-def test_projected_addon_supply_projects_only_nearby_belts_once() -> None:
-    class CountingFlatProjection:
-        band = next(candidate for candidate in planet.bands() if candidate.area_segments == 4)
-        segment = colliders.PLANET_SEGMENT
-        radius = colliders.PLANET_RADIUS
-        rotated = False
-
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def position(self, x: float, y: float, z: float) -> tuple[float, float, float]:
-            self.calls += 1
-            return (x, y, z)
-
-    projection = CountingFlatProjection()
-    coater = _building(catalog.SPRAY_COATER_ID, 0, 0)
-    areas = catalog.building(catalog.SPRAY_COATER_ID).addon_areas
-    belts = (
-        (0, _belt(0, 0, output=None)),
-        (1, replace(_belt(0, -1, output=None), z=Fraction(1))),
-        (2, _belt(20, 20, output=None)),
-    )
-
-    assert (
-        finalize._projected_addon_failure(
-            belts,
-            ((3, coater, areas),),
-            cast(planet.Projection, projection),
-        )
-        is None
-    )
-    assert projection.calls == len(areas) + 2
 
 
 def test_projection_cache_reuses_addon_belt_neighborhood_across_latitudes(

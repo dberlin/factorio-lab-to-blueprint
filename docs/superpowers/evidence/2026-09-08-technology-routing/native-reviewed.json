@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "uv",
+    "sync",
+    "--frozen",
+    "--group",
+    "build",
+    "--group",
+    "dev",
+    "--reinstall-package",
+    "flab2bp"
+  ],
+  "exit": 0,
+  "wall": 18.621562909102067
+}

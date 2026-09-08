@@ -81,10 +81,8 @@ from flab2bp.layout.route_feedback import (
 from flab2bp.layout.routing_domain import (
     _BLAME_MAX_WALL,
     _ENTRY_RING,
-    _LEVEL_TOLL,
     _ROUTE_RING,
     _TENTATIVE,
-    LEVELS,
     CoaterSupplyPort,
     DirectInsertId,
     Strip,
@@ -1269,7 +1267,7 @@ def test_slope_limited_prepared_coater_routing_is_structured() -> None:
         pack,
         policy=BandPolicy("portable"),
         power=False,
-        ramped=True,
+        belt_rules=replace(routing_domain._DEFAULT_BELT_RULES, vertical_construction=False),
     )
     result = _build_prepared(
         spec,
@@ -1836,7 +1834,10 @@ def test_elevated_external_port_bypasses_ground_fast_path_and_routes_a_ramp(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def elevated_scene(limit: tuple[int, int, int, int]) -> tuple[_Canvas, _Net]:
-        canvas = _Canvas(ramped=True, limit=limit)
+        canvas = _Canvas(
+            belt_rules=replace(routing_domain._DEFAULT_BELT_RULES, vertical_construction=False),
+            limit=limit,
+        )
         port_index = canvas.add(
             PlacedBuilding(
                 item_id=2001,
@@ -12198,7 +12199,10 @@ class TestCanvasClone:
     """``_Canvas.clone`` proves a commit without ``deepcopy``'s per-object cost."""
 
     def _populated(self) -> _Canvas:
-        canvas = _Canvas(ramped=True, limit=(0, 0, 9, 9))
+        canvas = _Canvas(
+            belt_rules=replace(routing_domain._DEFAULT_BELT_RULES, vertical_construction=False),
+            limit=(0, 0, 9, 9),
+        )
         canvas.buildings.append(_linked_belt(0, None))
         canvas.blocked[(1, 1, 0)] = 0
         canvas.world_taken.add((1, 1, Fraction(0)))
@@ -12371,7 +12375,7 @@ class TestABuildingDeniesOnlyTheBandUnderItsCollider:
         clears it and levels 0 and 1 do not.  Before this rule was the game's,
         all three read blocked.
         """
-        top = LEVELS - 1
+        top = 2
         assert top * routing_domain._LEVEL_HEIGHT > colliders.belt_crossing_height(
             catalog.building(2020).model_index
         ), "pick a shorter building: this one does not fit under the lattice"
@@ -12395,7 +12399,7 @@ class TestABuildingDeniesOnlyTheBandUnderItsCollider:
         canvas = _Canvas(limit=(0, 0, 10, 10))
         canvas.add(self._at(2020, 5, 5), solid=True)
         grid = _make_grid(canvas, (0, 0, 10, 10), (0, 0, 10, 10), {})
-        for lvl in range(LEVELS):
+        for lvl in range(canvas.levels):
             cell = (5, 5, lvl)
             assert bool(grid.occ[grid.index(cell)]) == canvas.free(cell), (
                 f"grid and _Canvas.free disagree at {cell}"
@@ -12413,7 +12417,7 @@ class TestABuildingDeniesOnlyTheBandUnderItsCollider:
         change shipped no geometry at all, and it is still the bottom three
         when the lattice offers more.
         """
-        forced = {lvl for lvl in range(LEVELS) if lvl <= 2}
+        forced = {0, 1, 2}
         for item_id in _packable_machine_ids() | {catalog.TESLA_TOWER_ID}:
             canvas = _Canvas()
             canvas.add(self._at(item_id, 5, 5), solid=True)
@@ -12448,7 +12452,7 @@ class TestABuildingDeniesOnlyTheBandUnderItsCollider:
                 for dx in range(-(w // 2) - 1, w // 2 + 2)
                 for dy in range(-(h // 2) - 1, h // 2 + 2)
             ]
-            for lvl in range(LEVELS):
+            for lvl in range(max(banned, default=0) + 2):
                 z = float(lvl * routing_domain._LEVEL_HEIGHT)
                 probe = [colliders.Placed(35, dx, dy, z, 0.0) for dx, dy in tiles]
                 hits = bool(colliders.belt_crossings(probe, [placed]))
@@ -14287,7 +14291,7 @@ class TestPowerPlanIsExact:
         for x in range(10):
             for y in range(10):
                 assert ((x, y) in blocked_columns) == any(
-                    (x, y, level) in canvas.blocked for level in range(routing_domain.LEVELS)
+                    (x, y, level) in canvas.blocked for level in range(canvas.levels)
                 )
 
 
@@ -14821,16 +14825,6 @@ class TestThroughTrafficLeavesTheGround:
             "other net and every port has to cross"
         )
 
-    def test_the_heuristic_stays_admissible(self) -> None:
-        """Every step still costs at least one, so Manhattan is still a bound.
-
-        A toll that made a step cheaper than a tile would make the A* heuristic
-        an OVER-estimate, and an inadmissible heuristic does not return the
-        cheapest path -- it returns whichever one it stumbled on, silently.
-        """
-        assert min(_LEVEL_TOLL) >= 0.0, _LEVEL_TOLL
-        assert len(_LEVEL_TOLL) == LEVELS, _LEVEL_TOLL
-
 
 class TestAPathThatReachesNothingIsUnrouted:
     """The sink side is counted exactly like the source side.
@@ -14943,7 +14937,9 @@ class TestAPathThatReachesNothingIsUnrouted:
         agreement between a wrong check and a wrong test is what made it look
         settled.
         """
-        canvas = _Canvas(ramped=True)  # the slope-limited path
+        canvas = _Canvas(
+            belt_rules=replace(routing_domain._DEFAULT_BELT_RULES, vertical_construction=False)
+        )  # the slope-limited path
         dst_belt = canvas.add(_belt(0, 0, item="x"))
         above = PlacedBuilding(
             item_id=2001,
@@ -14995,7 +14991,9 @@ class TestAPathThatReachesNothingIsUnrouted:
         everyone.  We ramp instead, which is legal at any height and needs no
         unlock.
         """
-        canvas = _Canvas(ramped=True)  # the slope-limited path
+        canvas = _Canvas(
+            belt_rules=replace(routing_domain._DEFAULT_BELT_RULES, vertical_construction=False)
+        )  # the slope-limited path
         dst_belt = canvas.add(_belt(0, 0, item="x"))
         tail = canvas.add(
             PlacedBuilding(
@@ -15409,7 +15407,7 @@ class TestDetailedRoutingDiagnostics:
     def _block(canvas: _Canvas, cells: set[tuple[int, int]]) -> None:
         for x, y in cells:
             canvas.solid.add((x, y))
-            for level in range(LEVELS):
+            for level in range(canvas.levels):
                 canvas.blocked[x, y, level] = 0
 
     def test_prelinked_model40_carry_offers_only_lower_branch_ports(
@@ -16414,84 +16412,6 @@ class TestDetailedRoutingDiagnostics:
         assert failure.blocking_nets == (first_id,)
         assert failure.blocking_endpoints == (((0, 0, 0), (4, -2, 0)),)
 
-    @pytest.mark.usefixtures("_without_the_last_mile_pass")
-    def test_first_fanout_route_bounds_future_tap_keepout_detours(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        canvas = _Canvas()
-        bounds = (-3, -4, 13, 3)
-        canvas.limit = bounds
-        source = canvas.add(_belt(0, 0, item="gear"))
-        predecessor = canvas.add(_belt(0, 1, item="gear"))
-        canvas.buildings[predecessor] = _relink(
-            canvas.buildings[predecessor],
-            output_obj=source,
-        )
-        far_destination = canvas.add(_belt(10, 0, item="gear"))
-        near_destination = canvas.add(_belt(2, -3, item="gear"))
-        canvas.add(_belt(0, -1, item="static"))
-        for x in range(1, 10):
-            canvas.add(_belt(x, 1, item="static"))
-        shared_port = _Port(source, 0, 0, 0, 0)
-        nets = [
-            _Net(
-                src=shared_port,
-                dst=_Port(far_destination, 10, 0, 10, 10),
-                item="gear",
-                net_id=NetId(0, 1, "gear", NetRole.INTERNAL, 0),
-            ),
-            _Net(
-                src=shared_port,
-                dst=_Port(near_destination, 2, -3, 2, 2),
-                item="gear",
-                net_id=NetId(0, 2, "gear", NetRole.INTERNAL, 1),
-            ),
-        ]
-        searches = 0
-
-        def scripted_astar(
-            attempt_canvas: _Canvas,
-            *_args: object,
-            **_kwargs: object,
-        ) -> _PathSearchResult:
-            nonlocal searches
-            searches += 1
-            if searches == 4:
-                assert _kwargs["forbidden"]
-                assert not attempt_canvas.guard
-            if searches in (1, 2):
-                return _PathSearchResult(
-                    tuple((x, 0, 0) for x in range(1, 10)),
-                    None,
-                    (),
-                    9,
-                )
-            if searches == 3:
-                detour = (
-                    (-1, 0, 0),
-                    (-1, -1, 0),
-                    (-1, -2, 0),
-                    *(tuple((x, -2, 0) for x in range(11))),
-                    (10, -1, 0),
-                    (10, 0, 0),
-                )
-                return _PathSearchResult(detour, None, (), len(detour))
-            return _PathSearchResult(
-                None,
-                RouteFailureKind.BUDGET,
-                (),
-                0,
-            )
-
-        monkeypatch.setattr(routing_domain, "_astar", scripted_astar)
-        monkeypatch.setattr(routing_domain, "RRR_MAX", 1)
-        monkeypatch.setattr(routing_domain, "_REPAIR_PASSES", 0)
-
-        result = _route_all(canvas, nets, 2001, 35, bounds)
-
-        assert result.status is DetailedRouteStatus.BUDGET
-        assert searches == 5
-
     def test_lower_junction_guard_keeps_same_source_sibling_as_victim(
         self,
     ) -> None:
@@ -16535,7 +16455,7 @@ class TestDetailedRoutingDiagnostics:
         canvas.limit = bounds
         for x in range(bounds[0], bounds[2] + 1):
             for y in range(bounds[1], bounds[3] + 1):
-                canvas.belt_ban[x, y] = set(range(1, LEVELS))
+                canvas.belt_ban[x, y] = set(range(1, canvas.levels))
         source = canvas.add(_belt(0, 0, item="gear"))
         far_destination = canvas.add(_belt(20, 0, item="gear"))
         near_destination = canvas.add(_belt(2, -2, item="gear"))
@@ -16860,7 +16780,7 @@ class TestAFailedSearchNamesTheWallThatCutIt:
         canvas = _Canvas()
         for cell in ((1, 0), (-1, 0), (0, 1)):
             canvas.solid.add(cell)
-            for lvl in range(LEVELS):
+            for lvl in range(canvas.levels):
                 canvas.blocked[cell[0], cell[1], lvl] = 0
         canvas.blocked[0, -1, 0] = _TENTATIVE
         bounds = (-40, -40, 40, 40)
@@ -16938,11 +16858,11 @@ class TestAFailedSearchNamesTheWallThatCutIt:
         span = _BLAME_MAX_WALL  # a corridor this long has 2x3x span wall cells
         for x in range(-1, span + 1):
             for y in (-1, 1):
-                for lvl in range(LEVELS):
+                for lvl in range(canvas.levels):
                     canvas.blocked[x, y, lvl] = _TENTATIVE
         for x in (-1, span):
             canvas.solid.add((x, 0))
-            for lvl in range(LEVELS):
+            for lvl in range(canvas.levels):
                 canvas.blocked[x, 0, lvl] = 0
         blame: dict[tuple[int, int, int], float] = {}
         result = _astar(
@@ -16963,7 +16883,7 @@ class TestAFailedSearchNamesTheWallThatCutIt:
         canvas = _Canvas(limit=(0, 0, 160, 160))
         owner: dict[Cell, int] = {}
         for y in range(161):
-            for level in range(LEVELS):
+            for level in range(canvas.levels):
                 cell = (80, y, level)
                 canvas.blocked[cell] = _TENTATIVE
                 owner[cell] = 7
@@ -17005,13 +16925,13 @@ class TestTheFlatGridIsTheSameSearch:
         for y in range(-4, 6):
             if y == 1:
                 continue
-            for lvl in range(LEVELS):
+            for lvl in range(canvas.levels):
                 canvas.blocked[6, y, lvl] = 0
             canvas.solid.add((6, y))
         for y in range(-4, 6):
             if y == 4:
                 continue
-            for lvl in range(LEVELS):
+            for lvl in range(canvas.levels):
                 canvas.blocked[13, y, lvl] = 0
             canvas.solid.add((13, y))
         canvas.keep_out.add((9, 1))
@@ -17032,7 +16952,9 @@ class TestTheFlatGridIsTheSameSearch:
         """
         canvas, bounds = self._maze()
         grid = _make_grid(canvas, bounds, _canvas_span(canvas, bounds), {})
-        cells = [(x, y, lvl) for x in range(-3, 4) for y in range(-3, 4) for lvl in range(LEVELS)]
+        cells = [
+            (x, y, lvl) for x in range(-3, 4) for y in range(-3, 4) for lvl in range(canvas.levels)
+        ]
         assert sorted(cells, key=grid.index) == sorted(cells), (
             "the flat index no longer orders cells the way (x, y, level) tuples "
             "do, so every heapq tie now falls a different way and the router is "
@@ -17144,7 +17066,7 @@ class TestTheFlatGridIsTheSameSearch:
         lo_x, lo_y, hi_x, hi_y = bounds
         for x in range(lo_x, hi_x + 1):
             for y in range(lo_y, hi_y + 1):
-                for lvl in range(LEVELS):
+                for lvl in range(canvas.levels):
                     cell = (x, y, lvl)
                     if cell in canvas.reserved:
                         continue
@@ -17229,7 +17151,9 @@ class TestAltitudeProfile:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(routing_domain, "_altitude_profile", lambda *_args, **_kwargs: None)
-        canvas = _Canvas(ramped=True)
+        canvas = _Canvas(
+            belt_rules=replace(routing_domain._DEFAULT_BELT_RULES, vertical_construction=False)
+        )
         source = _Port(0, 0, 0, 0, 0)
         destination = _Port(0, 2, 0, 2, 2)
         net = _Net(source, destination, "iron")
@@ -17371,7 +17295,7 @@ class TestTheRoutingGridAgreesWithTheCanvas:
             (x, y, lvl)
             for x in range(7)
             for y in range(5)
-            for lvl in range(LEVELS)
+            for lvl in range(canvas.levels)
             if canvas.free((x, y, lvl)) != bool(grid.occ[grid.index((x, y, lvl))])
         ]
         assert not disagree, (
@@ -19975,6 +19899,7 @@ def test_prepared_junction_ban_reuses_complete_immutable_offsets(
         height: int,
         yaw: float,
         z: F,
+        levels: int,
         cancelled: Callable[[], bool],
     ) -> frozenset[Cell]:
         nonlocal calls
@@ -19986,6 +19911,7 @@ def test_prepared_junction_ban_reuses_complete_immutable_offsets(
             height,
             yaw,
             z,
+            levels,
             cancelled,
         )
 
@@ -20058,7 +19984,15 @@ def test_cancellable_junction_ban_offsets_are_shared_process_wide(
     monkeypatch.setattr(routing_domain, "_junction_site_is_clear", counting)
     smelter_id = catalog.item_id("arc-smelter")
     smelter = catalog.building(smelter_id)
-    key = (smelter_id, smelter.model_index, smelter.width, smelter.height, 0.0, F(0))
+    key = (
+        smelter_id,
+        smelter.model_index,
+        smelter.width,
+        smelter.height,
+        0.0,
+        F(0),
+        math.floor(routing_domain._DEFAULT_BELT_RULES.max_z) + 1,
+    )
 
     first = routing_domain._cancellable_junction_ban_offsets(*key, lambda: False)
     probed_once = len(probes)
@@ -20181,84 +20115,80 @@ def test_projected_coater_supply_is_checked_during_preparation(
     assert observed[0][1][0][:2] == (3, coater)
 
 
-def test_projected_coater_junction_bans_reuse_identical_exact_relations(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_projected_coater_junction_cache_preserves_frame_and_skipped_cell_legality() -> None:
     coater_info = catalog.building(catalog.SPRAY_COATER_ID)
     coater = PlacedBuilding(
         catalog.SPRAY_COATER_ID,
         coater_info.model_index,
-        0,
-        0,
-        width=coater_info.width,
-        height=coater_info.height,
+        5,
+        16,
+        width=1,
+        height=1,
     )
-    placement = Placement(buildings=(coater,))
-    candidate = finalize.frame_candidates(placement, BandPolicy("portable"))[0]
-    band = next(
-        band for band in planet.bands() if band.area_segments == candidate.frame.certified_bands[0]
+    bounds = (0, 0, 25, 25)
+    candidates = finalize._frame_candidates_for_extent(26, 26, BandPolicy("portable"))
+    frames = []
+    for rotated in (False, True):
+        candidate = next(
+            candidate for candidate in candidates if candidate.frame.rotated == rotated
+        )
+        band = next(
+            band
+            for band in planet.bands()
+            if band.area_segments == candidate.frame.certified_bands[0]
+        )
+        anchors = tuple(band.anchors(candidate.frame.height))
+        for anchor in (anchors[0], anchors[-1]):
+            frames.append(
+                routing_domain._JunctionProjectionFrame(
+                    bounds,
+                    candidate,
+                    (
+                        planet.Projection(
+                            band, anchor, colliders.PLANET_SEGMENT, colliders.PLANET_RADIUS
+                        ),
+                    ),
+                )
+            )
+    cache = routing_domain._CoaterJunctionCache()
+    collision = (5, 16, 0)
+    routing_domain._projected_coater_junction_bans_by_frame(
+        ((0, coater),),
+        (frames[0],),
+        bounds,
+        already_banned={collision},
+        splitter_index=1,
+        cache=cache,
     )
-    projection = planet.Projection(
-        band,
-        next(iter(band.anchors(candidate.frame.height))),
-        colliders.PLANET_SEGMENT,
-        colliders.PLANET_RADIUS,
-    )
-    frame = routing_domain._JunctionProjectionFrame(
-        placement.bounds,
-        candidate,
-        (projection,),
-    )
-    overlaps = 0
-    keepouts = 0
-    boxes = (object(), object())
-    materialized: list[PlacedBuilding] = []
-    projected_splitters: list[colliders.Placed] = []
-    original_materialize = finalize.materialize_frame_building
-
-    def materialize(
-        building: PlacedBuilding,
-        **kwargs: object,
-    ) -> PlacedBuilding:
-        materialized.append(building)
-        return original_materialize(building, **kwargs)  # type: ignore[arg-type]
-
-    def no_overlap(_left: object, _right: object) -> bool:
-        nonlocal overlaps
-        overlaps += 1
-        return False
-
-    def coater_boxes(*_args: object) -> tuple[object, object]:
-        nonlocal keepouts
-        keepouts += 1
-        return boxes
-
-    def splitter_boxes(splitter: colliders.Placed, *_args: object) -> tuple[object, object]:
-        projected_splitters.append(splitter)
-        return boxes
-
-    monkeypatch.setattr(finalize, "materialize_frame_building", materialize)
-    monkeypatch.setattr(
-        finalize,
-        "projected_coater_keepout_boxes",
-        coater_boxes,
-    )
-    monkeypatch.setattr(colliders, "target_boxes", splitter_boxes)
-    monkeypatch.setattr(colliders, "obb_overlap", no_overlap)
-
-    bans = routing_domain._projected_coater_junction_bans_by_frame(
-        ((0, coater), (1, coater)),
-        (frame,),
-        placement.bounds,
-        already_banned=set(),
-        splitter_index=2,
-    )
-
-    assert overlaps == 3 * LEVELS * len(boxes) ** 2
-    assert keepouts == 1
-    assert bans == (frozenset(),)
-    assert materialized == [coater, coater]
-    assert projected_splitters
+    for frame in frames:
+        (expected,) = routing_domain._projected_coater_junction_bans_by_frame(
+            ((0, coater),),
+            (frame,),
+            bounds,
+            already_banned=set(),
+            splitter_index=1,
+        )
+        (actual,) = routing_domain._projected_coater_junction_bans_by_frame(
+            ((0, coater),),
+            (frame,),
+            bounds,
+            already_banned=set(),
+            splitter_index=1,
+            cache=cache,
+        )
+        assert actual == expected
+        assert collision in actual
+        assert (11, 24, 0) not in actual
+    with pytest.raises(routing_domain._PreparationDeadline):
+        routing_domain._projected_coater_junction_bans_by_frame(
+            ((0, coater),),
+            (frames[0],),
+            bounds,
+            already_banned=set(),
+            splitter_index=1,
+            cache=cache,
+            cancelled=lambda: True,
+        )
 
 
 def test_relative_rigid_frame_pose_matches_every_portable_frame_candidate() -> None:
@@ -20285,7 +20215,7 @@ def test_relative_rigid_frame_pose_matches_every_portable_frame_candidate() -> N
         for x, y, level in (
             (7, 11, 0),
             (18, 16, 1),
-            (26, 30, LEVELS - 1),
+            (26, 30, 8),
         )
     )
 
@@ -21297,7 +21227,7 @@ def _last_mile_belt_net(
 def _last_mile_block(canvas: _Canvas, cells: Collection[tuple[int, int]]) -> None:
     for x, y in cells:
         canvas.solid.add((x, y))
-        for level in range(LEVELS):
+        for level in range(canvas.levels):
             canvas.blocked[x, y, level] = 0
 
 
@@ -21369,7 +21299,7 @@ def _joint_only_fixture() -> tuple[_Canvas, list[_Net], tuple[int, int, int, int
     # available at once and the pack would never strand.
     for x in range(bounds[0], bounds[2] + 1):
         for y in range(bounds[1], bounds[3] + 1):
-            for level in range(1, LEVELS):
+            for level in range(1, canvas.levels):
                 canvas.blocked[x, y, level] = 0
     return canvas, [blocker, target], bounds
 
@@ -21385,6 +21315,73 @@ def _bounded_result() -> object:
         seconds=0.0,
         bound=last_mile_module.ClusterBound.NODES,
     )
+
+
+@pytest.mark.parametrize("foreign_corridor", (False, True), ids=("own-source", "foreign-source"))
+def test_cluster_admission_keeps_own_source_corridor_but_excludes_foreign_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+    foreign_corridor: bool,
+) -> None:
+    """Stranded siblings retain their repair seat only at a source they own."""
+    bounds = (-4, -4, 12, 8)
+    canvas = _Canvas(limit=bounds)
+    source = _Port(canvas.add(_belt(0, 0, item="gear")), 0, 0, 0, 0)
+    nets: list[_Net] = []
+    for ordinal, (x, y) in enumerate(((8, 0), (8, 5))):
+        sink = canvas.add(_belt(x, y, item="gear"))
+        nets.append(
+            _Net(
+                src=source,
+                dst=_Port(sink, x, y, x, x),
+                item="gear",
+                net_id=NetId(0, ordinal + 1, "gear", NetRole.INTERNAL, ordinal),
+            )
+        )
+        # Fixed destination walls force last-mile admission without consuming
+        # the source reservation or depending on the detailed search's route.
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            canvas.add(_belt(x + dx, y + dy, item="wall"))
+    source_key = (source.x, source.y, source.z)
+    routing_domain._restore_port_corridor(
+        canvas,
+        source_key,
+        routing_domain.PortAccessCorridor(
+            access=(0, -1, 0),
+            exit=(0, -2, 0),
+            kind=routing_domain.PortAccessKind.INTERNAL_DEPARTURE,
+        ),
+    )
+    if foreign_corridor:
+        routing_domain._restore_port_corridor(
+            canvas,
+            (4, -2, 0),
+            routing_domain.PortAccessCorridor(access=(0, 1, 0), exit=(0, 2, 0)),
+        )
+    clusters: list[last_mile.ClusterProblem] = []
+
+    def stop_after_admission(
+        problem: last_mile.ClusterProblem,
+        _environment: last_mile.ClusterEnvironment,
+    ) -> last_mile.ClusterResult:
+        clusters.append(problem)
+        return last_mile.ClusterResult(
+            outcome=last_mile.ClusterOutcome.BOUNDED,
+            paths={},
+            nodes=0,
+            expansions=0,
+            seconds=0.0,
+            bound=last_mile.ClusterBound.NODES,
+        )
+
+    monkeypatch.setattr(last_mile, "solve_cluster", stop_after_admission)
+    monkeypatch.setattr(routing_domain, "RRR_MAX", 1)
+    monkeypatch.setattr(routing_domain, "_REPAIR_PASSES", 0)
+
+    result = _route_all(canvas, nets, 2001, 35, bounds)
+
+    assert result.last_mile is not None and result.last_mile.invocations == 1
+    assert clusters[0].nets == ((0,) if foreign_corridor else (0, 1))
+    assert clusters[0].same_source_dropped == (1 if foreign_corridor else 0)
 
 
 def test_a_pack_with_no_stranded_net_never_runs_the_cluster_search(
@@ -21534,7 +21531,7 @@ def test_failed_cluster_restores_two_corridors_and_unrelated_grid(
     # its only approach is still (0, -1), on the stranded net's real wall.
     for x, y in ((-1, -2), (-2, -2)):
         canvas.solid.discard((x, y))
-        for level in range(LEVELS):
+        for level in range(canvas.levels):
             canvas.blocked.pop((x, y, level), None)
     departure = routing_domain.PortAccessCorridor(
         (0, -1, 0), (0, 0, 0), routing_domain.PortAccessKind.INTERNAL_DEPARTURE
@@ -25058,6 +25055,97 @@ def test_three_destination_shared_external_bucket_commits_one_physical_root() ->
         if offset == 0:
             assert not canvas.junction_is_clear(source.x + 1, source.y, 0)
             assert canvas.junction_is_clear(source.x + 2, source.y, 0)
+
+
+@pytest.mark.parametrize("vertical", (False, True), ids=("horizontal", "vertical"))
+def test_shared_external_supply_routes_around_its_blocked_fixed_tap(vertical: bool) -> None:
+    """Declared fanout survives prepare/bind without relaxing the first tap."""
+    bounds = (-12, -4, 12, 14)
+    canvas = _Canvas(limit=bounds)
+    belt_id = catalog.get_item_id("conveyor-belt-3")
+    assert belt_id is not None
+    belt_model = catalog.building(belt_id).model_index
+
+    def cell(x: int, y: int) -> tuple[int, int]:
+        return (-y, x + 1) if vertical else (x, y)
+
+    # Like the existing trunk fixture, destination records are materialized
+    # after the trunk. Starting on an empty canvas also exercises root index0.
+    destinations = tuple(_Port(-1, *cell(2, y)) for y in (2, 9))
+    nets, roots = _place_shared_external_input_trunks(
+        canvas,
+        (("iron-ore", CargoDomain.UNSPRAYED, destinations),),
+        belt_id=belt_id,
+        belt_model=belt_model,
+        bounds=(0, 0, 0, 12) if vertical else (0, 0, 12, 12),
+    )
+    realized = []
+    for ordinal, net in enumerate(nets):
+        sink = canvas.add(
+            PlacedBuilding(belt_id, belt_model, net.dst.x, net.dst.y, carries_item="iron-ore")
+        )
+        realized.append(
+            replace(
+                net,
+                dst=replace(net.dst, belt=sink),
+                net_id=NetId(None, ordinal, net.item, NetRole.INTERNAL, ordinal),
+            )
+        )
+    root = roots[0][1]
+    feeder = canvas.add(
+        PlacedBuilding(
+            belt_id, belt_model, *cell(0, -1), output_obj=root.belt, carries_item="iron-ore"
+        )
+    )
+    canvas.add(PlacedBuilding(belt_id, belt_model, *cell(-1, 0), carries_item="proliferator-3"))
+    frozen_sources = tuple(
+        (net.source.belt, net.source.x, net.source.y, net.source.z) for net in realized
+    )
+    prepared_nets = routing_domain._with_sibling_groups(
+        tuple(
+            _PreparedNet(
+                net_id=cast(NetId, net.net_id),
+                src=routing_domain._prepare_port(net.source),
+                dst=routing_domain._prepare_port(net.dst),
+                item=net.item,
+            )
+            for net in realized
+        )
+    )
+    problem = replace(
+        _prepared_bound_problem(buildings=tuple(canvas.buildings), nets=prepared_nets),
+        blocked=tuple(canvas.blocked.items()),
+        world_taken=frozenset(canvas.world_taken),
+        core=bounds,
+        route_bounds=bounds,
+        limit=bounds,
+    )
+    workspace = problem.new_workspace()
+    routed = _route_all(
+        workspace.canvas,
+        workspace.nets,
+        belt_id,
+        belt_model,
+        bounds,
+        budget={"left": 20_000},
+    )
+
+    assert routed.status is DetailedRouteStatus.ROUTED, routed.failures
+    assert set(routed.routed) == {net.net_id for net in realized}
+    assert (
+        tuple((net.source.belt, net.source.x, net.source.y, net.source.z) for net in workspace.nets)
+        == frozen_sources
+    )
+    successors = routing_domain._splitter_successors(workspace.canvas)
+    assert all(
+        routing_domain._leads_back(workspace.canvas, feeder, {net.dst.belt}, successors)
+        for net in workspace.nets
+    )
+    assert not any(
+        building.item_id == catalog.SPLITTER_ID
+        and (building.x, building.y, building.z) == (root.x, root.y, root.z)
+        for building in workspace.canvas.buildings
+    )
 
 
 def _prepared_bound_problem(

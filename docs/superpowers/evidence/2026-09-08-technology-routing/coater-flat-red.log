@@ -1,0 +1,11 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_transverse_emitted_supply_passes_flat_certification ___________
+tests/layout/test_coater_node.py:345: in test_transverse_emitted_supply_passes_flat_certification
+    assert not report.errors, "\n".join(finding.message for finding in report.errors)
+E   AssertionError: Spray Coater 7's addon area 1 misses selected belt 6's own line by 0.3142 world units; the game requires strictly less than 0.3
+E   assert not (Finding(check='game.addon_supply', severity=<Severity.ERROR: 'error'>, message="Spray Coater 7's addon area 1 misses ...ires strictly less than 0.3", buildings=(7, 6), detail={'area': 1, 'belt': 6, 'line_distance': '0.3142', 'max': 0.3}),)
+E    +  where (Finding(check='game.addon_supply', severity=<Severity.ERROR: 'error'>, message="Spray Coater 7's addon area 1 misses ...ires strictly less than 0.3", buildings=(7, 6), detail={'area': 1, 'belt': 6, 'line_distance': '0.3142', 'max': 0.3}),) = Report(findings=(Finding(check='game.addon_supply', severity=<Severity.ERROR: 'error'>, message="Spray Coater 7's addo...detail={'area': 1, 'belt': 6, 'line_distance': '0.3142', 'max': 0.3}),), checks_run=('game.addon_supply',), skipped=()).errors
+=========================== short test summary info ============================
+FAILED tests/layout/test_coater_node.py::test_transverse_emitted_supply_passes_flat_certification
+1 failed, 24 deselected in 0.36s

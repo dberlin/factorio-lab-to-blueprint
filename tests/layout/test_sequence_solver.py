@@ -3268,10 +3268,10 @@ def test_unseatable_prepared_candidate_remains_searchable_refusal(
         *,
         policy: BandPolicy,
         power: bool,
-        ramped: bool = False,
+        belt_rules: catalog.BeltAltitudeRules = routing_domain._DEFAULT_BELT_RULES,
         _reserve_ports: bool = True,
     ) -> Never:
-        del power, policy, ramped, _reserve_ports
+        del power, policy, belt_rules, _reserve_ports
         raise routing_domain._Unseatable("positional coater collision")
 
     monkeypatch.setattr(
@@ -9315,15 +9315,24 @@ def test_sequence_preparation_consumes_elevated_machine_and_tesla_junction_bans(
         for building in prepared.building_templates
         if catalog.is_belt(building.item_id) or catalog.is_sorter(building.item_id)
     )
-    machine_ban = routing_domain._prepared_junction_ban(static_buildings, ())
-    tesla_ban = routing_domain._prepared_junction_ban((), prepared.power_sites)
+    machine_ban = routing_domain._prepared_junction_ban(
+        static_buildings, (), belt_rules=prepared.belt_rules
+    )
+    tesla_ban = routing_domain._prepared_junction_ban(
+        (), prepared.power_sites, belt_rules=prepared.belt_rules
+    )
     expected_ban = machine_ban | tesla_ban
 
     assert machine_ban
     assert tesla_ban
     assert any(level > 0 for _x, _y, level in machine_ban)
     assert any(level > 0 for _x, _y, level in tesla_ban)
-    assert routing_domain._prepared_junction_ban(transport_buildings, ()) == frozenset()
+    assert (
+        routing_domain._prepared_junction_ban(
+            transport_buildings, (), belt_rules=prepared.belt_rules
+        )
+        == frozenset()
+    )
     assert prepared.junction_ban == expected_ban
     assert workspace.canvas.junction_geometry_prepared
     assert workspace.canvas.junction_ban == set(expected_ban)

@@ -127,6 +127,8 @@ def capture(
         released_starts: Collection[tuple[int, int, int]] = (),
         forbidden: Collection[tuple[int, int, int]] = (),
         blocking_owners: Mapping[tuple[int, int, int], int] | None = None,
+        *,
+        extra_edges: dict[int, tuple[tuple[int, float], ...]] | None = None,
     ) -> routing_domain._PathSearchResult:
         nonlocal seen
         want = seen % every == 0 and len(cases) < cap
@@ -148,6 +150,7 @@ def capture(
             released_starts,
             forbidden,
             blocking_owners,
+            extra_edges=extra_edges,
         )
         if want:
             cases.append(
@@ -163,6 +166,7 @@ def capture(
                     "released_starts": tuple(released_starts),
                     "forbidden": tuple(forbidden),
                     "blocking_owners": (None if blocking_owners is None else dict(blocking_owners)),
+                    "extra_edges": None if extra_edges is None else dict(extra_edges),
                     "path": out_path,
                 }
             )
@@ -337,6 +341,7 @@ def bench(path: Path, rounds: int, check: bool, landmarks: int | None) -> int:
                     case.get("released_starts", ()),
                     case.get("forbidden", ()),
                     case.get("blocking_owners"),
+                    extra_edges=case.get("extra_edges"),
                 )
             )
         dt = time.perf_counter() - t0

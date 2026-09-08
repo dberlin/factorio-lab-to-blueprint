@@ -44,6 +44,8 @@ def _capture_searches(spec: BuildSpec, budget_s: float) -> list[Case]:
         released_starts: Collection[Cell] = (),
         forbidden: Collection[Cell] = (),
         blocking_owners: Mapping[Cell, int] | None = None,
+        *,
+        extra_edges: dict[int, tuple[tuple[int, float], ...]] | None = None,
     ) -> _PathSearchResult:
         shot_canvas, shot_grid, shot_hist = _snapshot(canvas, grid, history)
         cases.append(
@@ -59,6 +61,7 @@ def _capture_searches(spec: BuildSpec, budget_s: float) -> list[Case]:
                 "released_starts": tuple(released_starts),
                 "forbidden": tuple(forbidden),
                 "blocking_owners": None if blocking_owners is None else dict(blocking_owners),
+                "extra_edges": None if extra_edges is None else dict(extra_edges),
             }
         )
         return original(
@@ -76,6 +79,7 @@ def _capture_searches(spec: BuildSpec, budget_s: float) -> list[Case]:
             released_starts,
             forbidden,
             blocking_owners,
+            extra_edges=extra_edges,
         )
 
     routing_domain._astar = spy
@@ -128,6 +132,7 @@ def _replay(
         case["released_starts"],
         case["forbidden"],
         case["blocking_owners"],
+        extra_edges=case["extra_edges"],
     )
 
 
@@ -239,70 +244,24 @@ def test_compiled_astar_deadline_checkpoint_preserves_raw_telemetry_and_budget(
     assert cython_budget["left"] == 3
 
 
-def test_a_start_in_the_pad_degrades_the_backend_and_keeps_the_grid(
+def test_search_from_unpadded_corner_does_not_wrap_into_other_columns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The pad margin picks the LOOP; it must never cost the caller its grid.
+    from dataclasses import replace
+    from fractions import Fraction
 
-    Rebuilding the grid to dodge the kernel's precondition would hand back a
-    landmark-free grid, which is a weaker heuristic and a different expansion
-    count -- under the Python backend too, where the router must stay
-    byte-identical to the pre-kernel one.  So a cell inside the pad falls
-    through to the Python loop ON THE SAME GRID, exactly as
-    ``global_router._kernel_bounds_hold`` does for the relaxed search.
-    """
-    compiled = _require_both_backends()
-
-    box = (0, 0, 8, 8)
-    canvas = routing_domain._Canvas()
-    # `span` is `box` plus exactly the two-cell pad, so a cell on the span's
-    # outer edge is inside `span` and two short of the margin.
-    grid = routing_domain._make_grid(canvas, box, (-2, -2, 10, 10), {})
-
-    took_python: list[str] = []
-    took_kernel: list[str] = []
-    rebuilt: list[str] = []
-    original_loop = routing_domain._astar_python_loop
-    original_make = routing_domain._make_grid
-
-    def spy_loop(*args: Any, **kwargs: Any) -> Any:
-        took_python.append("called")
-        return original_loop(*args, **kwargs)
-
-    def spy_kernel(*args: Any, **kwargs: Any) -> Any:
-        took_kernel.append("called")
-        return compiled(*args, **kwargs)
-
-    def spy_make(*args: Any, **kwargs: Any) -> Any:
-        rebuilt.append("called")
-        return original_make(*args, **kwargs)
-
-    monkeypatch.setattr(routing_domain, "_astar_python_loop", spy_loop)
-    monkeypatch.setattr(routing_domain, "_make_grid", spy_make)
-    monkeypatch.setattr(route_kernel, "_compiled_astar", spy_kernel)
-
-    def search(cell: Cell) -> None:
-        # Goal == start, so this terminates on the first pop and the assertion
-        # is about which loop ran rather than about what it found.
-        routing_domain._astar(canvas, [cell], {cell}, {}, 1.0, box, {"left": 1 << 20}, grid=grid)
-
-    in_the_pad = (-2, 4, 0)
-    assert not routing_domain._kernel_margin_holds(grid, [in_the_pad])
-    search(in_the_pad)
-    assert took_python == ["called"]
-    assert took_kernel == []
-    assert rebuilt == []  # the caller's grid, landmark fields and all, was kept
-
-    # Control: the same grid, a cell clear of the pad, and the kernel runs --
-    # so the assertion above is about the margin and not about a kernel that
-    # was never going to be reached.
-    took_python.clear()
-    clear_of_the_pad = (2, 4, 0)
-    assert routing_domain._kernel_margin_holds(grid, [clear_of_the_pad])
-    search(clear_of_the_pad)
-    assert took_kernel == ["called"]
-    assert took_python == []
-    assert rebuilt == []
+    canvas = routing_domain._Canvas(
+        belt_rules=replace(routing_domain._DEFAULT_BELT_RULES, max_z=Fraction(0))
+    )
+    canvas.blocked[(0, 1, 0)] = 0
+    canvas.blocked[(1, 0, 0)] = 0
+    box = (0, 0, 1, 1)
+    grid = routing_domain._make_grid(canvas, box, box, {})
+    monkeypatch.setattr(route_kernel, "_compiled_astar", None)
+    result = routing_domain._astar(canvas, [(0, 0, 0)], {(1, 1, 0)}, {}, 1.0, box, grid=grid)
+    assert result.path is None
+    assert result.kind is RouteFailureKind.SEALED_POCKET
+    assert result.expansions == 1
 
 
 def test_backend_falls_back_when_extension_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:

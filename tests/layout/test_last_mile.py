@@ -1,10 +1,13 @@
 # tests/layout/test_last_mile.py
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
+from fractions import Fraction
 
 from flab2bp.layout import last_mile, routing_domain
 from flab2bp.layout.route_feedback import RouteFailureKind
+from flab2bp.layout.route_primitives import RoutePrimitives
 from flab2bp.layout.routing_domain import _astar, _Canvas, _PathSearchResult
 
 Cell = tuple[int, int, int]
@@ -455,7 +458,7 @@ def _gap_canvas() -> tuple[_Canvas, tuple[int, int, int, int]]:
     bounds = (0, 0, 4, 2)
     canvas = _Canvas(limit=bounds)
     for y in range(3):
-        for level in range(routing_domain.LEVELS):
+        for level in range(canvas.levels):
             if (y, level) == (1, 0):
                 continue
             canvas.blocked[2, y, level] = 0
@@ -665,6 +668,117 @@ def test_paths_on_different_levels_over_one_column_do_not_conflict() -> None:
 
     assert conflict is None
     assert shared == (0, 1, (2, 0, 0))
+
+
+def test_cbs_replans_disjoint_paths_that_share_a_connector_body() -> None:
+    canvas = _Canvas(
+        belt_rules=replace(
+            routing_domain._DEFAULT_BELT_RULES,
+            max_z=Fraction(1),
+            vertical_construction=False,
+        )
+    )
+    bounds = (-1, -1, 1, 1)
+    grid = routing_domain._make_grid(canvas, bounds, (-3, -3, 3, 3), {})
+    primitives = RoutePrimitives(canvas.belt_rules)
+    macro = ((0, 1, 0), (0, 1, 1))
+    body = (0, -1, 1)
+    ends = {
+        0: ([macro[0]], {macro[1]}),
+        1: ([(-1, -1, 1)], {(1, -1, 1)}),
+    }
+    roots: dict[int, tuple[Cell, ...]] = {}
+    replans: list[tuple[int, frozenset[Cell], _PathSearchResult]] = []
+
+    def search(index: int, constraints: frozenset[Cell]) -> _PathSearchResult:
+        starts, goals = ends[index]
+        edges = (
+            primitives.edges(
+                canvas,
+                grid,
+                starts,
+                goals,
+                forbidden=constraints,
+                active_paths={},
+                deadline=None,
+            )
+            if index == 0
+            else {}
+        )
+        found = _astar(
+            canvas,
+            starts,
+            goals,
+            {},
+            1.0,
+            bounds if index == 0 else (-2, -2, 2, 2),
+            grid=grid,
+            forbidden=constraints,
+            extra_edges=edges,
+        )
+        if constraints:
+            replans.append((index, constraints, found))
+        elif found.path is not None:
+            roots[index] = found.path
+        return found
+
+    problem = last_mile.ClusterProblem(
+        nets=(0, 1), stranded=(0,), truncated=False, sibling_closed=True
+    )
+    environment = last_mile.ClusterEnvironment(
+        search=search,
+        offers=_offers_stub,
+        budget_left=lambda: 1 << 30,
+        budget_floor=0,
+        expired=lambda: False,
+        extra_occupancy=primitives.guards,
+    )
+
+    bounded = last_mile.solve_cluster(problem, replace(environment, max_nodes=1))
+    assert bounded.outcome is last_mile.ClusterOutcome.BOUNDED
+    assert bounded.bound is last_mile.ClusterBound.NODES
+    assert bounded.paths == {}
+
+    replans.clear()
+    result = last_mile.solve_cluster(problem, environment)
+
+    assert roots[0] == macro
+    assert primitives.on_path(macro)[0].stack_members[-1].model_index == 39
+    assert not set(roots[0]) & set(roots[1])
+    assert body in roots[1] and body in primitives.guards(macro)
+    assert result.outcome is last_mile.ClusterOutcome.SOLVED
+    occupied = {index: set(path) | primitives.guards(path) for index, path in result.paths.items()}
+    assert not occupied[0] & occupied[1]
+    assert {index for index, constraints, _ in replans if body in constraints} == {0, 1}
+    for _index, constraints, found in replans:
+        if found.path is not None:
+            assert not constraints & (set(found.path) | primitives.guards(found.path))
+
+
+def test_extra_body_resources_have_deterministic_level_aware_conflicts() -> None:
+    problem = last_mile.ClusterProblem(
+        nets=(0, 1), stranded=(0,), truncated=False, sibling_closed=True
+    )
+    paths = {0: ((0, 0, 0),), 1: ((4, 0, 0),)}
+
+    def guards(path: Sequence[Cell]) -> tuple[Cell, ...]:
+        if path == paths[0]:
+            return ((2, 0, 1), (1, 0, 1))
+        return ((1, 0, 1), (2, 0, 1))
+
+    conflict = last_mile._first_conflict(problem, paths, guards)
+    reversed_conflict = last_mile._first_conflict(
+        problem, paths, lambda path: tuple(reversed(guards(path)))
+    )
+    assert conflict == reversed_conflict == (0, 1, (1, 0, 1))
+    assert (
+        last_mile._first_conflict(
+            problem,
+            paths,
+            lambda path: ((1, 0, 1 if path == paths[0] else 2),),
+        )
+        is None
+    )
 
 
 def test_relation_no_good_records_offsets_from_the_anchor() -> None:

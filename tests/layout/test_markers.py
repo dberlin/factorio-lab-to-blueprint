@@ -97,6 +97,39 @@ def test_serial_pilers_preserve_shared_tail_and_external_input() -> None:
     assert markers.input_belt_heads(placement) == [9, 10]
 
 
+def test_marks_only_exposed_producer_surplus_beyond_splitter() -> None:
+    placement = Placement(
+        buildings=(
+            PlacedBuilding(item_id=0, model_index=0, x=0, y=0),
+            _sorter(source=0, destination=2, item="gear"),
+            _belt(0, 2, item="gear", output=3),
+            PlacedBuilding(item_id=catalog.SPLITTER_ID, model_index=38, x=1, y=2),
+            _belt(2, 2, item="gear", input_obj=3, output=5),
+            _belt(3, 2, item="gear", output=None),
+            _sorter(source=5, destination=7, item="gear"),
+            PlacedBuilding(item_id=0, model_index=0, x=3, y=3),
+            _belt(1, 3, item="gear", input_obj=3, output=9),
+            _belt(1, 4, item="gear", output=None),
+            _belt(1, 1, item="gear", input_obj=3, output=None),
+            _belt(5, 2, item="gear", output=None),
+            _belt(5, 4, item="iron-ingot", output=None),
+        )
+    )
+    spec = BuildSpec(
+        groups=(),
+        external_inputs={},
+        outputs={"gear": Fraction(1), "iron-ingot": Fraction(1)},
+    )
+
+    marked = markers.mark_external_belts(placement, spec)
+
+    assert marked.buildings[9].parameters == catalog.belt_marker(catalog.item_id("gear"))
+    # Consumer tail, host port, external-only same-item tail, unrelated cargo.
+    for index in (5, 10, 11, 12):
+        assert marked.buildings[index].parameters == ()
+    assert markers.output_belt_tails(placement) == [9]
+
+
 def test_marks_external_input_heads_and_output_tails_without_touching_other_belts() -> None:
     placement = Placement(
         buildings=(

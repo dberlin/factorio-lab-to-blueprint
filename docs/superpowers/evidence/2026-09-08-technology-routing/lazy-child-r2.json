@@ -1,0 +1,10 @@
+{
+  "input": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/child-profile-2556711-2081646502680029.pickle",
+  "positional_options": "()",
+  "keyword_options": "{'time_budget_s': 11.929780546653395, 'absolute_deadline': 2081658.4323978967}",
+  "arguments_modified": false,
+  "status": "REFUSED",
+  "message": "no valid layout for all-products#block2 after 11.9298s: the 11.9298s deadline passed with no completed packing of 5 strips; no pack finished exact preparation inside it. This is a REFUSAL and not a verdict on the spec. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.",
+  "exit": 3,
+  "wall_s": 0.20623165601864457
+}

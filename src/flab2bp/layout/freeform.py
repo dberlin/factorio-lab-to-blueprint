@@ -3660,7 +3660,7 @@ def _build(
     power: bool,
     route: bool,
     policy: BandPolicy,
-    ramped: bool = False,
+    belt_rules: catalog.BeltAltitudeRules = routing_domain._DEFAULT_BELT_RULES,
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
     staged_static_cache: routing_domain._StagedStaticCache | None = None,
@@ -3676,7 +3676,7 @@ def _build(
             power=power,
             policy=policy,
             _reserve_ports=route,
-            ramped=ramped,
+            belt_rules=belt_rules,
             staged_static_cache=staged_static_cache,
             cancelled=cancelled,
             deadline=deadline,
@@ -4196,7 +4196,7 @@ def fallback_placement(
     *,
     band_policy: BandPolicy,
     power: bool = True,
-    ramped: bool = False,
+    belt_rules: catalog.BeltAltitudeRules = routing_domain._DEFAULT_BELT_RULES,
 ) -> Placement:
     """One strip per group, stacked vertically.  NOT a usable layout.
 
@@ -4232,7 +4232,7 @@ def fallback_placement(
         power=power,
         route=False,
         policy=band_policy,
-        ramped=ramped,
+        belt_rules=belt_rules,
     )
     assert result.routing.status is DetailedRouteStatus.ROUTED
     placement = result.placement
@@ -4475,17 +4475,6 @@ class FreeformLayout:
     ) -> None:
         self.band_policy = band_policy
         self.belt_rules = belt_rules
-        #: Whether ramps are REQUIRED.  The game's slope limit is conditional --
-        #: ``!history.beltVerticalConstruction && num25 > 0.8f`` -- so a save
-        #: WITH the tech has no slope limit and a belt may gain a whole level in
-        #: one tile.  Defaults to having it, because an absent technology set in
-        #: the URL means every technology researched.
-        #:
-        #: Treating the limit as unconditional cost 19 of 72 audit cells against
-        #: master's 2, and made the one test class built from a real corpus URL
-        #: fail 2 runs in 3: every net paid two tiles per level change and a
-        #: stricter join rule, under a constraint these saves do not carry.
-        self.ramped = not belt_rules.vertical_construction
         self.strip_len = strip_len
         #: CP-SAT search workers. ``None`` takes the module default (all
         #: cores); the bake-off pins ``DETERMINISTIC_WORKERS``.
@@ -6006,7 +5995,7 @@ class FreeformLayout:
                         power=True,
                         route=True,
                         policy=self.band_policy,
-                        ramped=self.ramped,
+                        belt_rules=self.belt_rules,
                         deadline=deadline,
                         budget=budget,
                         staged_static_cache=staged_static_cache,

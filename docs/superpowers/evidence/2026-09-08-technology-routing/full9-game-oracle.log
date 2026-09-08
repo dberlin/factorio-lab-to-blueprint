@@ -1,0 +1,922 @@
+[
+  {
+    "file": "fixture-pre.json",
+    "coater": -1,
+    "quarter": 0,
+    "dropAddonPass": false,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": true,
+    "sourceExistingBeltAllowed": false
+  },
+  {
+    "file": "fixture-pre.json",
+    "coater": -1,
+    "quarter": 1,
+    "dropAddonPass": false,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": true,
+    "sourceExistingBeltAllowed": false
+  },
+  {
+    "file": "fixture-pre.json",
+    "coater": -1,
+    "quarter": 2,
+    "dropAddonPass": false,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": true,
+    "sourceExistingBeltAllowed": false
+  },
+  {
+    "file": "fixture-pre.json",
+    "coater": -1,
+    "quarter": 3,
+    "dropAddonPass": false,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": true,
+    "sourceExistingBeltAllowed": false
+  },
+  {
+    "file": "fixture-post.json",
+    "coater": -1,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "fixture-post.json",
+    "coater": -1,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "fixture-post.json",
+    "coater": -1,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "fixture-post.json",
+    "coater": -1,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 777,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 777,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 777,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 777,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 780,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 780,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 780,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 780,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 783,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 783,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 783,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 783,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 786,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 786,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 786,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 786,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 789,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 789,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 789,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 789,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 792,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 792,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 792,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 792,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 795,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 795,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 795,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 795,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 798,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 798,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 798,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 798,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 801,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 801,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 801,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 801,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 804,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 804,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 804,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 804,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 807,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 807,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 807,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 807,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 810,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 810,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 810,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 810,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 813,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 813,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 813,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 813,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 816,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 816,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 816,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 816,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 819,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 819,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 819,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 819,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 822,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 822,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 822,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 822,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 825,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 825,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 825,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 825,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 828,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 828,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 828,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 828,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 831,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 831,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 831,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 831,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 834,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 834,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 834,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 834,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 837,
+    "quarter": 0,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 837,
+    "quarter": 1,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 837,
+    "quarter": 2,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  },
+  {
+    "file": "full9-regenerated-game-fixtures-r1.json",
+    "coater": 837,
+    "quarter": 3,
+    "dropAddonPass": true,
+    "dropColliderHit": true,
+    "exitAddonPass": true,
+    "exitColliderHit": false,
+    "sourceExistingBeltAllowed": true
+  }
+]

@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.venv/bin/mypy",
+    "src/flab2bp/layout/routing_domain.py",
+    "src/flab2bp/layout/route_primitives.py",
+    "src/flab2bp/layout/junction.py",
+    "src/flab2bp/layout/global_router.py",
+    "src/flab2bp/layout/freeform.py",
+    "src/flab2bp/layout/sequence_solver.py",
+    "src/flab2bp/layout/hierarchy/compose.py",
+    "src/flab2bp/layout/hierarchy/strategy.py"
+  ],
+  "exit": 1,
+  "wall": 122.39871040708385
+}

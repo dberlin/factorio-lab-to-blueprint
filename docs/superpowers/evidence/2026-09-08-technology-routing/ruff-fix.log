@@ -1,0 +1,667 @@
+E501 Line too long (103 > 100)
+    --> src/flab2bp/layout/finalize.py:1393:101
+     |
+1391 |             check="game.addon_supply",
+1392 |             buildings=(addon_index,),
+1393 |             detail=(f"addon area {area.area} has no belt within {rules.ADDON_AREA_RADIUS} world unit"),
+     |                                                                                                     ^^^
+1394 |             band=projection.band.area_segments,
+1395 |         )
+     |
+
+E501 Line too long (107 > 100)
+   --> src/flab2bp/layout/hierarchy/compose.py:374:101
+    |
+373 | def canvas_for(
+374 |     spec: BuildSpec, buildings: list[PlacedBuilding], *, belt_rules: catalog.BeltAltitudeRules, margin: int
+    |                                                                                                     ^^^^^^^
+375 | ) -> _Canvas:
+376 |     """The composed buildings as a routing canvas, sized to their own extent.
+    |
+
+E501 Line too long (102 > 100)
+   --> src/flab2bp/layout/hierarchy/compose.py:966:101
+    |
+964 |         rung_deadline = deadline if first else ladder_deadline
+965 |         packing = _pack_at(
+966 |             placements, flows, spec, gap=rung, belt_rules=belt_rules, margin=margin, envelope=envelope
+    |                                                                                                     ^^
+967 |         )
+968 |         bounds = packing.canvas.limit
+    |
+
+E501 Line too long (111 > 100)
+    --> src/flab2bp/layout/hierarchy/compose.py:1230:101
+     |
+1228 |     try:
+1229 |         projection = _CompositionProjection(
+1230 |             canvas.buildings, bounds, policy, belt_rules=canvas.belt_rules, cancelled=partial(_spent, deadline)
+     |                                                                                                     ^^^^^^^^^^^
+1231 |         )
+1232 |         junction_ban, junction_frame_bans = _prepare_coater_junction_geometry(
+     |
+
+E501 Line too long (102 > 100)
+  --> src/flab2bp/layout/route_primitives.py:57:101
+   |
+55 |                 if candidate.entry.dock[2] != level:
+56 |                     continue
+57 |                 candidate = _translated(candidate, -candidate.entry.dock[0], -candidate.entry.dock[1])
+   |                                                                                                     ^^
+58 |                 edge = candidate.entry.dock, candidate.exit.dock
+59 |                 candidates.setdefault(edge, candidate)
+   |
+
+B905 `zip()` without an explicit `strict=` parameter
+  --> src/flab2bp/layout/route_primitives.py:78:25
+   |
+76 |         return tuple(
+77 |             self.witnesses[edge]
+78 |             for edge in zip(path, path[1:])
+   |                         ^^^^^^^^^^^^^^^^^^^
+79 |             if edge in self.witnesses
+80 |         )
+   |
+help: Add explicit value for parameter `strict=`
+
+E501 Line too long (101 > 100)
+   --> src/flab2bp/layout/route_primitives.py:124:101
+    |
+122 |                 for template in _templates(self.rules):
+123 |                     start = x, y, template.entry.dock[2]
+124 |                     end = x + template.exit.dock[0], y + template.exit.dock[1], template.exit.dock[2]
+    |                                                                                                     ^
+125 |                     if not (grid.span[0] <= end[0] <= grid.span[2] and grid.span[1] <= end[1] <= grid.span[3]):
+126 |                         continue
+    |
+
+E501 Line too long (111 > 100)
+   --> src/flab2bp/layout/route_primitives.py:125:101
+    |
+123 |                     start = x, y, template.entry.dock[2]
+124 |                     end = x + template.exit.dock[0], y + template.exit.dock[1], template.exit.dock[2]
+125 |                     if not (grid.span[0] <= end[0] <= grid.span[2] and grid.span[1] <= end[1] <= grid.span[3]):
+    |                                                                                                     ^^^^^^^^^^^
+126 |                         continue
+127 |                     if start in forbidden_cells or end in forbidden_cells:
+    |
+
+E501 Line too long (120 > 100)
+   --> src/flab2bp/layout/route_primitives.py:134:101
+    |
+132 |                     # can use a subset of the same body footprint. This is a
+133 |                     # feasibility dominance reduction, not a new height horizon.
+134 |                     if self.rules.vertical_construction and self._belt_alternative(canvas, start, end, forbidden_cells):
+    |                                                                                                     ^^^^^^^^^^^^^^^^^^^^
+135 |                         continue
+136 |                     edge = start, end
+    |
+
+E501 Line too long (116 > 100)
+   --> src/flab2bp/layout/route_primitives.py:152:101
+    |
+150 |                     ):
+151 |                         continue
+152 |                     if any(_building_collider_hits(canvas.buildings, member) for member in candidate.stack_members):
+    |                                                                                                     ^^^^^^^^^^^^^^^^
+153 |                         continue
+154 |                     projection = canvas.junction_projection
+    |
+
+E501 Line too long (109 > 100)
+   --> src/flab2bp/layout/route_primitives.py:157:101
+    |
+155 |                     if projection is not None:
+156 |                         try:
+157 |                             if not projection.allows_buildings(candidate.stack_members, committed=committed):
+    |                                                                                                     ^^^^^^^^^
+158 |                                 continue
+159 |                         except _PreparationDeadline:
+    |
+
+E501 Line too long (102 > 100)
+   --> src/flab2bp/layout/route_primitives.py:163:101
+    |
+161 |                     self.witnesses.setdefault(edge, candidate)
+162 |                     distance = abs(end[0] - start[0]) + abs(end[1] - start[1])
+163 |                     cost = float(distance + abs(end[2] - start[2]) + 4 * len(candidate.stack_members))
+    |                                                                                                     ^^
+164 |                     rows.setdefault(grid.index(start), []).append((grid.index(end), cost))
+165 |         return {index: tuple(row) for index, row in rows.items()}
+    |
+
+E501 Line too long (103 > 100)
+   --> src/flab2bp/layout/route_primitives.py:182:101
+    |
+181 |     @staticmethod
+182 |     def _belt_alternative(canvas: _Canvas, start: Cell, end: Cell, forbidden: frozenset[Cell]) -> bool:
+    |                                                                                                     ^^^
+183 |         # Ports are at most two cardinal steps apart and one level apart.
+184 |         # Try both corner orders at both heights; no fractional ramp is needed.
+    |
+
+E501 Line too long (101 > 100)
+    --> src/flab2bp/layout/routing_domain.py:5123:101
+     |
+5121 |                 raise ValueError("extra edge landing index is outside the grid")
+5122 |             target_x, target_y = divmod(target // levels, gh)
+5123 |             if not math.isfinite(cost) or cost < abs(target_x - source_x) + abs(target_y - source_y):
+     |                                                                                                     ^
+5124 |                 raise ValueError("extra edge cost must dominate XY Manhattan displacement")
+     |
+
+B905 `zip()` without an explicit `strict=` parameter
+    --> src/flab2bp/layout/routing_domain.py:7082:38
+     |
+7080 |                     return _PathSearchResult(None, RouteFailureKind.BUDGET, (), total_expansions)
+7081 |                 rejected_edges.update(
+7082 |                     edge for edge in zip(found.path, found.path[1:])
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+7083 |                     if edge in primitives.witnesses
+7084 |                 )
+     |
+help: Add explicit value for parameter `strict=`
+
+B905 `zip()` without an explicit `strict=` parameter
+    --> src/flab2bp/layout/routing_domain.py:9509:39
+     |
+9507 |         for index, indices in laid.items():
+9508 |             path = paths[index]
+9509 |             for at, edge in enumerate(zip(path, path[1:])):
+     |                                       ^^^^^^^^^^^^^^^^^^^
+9510 |                 candidate = primitives.witnesses.get(edge)
+9511 |                 if candidate is not None:
+     |
+help: Add explicit value for parameter `strict=`
+
+B008 Do not perform function call `BandPolicy` in argument defaults; instead, perform the call within the function, or read the default from a module-level singleton variable
+     --> src/flab2bp/layout/routing_domain.py:13529:26
+      |
+13527 |     canvas: _Canvas,
+13528 |     *,
+13529 |     policy: BandPolicy = BandPolicy("portable"),
+      |                          ^^^^^^^^^^^^^^^^^^^^^^
+13530 |     cancelled: Callable[[], bool] | None = None,
+13531 | ) -> tuple[list[tuple[int, int]], tuple[tuple[int, int], ...]]:
+      |
+
+E501 Line too long (109 > 100)
+  --> tests/layout/hierarchy/conftest.py:94:101
+   |
+93 | @pytest.fixture(scope="module")
+94 | def two_solved_blocks() -> tuple[Placement, Placement, list[LaneFlow], BuildSpec, catalog.BeltAltitudeRules]:
+   |                                                                                                     ^^^^^^^^^
+95 |     """``chain_spec`` split at its one cut, both halves laid out for real.
+   |
+
+E501 Line too long (125 > 100)
+   --> tests/layout/hierarchy/test_compose.py:175:101
+    |
+173 |     """
+174 |     block = _mixed_block(coater_seats=(3,))
+175 |     canvas = compose.canvas_for(chain_build_spec(), block.buildings, belt_rules=routing_domain._DEFAULT_BELT_RULES, margin=4)
+    |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+176 |
+177 |     # Index order is the composed list's own: every `_Port` indexes into it.
+    |
+
+E501 Line too long (103 > 100)
+   --> tests/layout/hierarchy/test_compose.py:223:101
+    |
+221 |     )
+222 |     spec = chain_build_spec().model_copy(update={"power_tower_item_id": power_id})
+223 |     canvas = compose.canvas_for(spec, [tower], belt_rules=routing_domain._DEFAULT_BELT_RULES, margin=4)
+    |                                                                                                     ^^^
+224 |
+225 |     assert not canvas.free((-reserved_radius, -reserved_radius, 0))
+    |
+
+E501 Line too long (104 > 100)
+   --> tests/layout/hierarchy/test_compose.py:249:101
+    |
+247 |     ).belt_ban
+248 |     banned_both = compose.canvas_for(
+249 |         chain_build_spec(), with_peer.buildings, belt_rules=routing_domain._DEFAULT_BELT_RULES, margin=4
+    |                                                                                                     ^^^^
+250 |     ).belt_ban
+    |
+
+E501 Line too long (105 > 100)
+   --> tests/layout/hierarchy/test_compose.py:301:101
+    |
+299 |         )
+300 |     )
+301 |     canvas = compose.canvas_for(spec, buildings, belt_rules=routing_domain._DEFAULT_BELT_RULES, margin=2)
+    |                                                                                                     ^^^^^
+302 |     source = routing_domain._Port(belt=1, x=5, y=source_y, x0=5, x1=5, tiles=(1,), z=2)
+303 |     destination = routing_domain._Port(belt=3, x=5, y=24, x0=5, x1=5, tiles=(3,), z=2)
+    |
+
+E501 Line too long (111 > 100)
+   --> tests/layout/hierarchy/test_compose.py:320:101
+    |
+318 |     )
+319 |     monkeypatch.setattr(compose, "pack_with_access", lambda *args, **kwargs: packed)
+320 |     result = compose.compose([], [], spec, gap=2, belt_rules=routing_domain._DEFAULT_BELT_RULES, deadline=None)
+    |                                                                                                     ^^^^^^^^^^^
+321 |     splitters = [
+322 |         (index, building)
+    |
+
+E501 Line too long (102 > 100)
+   --> tests/layout/hierarchy/test_compose.py:623:101
+    |
+621 |     left, right, flows, spec, belt_rules = two_solved_blocks
+622 |     packing = compose._pack_at(
+623 |         [left, right], flows, spec, envelope=_PACKING_ENVELOPE, gap=2, belt_rules=belt_rules, margin=8
+    |                                                                                                     ^^
+624 |     )
+625 |     demands = compose._port_access_inventory(packing.nets).demands
+    |
+
+E501 Line too long (102 > 100)
+   --> tests/layout/hierarchy/test_compose.py:685:101
+    |
+683 |     left, right, flows, spec, belt_rules = two_solved_blocks
+684 |     packing = compose._pack_at(
+685 |         [left, right], flows, spec, envelope=_PACKING_ENVELOPE, gap=2, belt_rules=belt_rules, margin=8
+    |                                                                                                     ^^
+686 |     )
+687 |     demands = compose._port_access_inventory(packing.nets).demands
+    |
+
+E501 Line too long (102 > 100)
+    --> tests/layout/hierarchy/test_compose.py:1239:101
+     |
+1237 |     left, right, flows, spec, belt_rules = two_solved_blocks
+1238 |     packing = compose._pack_at(
+1239 |         [left, right], flows, spec, envelope=_PACKING_ENVELOPE, gap=8, belt_rules=belt_rules, margin=8
+     |                                                                                                     ^^
+1240 |     )
+1241 |     canvas = packing.canvas
+     |
+
+E501 Line too long (102 > 100)
+    --> tests/layout/hierarchy/test_compose.py:1295:101
+     |
+1293 |     left, right, flows, spec, belt_rules = two_solved_blocks
+1294 |     packing = compose._pack_at(
+1295 |         [left, right], flows, spec, envelope=_PACKING_ENVELOPE, gap=8, belt_rules=belt_rules, margin=8
+     |                                                                                                     ^^
+1296 |     )
+1297 |     canvas = packing.canvas
+     |
+
+E501 Line too long (101 > 100)
+    --> tests/layout/hierarchy/test_compose.py:1411:101
+     |
+1409 | ):
+1410 |     left, right, flows, spec, belt_rules = two_solved_blocks
+1411 |     result = compose.compose([left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=None)
+     |                                                                                                     ^
+1412 |     assert result.gap in compose.GAP_LADDER
+1413 |     assert result.port_demands > 0
+     |
+
+E501 Line too long (101 > 100)
+    --> tests/layout/hierarchy/test_compose.py:1430:101
+     |
+1428 |     """
+1429 |     left, right, flows, spec, belt_rules = two_solved_blocks
+1430 |     result = compose.compose([left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=None)
+     |                                                                                                     ^
+1431 |     assert result.failures == ()
+1432 |     assert result.routed == len(flows)
+     |
+
+E501 Line too long (101 > 100)
+    --> tests/layout/hierarchy/test_compose.py:1440:101
+     |
+1438 |     # flows from assign_lanes.
+1439 |     left, right, flows, spec, belt_rules = two_solved_blocks
+1440 |     result = compose.compose([left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=None)
+     |                                                                                                     ^
+1441 |     assert result.failures == ()
+1442 |     assert result.routed == len(flows)
+     |
+
+E501 Line too long (101 > 100)
+    --> tests/layout/hierarchy/test_compose.py:1478:101
+     |
+1476 |         b.item_id == catalog.SPLITTER_ID for b in (*left.buildings, *right.buildings)
+1477 |     )
+1478 |     result = compose.compose([left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=None)
+     |                                                                                                     ^
+1479 |
+1480 |     assert result.power_uncovered == 1
+     |
+
+E501 Line too long (101 > 100)
+    --> tests/layout/hierarchy/test_compose.py:1555:101
+     |
+1554 |     monkeypatch.setattr(compose, "_route_all", stranded)
+1555 |     result = compose.compose([left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=None)
+     |                                                                                                     ^
+1556 |
+1557 |     assert len(seen) == len(flows)
+     |
+
+E501 Line too long (101 > 100)
+    --> tests/layout/hierarchy/test_compose.py:1578:101
+     |
+1577 |     monkeypatch.setattr(compose, "_route_all", out_of_budget)
+1578 |     result = compose.compose([left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=None)
+     |                                                                                                     ^
+1579 |
+1580 |     assert result.routed == 0
+     |
+
+E501 Line too long (101 > 100)
+    --> tests/layout/hierarchy/test_compose.py:1649:101
+     |
+1648 |     monkeypatch.setattr(compose, "_reserve_port_access", one_missing)
+1649 |     result = compose.compose([left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=None)
+     |                                                                                                     ^
+1650 |
+1651 |     assert seen, "the composer must call the reservation"
+     |
+
+E501 Line too long (101 > 100)
+    --> tests/layout/hierarchy/test_compose.py:1666:101
+     |
+1664 |     """Every index in a block's own range answers with that block."""
+1665 |     left, right, flows, spec, belt_rules = two_solved_blocks
+1666 |     result = compose.compose([left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=None)
+     |                                                                                                     ^
+1667 |     for block in result.blocks:
+1668 |         stop = block.base + len(block.placement.buildings)
+     |
+
+E501 Line too long (122 > 100)
+    --> tests/layout/test_freeform.py:1837:101
+     |
+1835 | ) -> None:
+1836 |     def elevated_scene(limit: tuple[int, int, int, int]) -> tuple[_Canvas, _Net]:
+1837 |         canvas = _Canvas(belt_rules=replace(routing_domain._DEFAULT_BELT_RULES, vertical_construction=False), limit=limit)
+     |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^^
+1838 |         port_index = canvas.add(
+1839 |             PlacedBuilding(
+     |
+
+E501 Line too long (129 > 100)
+     --> tests/layout/test_freeform.py:12199:101
+      |
+12198 |     def _populated(self) -> _Canvas:
+12199 |         canvas = _Canvas(belt_rules=replace(routing_domain._DEFAULT_BELT_RULES, vertical_construction=False), limit=(0, 0, 9, 9))
+      |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+12200 |         canvas.buildings.append(_linked_belt(0, None))
+12201 |         canvas.blocked[(1, 1, 0)] = 0
+      |
+
+E501 Line too long (135 > 100)
+     --> tests/layout/test_freeform.py:14935:101
+      |
+14933 | …
+14934 | …
+14935 | …omain._DEFAULT_BELT_RULES, vertical_construction=False))  # the slope-limited path
+      |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+14936 | …
+14937 | …
+      |
+
+E501 Line too long (135 > 100)
+     --> tests/layout/test_freeform.py:14987:101
+      |
+14985 | …
+14986 | …
+14987 | …omain._DEFAULT_BELT_RULES, vertical_construction=False))  # the slope-limited path
+      |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+14988 | …
+14989 | …
+      |
+
+F821 Undefined name `banned`
+     --> tests/layout/test_freeform.py:16774:34
+      |
+16772 |         for cell in ((1, 0), (-1, 0), (0, 1)):
+16773 |             canvas.solid.add(cell)
+16774 |             for lvl in range(max(banned, default=0) + 2):
+      |                                  ^^^^^^
+16775 |                 canvas.blocked[cell[0], cell[1], lvl] = 0
+16776 |         canvas.blocked[0, -1, 0] = _TENTATIVE
+      |
+
+F821 Undefined name `banned`
+     --> tests/layout/test_freeform.py:16856:34
+      |
+16854 |         for x in (-1, span):
+16855 |             canvas.solid.add((x, 0))
+16856 |             for lvl in range(max(banned, default=0) + 2):
+      |                                  ^^^^^^
+16857 |                 canvas.blocked[x, 0, lvl] = 0
+16858 |         blame: dict[tuple[int, int, int], float] = {}
+      |
+
+F821 Undefined name `banned`
+     --> tests/layout/test_freeform.py:16919:34
+      |
+16917 |             if y == 1:
+16918 |                 continue
+16919 |             for lvl in range(max(banned, default=0) + 2):
+      |                                  ^^^^^^
+16920 |                 canvas.blocked[6, y, lvl] = 0
+16921 |             canvas.solid.add((6, y))
+      |
+
+F821 Undefined name `banned`
+     --> tests/layout/test_freeform.py:16925:34
+      |
+16923 |             if y == 4:
+16924 |                 continue
+16925 |             for lvl in range(max(banned, default=0) + 2):
+      |                                  ^^^^^^
+16926 |                 canvas.blocked[13, y, lvl] = 0
+16927 |             canvas.solid.add((13, y))
+      |
+
+E501 Line too long (105 > 100)
+     --> tests/layout/test_freeform.py:16946:101
+      |
+16944 |         canvas, bounds = self._maze()
+16945 |         grid = _make_grid(canvas, bounds, _canvas_span(canvas, bounds), {})
+16946 |         cells = [(x, y, lvl) for x in range(-3, 4) for y in range(-3, 4) for lvl in range(canvas.levels)]
+      |                                                                                                     ^^^^^
+16947 |         assert sorted(cells, key=grid.index) == sorted(cells), (
+16948 |             "the flat index no longer orders cells the way (x, y, level) tuples "
+      |
+
+E501 Line too long (109 > 100)
+     --> tests/layout/test_freeform.py:17143:101
+      |
+17141 |     ) -> None:
+17142 |         monkeypatch.setattr(routing_domain, "_altitude_profile", lambda *_args, **_kwargs: None)
+17143 |         canvas = _Canvas(belt_rules=replace(routing_domain._DEFAULT_BELT_RULES, vertical_construction=False))
+      |                                                                                                     ^^^^^^^^^
+17144 |         source = _Port(0, 0, 0, 0, 0)
+17145 |         destination = _Port(0, 2, 0, 2, 2)
+      |
+
+E501 Line too long (143 > 100)
+     --> tests/layout/test_freeform.py:19974:101
+      |
+19972 | …
+19973 | …
+19974 | …, smelter.height, 0.0, F(0), math.floor(routing_domain._DEFAULT_BELT_RULES.max_z) + 1)
+      |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+19975 | …
+19976 | …ets(*key, lambda: False)
+      |
+
+E501 Line too long (111 > 100)
+   --> tests/layout/test_global_router.py:240:101
+    |
+238 |     net_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+239 |     reserved = ((4, 2, 0), (99, 99, 0))
+240 |     blocked = tuple((3, 2, level) for level in range(math.floor(routing_domain._DEFAULT_BELT_RULES.max_z) + 1))
+    |                                                                                                     ^^^^^^^^^^^
+241 |     problem = _problem(
+242 |         ((net_id, (0, 2), (7, 2), (), (), ()),),
+    |
+
+E501 Line too long (101 > 100)
+   --> tests/layout/test_global_router.py:346:101
+    |
+344 |             "iron",
+345 |             routing_domain.CargoDomain.UNSPRAYED,
+346 |             tuple(routing_domain._Port(-1, 10 + 2 * (2 * group + offset), 0) for offset in range(2)),
+    |                                                                                                     ^
+347 |         )
+348 |         for group in range(group_count)
+    |
+
+E501 Line too long (103 > 100)
+   --> tests/layout/test_global_router.py:368:101
+    |
+366 |     # Every route must cross this ground-level opening, including elevated detours.
+367 |     blocked.update(
+368 |         {(7, y, level): -1 for y in range(3) for level in range(canvas.levels) if (y, level) != (1, 0)}
+    |                                                                                                     ^^^
+369 |     )
+370 |     return _PreparedRoutingProblem(
+    |
+
+E501 Line too long (106 > 100)
+   --> tests/layout/test_global_router.py:418:101
+    |
+416 |     first, second = problem.nets
+417 |     domain = (
+418 |         routing_domain.CargoDomain.REQUIRES_SPRAY if separation == "cargo-domain" else second.cargo_domain
+    |                                                                                                     ^^^^^^
+419 |     )
+420 |     item = "copper" if separation == "material" else second.item
+    |
+
+E501 Line too long (111 > 100)
+   --> tests/layout/test_global_router.py:683:101
+    |
+681 | def test_detailed_feedback_history_changes_the_global_route_choice() -> None:
+682 |     net_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+683 |     blocked = tuple((2, 2, level) for level in range(math.floor(routing_domain._DEFAULT_BELT_RULES.max_z) + 1))
+    |                                                                                                     ^^^^^^^^^^^
+684 |     problem = _problem(
+685 |         ((net_id, (0, 2), (4, 2), (), (), ()),),
+    |
+
+E501 Line too long (130 > 100)
+   --> tests/layout/test_global_router.py:794:101
+    |
+792 |         bounds = (0, 0, width - 1, height - 1)
+793 |         blocked = {
+794 |             (rng.randrange(width), rng.randrange(height), rng.randrange(math.floor(routing_domain._DEFAULT_BELT_RULES.max_z) + 1))
+    |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+795 |             for _ in range(rng.randint(0, width * height // 3))
+796 |         }
+    |
+
+E501 Line too long (106 > 100)
+   --> tests/layout/test_global_router.py:817:101
+    |
+815 |         history = (
+816 |             {
+817 |                 (rng.randrange(width), rng.randrange(height), rng.randrange(problem.levels)): rng.random()
+    |                                                                                                     ^^^^^^
+818 |                 for _ in range(rng.randint(0, width * height // 2))
+819 |             }
+    |
+
+B905 `zip()` without an explicit `strict=` parameter
+   --> tests/layout/test_native_routing_transitions.py:298:35
+    |
+296 |                 if source + offset == target
+297 |             ) + history[target]
+298 |             for source, target in zip(path_indices, path_indices[1:])
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+299 |         )
+300 |         assert cost == 29.0
+    |
+help: Add explicit value for parameter `strict=`
+
+E501 Line too long (105 > 100)
+  --> tests/layout/test_route_primitives.py:23:101
+   |
+21 |     grid = routing_domain._make_grid(canvas, bounds, (-3, -3, 3, 3), {})
+22 |     primitives = RoutePrimitives(canvas.belt_rules)
+23 |     edges = primitives.edges(canvas, grid, [start], {goal}, forbidden=(), active_paths={}, deadline=None)
+   |                                                                                                     ^^^^^
+24 |     result = routing_domain._astar(
+25 |         canvas, [start], {goal}, {}, 1.0, bounds, grid=grid, extra_edges=edges,
+   |
+
+E501 Line too long (109 > 100)
+  --> tests/layout/test_route_primitives.py:52:101
+   |
+50 |     primitives = RoutePrimitives(canvas.belt_rules)
+51 |     def available() -> bool:
+52 |         edges = primitives.edges(canvas, grid, [start], {goal}, forbidden=(), active_paths={}, deadline=None)
+   |                                                                                                     ^^^^^^^^^
+53 |         return any(target == grid.index(goal) for target, _cost in edges.get(grid.index(start), ()))
+54 |     assert available()
+   |
+
+E501 Line too long (112 > 100)
+  --> tests/layout/test_route_primitives.py:55:101
+   |
+53 |         return any(target == grid.index(goal) for target, _cost in edges.get(grid.index(start), ()))
+54 |     assert available()
+55 |     body = next(cell for cell in primitives.witnesses[start, goal].foreign_keepout if cell not in (start, goal))
+   |                                                                                                     ^^^^^^^^^^^^
+56 |     owner = (91, 92, 0)
+57 |     canvas.reserved[body] = owner
+   |
+
+E501 Line too long (101 > 100)
+  --> tests/layout/test_route_primitives.py:92:101
+   |
+90 |     assert canvas.free(body)
+91 |     belt_model = catalog.building(2002).model_index
+92 |     source = canvas.add(PlacedBuilding(2002, belt_model, 0, 1, Fraction(0), carries_item="iron-ore"))
+   |                                                                                                     ^
+93 |     target = canvas.add(PlacedBuilding(2002, belt_model, 0, 1, Fraction(1), carries_item="iron-ore"))
+94 |     # Emission runs after _finish has removed temporary search guards.
+   |
+
+E501 Line too long (101 > 100)
+  --> tests/layout/test_route_primitives.py:93:101
+   |
+91 |     belt_model = catalog.building(2002).model_index
+92 |     source = canvas.add(PlacedBuilding(2002, belt_model, 0, 1, Fraction(0), carries_item="iron-ore"))
+93 |     target = canvas.add(PlacedBuilding(2002, belt_model, 0, 1, Fraction(1), carries_item="iron-ore"))
+   |                                                                                                     ^
+94 |     # Emission runs after _finish has removed temporary search guards.
+95 |     primitives.emit(canvas, candidate, source, target, 2002, belt_model, "iron-ore")
+   |
+
+E501 Line too long (105 > 100)
+  --> tests/layout/test_splitter_route_primitives.py:82:101
+   |
+80 |     )[0]
+81 |
+82 |     assert [(member.z, member.input_obj, member.carries_item) for member in candidate.stack_members] == [
+   |                                                                                                     ^^^^^
+83 |         (Fraction(0), None, None),
+84 |         (Fraction(2), 7, None),
+   |
+
+E501 Line too long (106 > 100)
+   --> tests/layout/test_splitter_route_primitives.py:113:101
+    |
+111 |         buildings = (
+112 |             *candidate.stack_members,
+113 |             PlacedBuilding(2002, belt_model, entry_x, entry_y, Fraction(entry_z), output_obj=input_index),
+    |                                                                                                     ^^^^^^
+114 |             PlacedBuilding(
+115 |                 2002, belt_model, 4, 5, Fraction(entry_z),
+    |
+
+Found 65 errors (4 fixed, 61 remaining).
+No fixes available (4 hidden fixes can be enabled with the `--unsafe-fixes` option).

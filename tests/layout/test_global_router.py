@@ -10,7 +10,7 @@ import pytest
 
 from flab2bp import spec
 from flab2bp.lab.techs import belt_rules_for_url
-from flab2bp.layout import validate
+from flab2bp.layout import routing_domain, validate
 from flab2bp.layout.base import PlacedBuilding
 from flab2bp.layout.global_router import (
     GlobalRouteResult,
@@ -19,7 +19,6 @@ from flab2bp.layout.global_router import (
 )
 from flab2bp.layout.route_feedback import Cell, FeedbackState, NetId, NetRole
 from flab2bp.layout.routing_domain import (
-    LEVELS,
     _PreparedNet,
     _PreparedPort,
     _PreparedRoutingProblem,
@@ -238,7 +237,9 @@ def test_global_router_uses_current_detailed_moves_deterministically() -> None:
 def test_prepared_blocked_cells_and_foreign_reserved_ports_remain_impassable() -> None:
     net_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
     reserved = ((4, 2, 0), (99, 99, 0))
-    blocked = tuple((3, 2, level) for level in range(LEVELS))
+    blocked = tuple(
+        (3, 2, level) for level in range(math.floor(routing_domain._DEFAULT_BELT_RULES.max_z) + 1)
+    )
     problem = _problem(
         ((net_id, (0, 2), (7, 2), (), (), ()),),
         bounds=(0, 0, 7, 4),
@@ -334,6 +335,117 @@ def test_same_item_strangers_do_not_share_capacity() -> None:
 
     assert result.total_overflow == len(result.paths[first])
     assert result.overflow_cells == len(result.paths[first])
+
+
+def _shared_external_capacity_problem(*, independent_allocations: bool) -> _PreparedRoutingProblem:
+    """Two taps per allocated physical feed, all crossing one real corridor."""
+    canvas = routing_domain._Canvas()
+    group_count = 2 if independent_allocations else 1
+    groups = tuple(
+        (
+            "iron",
+            routing_domain.CargoDomain.UNSPRAYED,
+            tuple(
+                routing_domain._Port(-1, 10 + 2 * (2 * group + offset), 0) for offset in range(2)
+            ),
+        )
+        for group in range(group_count)
+    )
+    nets, _roots = routing_domain._place_shared_external_input_trunks(
+        canvas, groups, belt_id=2001, belt_model=35, bounds=(0, 0, 20, 2)
+    )
+    prepared = []
+    for ordinal, net in enumerate(nets):
+        sink = canvas.add(PlacedBuilding(2001, 35, net.dst.x, net.dst.y, carries_item=net.item))
+        prepared.append(
+            _PreparedNet(
+                NetId(None, ordinal, net.item, NetRole.INTERNAL, ordinal),
+                routing_domain._prepare_port(net.source),
+                routing_domain._prepare_port(replace(net.dst, belt=sink)),
+                net.item,
+            )
+        )
+    bounds = (0, 0, 20, 2)
+    blocked = dict(canvas.blocked)
+    # Every route must cross this ground-level opening, including elevated detours.
+    blocked.update(
+        {
+            (7, y, level): -1
+            for y in range(3)
+            for level in range(canvas.levels)
+            if (y, level) != (1, 0)
+        }
+    )
+    return _PreparedRoutingProblem(
+        building_templates=tuple(canvas.buildings),
+        blocked=tuple(blocked.items()),
+        solid=frozenset(),
+        reserved=(),
+        port_corridors=(),
+        keep_out=frozenset((x, y) for x in range(21) for y in (0, 2)),
+        guard=frozenset(),
+        nets=_with_sibling_groups(prepared),
+        core=bounds,
+        route_bounds=bounds,
+        limit=bounds,
+        power_sites=(),
+        sorters=0,
+        coaters=0,
+        direct_inserts=0,
+    )
+
+
+def test_declared_trunk_taps_share_one_routing_capacity_unit() -> None:
+    problem = _shared_external_capacity_problem(independent_allocations=False)
+
+    result = route_global_once(problem, _feedback(problem), budget=20_000)
+
+    first, second = (net.net_id for net in problem.nets)
+    assert (7, 1, 0) in set(result.paths[first]) & set(result.paths[second])
+    assert result.total_overflow == 0
+    assert result.overflow_cells == 0
+
+
+def test_independent_same_item_trunks_do_not_share_routing_capacity() -> None:
+    problem = _shared_external_capacity_problem(independent_allocations=True)
+
+    result = route_global_once(problem, _feedback(problem), budget=20_000)
+
+    first_supply = set().union(*(result.paths[net.net_id] for net in problem.nets[:2]))
+    second_supply = set().union(*(result.paths[net.net_id] for net in problem.nets[2:]))
+    contested = first_supply & second_supply
+    assert (7, 1, 0) in contested
+    assert result.total_overflow == len(contested)
+    assert result.overflow_cells == len(contested)
+
+
+@pytest.mark.parametrize("separation", ("cargo-domain", "material"))
+def test_declared_supply_identity_does_not_erase_cargo_separation(separation: str) -> None:
+    problem = _shared_external_capacity_problem(independent_allocations=False)
+    first, second = problem.nets
+    domain = (
+        routing_domain.CargoDomain.REQUIRES_SPRAY
+        if separation == "cargo-domain"
+        else second.cargo_domain
+    )
+    item = "copper" if separation == "material" else second.item
+    assert second.src is not None
+    second = replace(
+        second,
+        net_id=NetId(None, 1, item, NetRole.INTERNAL, 1, cargo_domain=domain),
+        item=item,
+        cargo_domain=domain,
+        src=replace(second.src, cargo_domain=domain),
+        dst=replace(second.dst, cargo_domain=domain),
+    )
+    problem = replace(problem, nets=_with_sibling_groups((first, second)))
+
+    result = route_global_once(problem, _feedback(problem), budget=20_000)
+
+    contested = set(result.paths[first.net_id]) & set(result.paths[second.net_id])
+    assert (7, 1, 0) in contested
+    assert result.total_overflow == len(contested)
+    assert result.overflow_cells == len(contested)
 
 
 def test_preparation_groups_internal_siblings_but_never_external_nets() -> None:
@@ -579,7 +691,9 @@ def test_external_length_order_uses_its_closest_boundary_goal() -> None:
 
 def test_detailed_feedback_history_changes_the_global_route_choice() -> None:
     net_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
-    blocked = tuple((2, 2, level) for level in range(LEVELS))
+    blocked = tuple(
+        (2, 2, level) for level in range(math.floor(routing_domain._DEFAULT_BELT_RULES.max_z) + 1)
+    )
     problem = _problem(
         ((net_id, (0, 2), (4, 2), (), (), ()),),
         bounds=(0, 0, 4, 4),
@@ -690,7 +804,11 @@ def test_compiled_relaxed_search_matches_python(monkeypatch: pytest.MonkeyPatch)
         height = rng.randint(4, 12)
         bounds = (0, 0, width - 1, height - 1)
         blocked = {
-            (rng.randrange(width), rng.randrange(height), rng.randrange(LEVELS))
+            (
+                rng.randrange(width),
+                rng.randrange(height),
+                rng.randrange(math.floor(routing_domain._DEFAULT_BELT_RULES.max_z) + 1),
+            )
             for _ in range(rng.randint(0, width * height // 3))
         }
         a = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
@@ -713,7 +831,11 @@ def test_compiled_relaxed_search_matches_python(monkeypatch: pytest.MonkeyPatch)
         # the search can never enter is history the search never reads.
         history = (
             {
-                (rng.randrange(width), rng.randrange(height), rng.randrange(LEVELS)): rng.random()
+                (
+                    rng.randrange(width),
+                    rng.randrange(height),
+                    rng.randrange(problem.levels),
+                ): rng.random()
                 for _ in range(rng.randint(0, width * height // 2))
             }
             if trial % 2

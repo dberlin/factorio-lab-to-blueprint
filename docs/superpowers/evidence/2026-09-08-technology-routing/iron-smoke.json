@@ -1,0 +1,24 @@
+{
+  "argv": [
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.venv/bin/python",
+    "-m",
+    "flab2bp.cli",
+    "https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11",
+    "--strategy",
+    "freeform",
+    "--budget",
+    "5",
+    "--band",
+    "portable",
+    "--candidate-policy",
+    "all-products",
+    "--workers",
+    "1",
+    "-o",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/iron-smoke.blueprint.txt",
+    "-v"
+  ],
+  "exit": 3,
+  "wall": 7.997236293042079,
+  "bytes": 0
+}

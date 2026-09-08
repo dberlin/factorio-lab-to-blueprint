@@ -6,7 +6,7 @@ evidence that chose between them is
 
 ``placed``
     The default and the production model.  The Spray Coater as a real node: a
-    four-tile belt run with the addon on its third tile, its in-port and
+    five-tile belt run with the addon on its third tile, its in-port and
     out-port off the body, sited by a post-pack free-ground pass beside the
     consumer lane head.  The consumer's lane goes back to an ordinary
     ``WEST_CHANNEL`` lane with no coater on it at all.
@@ -30,11 +30,12 @@ from fractions import Fraction as F
 
 import pytest
 
-from flab2bp.dsp import catalog
+from flab2bp.dsp import catalog, colliders
 from flab2bp.dsp.records import is_belt
 from flab2bp.lab.techs import belt_rules_for_url
-from flab2bp.layout import freeform, routing_domain
+from flab2bp.layout import freeform, routing_domain, validate
 from flab2bp.layout.band_policy import BandPolicy
+from flab2bp.layout.base import Placement
 from flab2bp.layout.coater_mode import CoaterMode, coater_mode
 from flab2bp.layout.freeform import _COATER_WEST_CHANNEL, FreeformLayout, plan_strips
 from flab2bp.layout.routing_domain import WEST_CHANNEL, Strip, _Canvas, _Port
@@ -176,16 +177,20 @@ def test_off_offers_a_seat_whose_body_covers_the_lane_head(
     assert seats[0][0] - half == port.x, "the first seat's body covers the head"
 
 
-def test_a_narrowed_seat_never_covers_its_own_in_port(
+def test_a_narrowed_seat_never_covers_either_routing_port(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _arm(monkeypatch, "placed")
     canvas = _Canvas()
-    port = _lane_port(canvas, 4)
+    assert not routing_domain._coater_seats(
+        canvas, _lane_port(canvas, 4), west_channel=_COATER_WEST_CHANNEL
+    )
+    canvas = _Canvas()
+    port = _lane_port(canvas, 5)
     seats = routing_domain._coater_seats(canvas, port, west_channel=_COATER_WEST_CHANNEL)
     assert [x for x, _ in seats] == [2]
     half = routing_domain._coater_body_half_span(freeform.Facing.EAST.value)
-    assert all(x - half > port.x for x, _ in seats)
+    assert all(port.x < x - half and x + half < port.x1 for x, _ in seats)
 
 
 # --- the strip's channel ---------------------------------------------------
@@ -252,6 +257,105 @@ def test_placed_bans_the_area_one_rival(
     assert 1 not in off.get((55, 20), set()), "the rival ban is a node-arm rule only"
 
 
+def _minimal_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[_Canvas, _Port, _Port, routing_domain.CoaterSupplyPort]:
+    _arm(monkeypatch, "placed")
+    canvas = _Canvas()
+    node_in, node_out = routing_domain._emit_coater_node(
+        canvas,
+        0,
+        0,
+        item="iron-ingot",
+        belt_id=2002,
+        belt_model=36,
+        machines=1,
+        owner_strip=0,
+    )
+    spec = _spec()
+    strip = next(s for s in plan_strips(spec) if "iron-ingot" in s.in_lanes)
+    supply = routing_domain._place_coaters(
+        canvas,
+        spec,
+        [strip],
+        [{"iron-ingot": node_in}],
+        2002,
+        36,
+        policy=BandPolicy("200"),
+    )[0]
+    return canvas, node_in, node_out, supply
+
+
+@pytest.mark.parametrize("yaw,axis", [(0, (0, 1)), (90, (1, 0)), (180, (0, -1)), (270, (-1, 0))])
+def test_router_turns_start_outside_the_whole_coater_body(
+    monkeypatch: pytest.MonkeyPatch, yaw: int, axis: tuple[int, int]
+) -> None:
+    """The game checks neighboring endpoints of every overlapped existing belt.
+
+    Checking only the ridden belt misses a turn on the downstream body tile.
+    BuildTool_BlueprintPaste.cs:145813-145853 rejects that re-paste geometry.
+    """
+    canvas, node_in, node_out, supply = _minimal_node(monkeypatch)
+    coater = canvas.buildings[supply.coater]
+    half = routing_domain._coater_body_half_span(coater.yaw)
+    assert node_in.x < coater.x - half
+    assert node_out.x > coater.x + half
+    candidates = routing_domain._coater_seats(canvas, node_in, west_channel=len(node_in.tiles) - 1)
+    assert all(node_in.x < x - half and x + half < node_out.x for x, _ in candidates)
+    # Real asset boxes, in all four orientations. An arbitrary router turn can
+    # start here only when the port's 0.23-world-unit probe clears the body.
+    pose = colliders.Placed(coater.model_index, 0, 0, 0, yaw)
+    boxes = colliders.target_boxes(pose, *colliders.flat_pose(0, 0, 0, yaw))
+    for port in (node_in, node_out):
+        distance = port.x - coater.x
+        point, _ = colliders.flat_pose(axis[0] * distance, axis[1] * distance, 0, yaw)
+        probe = (point[0], point[1] + 0.2, point[2])
+        assert not any(colliders.sphere_box_overlap(probe, 0.23, box) for box in boxes)
+
+
+def test_proliferator_terminal_enters_the_transverse_addon_area(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shipped AddonPass requires an endpoint's axis dot product > 0.95.
+
+    SlotConfig area 1 faces 90 degrees from the sprayed belt. A longitudinal
+    approach has dot=0 even though its terminal sits at the right area center.
+    """
+    canvas, _node_in, _node_out, supply = _minimal_node(monkeypatch)
+    coater = canvas.buildings[supply.coater]
+    drop = canvas.buildings[supply.supply_belt]
+    approach = canvas.buildings[supply.approach_belt]
+    radial = (drop.x - coater.x, drop.y - coater.y)
+    incoming = (drop.x - approach.x, drop.y - approach.y)
+    assert radial[0] * incoming[0] + radial[1] * incoming[1] == 0
+    assert abs(incoming[0]) + abs(incoming[1]) == 1
+
+
+def test_transverse_emitted_supply_passes_flat_certification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canvas, _node_in, _node_out, _supply = _minimal_node(monkeypatch)
+    buildings = tuple(canvas.buildings)
+    for _ in range(4):
+        report = validate.validate(
+            Placement(buildings), only=["game.addon_supply"], expect_power=False
+        )
+        assert not report.errors, "\n".join(finding.message for finding in report.errors)
+        buildings = tuple(
+            dataclasses.replace(
+                building, x=building.y, y=-building.x, yaw=(building.yaw + 90) % 360
+            )
+            for building in buildings
+        )
+
+
+def test_node_admission_reserves_the_transverse_supply_approach() -> None:
+    canvas = _Canvas()
+    assert routing_domain._coater_node_site_is_clear(canvas, 0, 0)
+    canvas.add(freeform.PlacedBuilding(2002, 36, 1, -1, z=F(1)))
+    assert not routing_domain._coater_node_site_is_clear(canvas, 0, 0)
+
+
 # --- end to end ------------------------------------------------------------
 
 
@@ -272,7 +376,7 @@ def _coater_bodies(placement: object) -> list[tuple[int, list[tuple[int, int, F]
     return out
 
 
-def test_a_node_arm_emits_a_four_tile_run_with_the_addon_on_its_third_tile(
+def test_a_node_arm_keeps_the_ridden_belt_straight_and_supplied(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The node's geometry, pinned where the game reads it.
@@ -317,7 +421,7 @@ def test_a_node_body_tile_is_always_an_occupied_belt_so_no_merge_can_be_offered_
     change a routing decision only for a body cell that is free at the moment
     the ban is written.
 
-    None is.  Every body tile is one of the node's own four belts, committed to
+    None is. Every body tile is one of the node's own belts, committed to
     the canvas during emission and therefore long before the coater is staged.
     The clause was a no-op, and this is the proof standing in its place.
     """
@@ -379,7 +483,7 @@ def test_a_node_arm_leaves_the_consumer_lane_ordinary(
     Which is the structural claim.  Today the addon rides the consumer strip's
     own input lane, so the run it sits on is the run the machines draw from and
     the coater's correctness is an argument about where on that run it sits.
-    On a node the run is four tiles long, feeds one net, and no sorter can
+    On a node the run feeds one net, and no sorter can
     reach it at all -- the consumer's lane is an ordinary lane again.
     """
     placement = _build("placed", monkeypatch)

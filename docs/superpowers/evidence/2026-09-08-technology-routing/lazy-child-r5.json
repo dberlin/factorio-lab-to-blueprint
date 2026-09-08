@@ -1,0 +1,13 @@
+{
+  "input": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/child-profile-2556711-2081646502680029.pickle",
+  "positional_options": "()",
+  "keyword_options": "{'time_budget_s': 11.929780546653395, 'absolute_deadline': 2081658.4323978967}",
+  "arguments_modified": true,
+  "absolute_deadline_rebased": true,
+  "original_remaining_seconds": 11.92971786763519,
+  "replay_keyword_options": "{'time_budget_s': 11.929780546653395, 'absolute_deadline': 2083467.9752777666}",
+  "status": "PLACED",
+  "buildings": 1479,
+  "exit": 0,
+  "wall_s": 8.480272599030286
+}

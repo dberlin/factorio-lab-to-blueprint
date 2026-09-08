@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.venv/bin/python",
+    "-m",
+    "pytest",
+    "--tb=short",
+    "--junitxml=/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/full-tests.xml"
+  ],
+  "exit": 124,
+  "wall": 145.04545432282612
+}

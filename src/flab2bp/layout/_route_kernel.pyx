@@ -1,15 +1,16 @@
 # cython: language_level=3, boundscheck=False, wraparound=False, initializedcheck=False, cdivision=True
-"""Flat-grid A* inner loop.  Byte-identical to ``freeform._astar``'s loop.
+"""Flat-grid A* inner loop for ``routing_domain._astar``'s modeled graph.
 
 The heap orders on ``(f, g, index)`` exactly as ``heapq`` orders the Python
-tuples, costs are accumulated in the same association order, and the
-expansion checkpoint arithmetic is copied rather than simplified, so the
-replay digest in ``scripts/route_bench.py`` is unchanged.
+tuples. Supplied transition costs and the expansion checkpoint arithmetic
+preserve the Python loop's cost association and budget write-back rules.
 """
 
 from array import array
 
-from libc.math cimport INFINITY
+from cpython.pyport cimport PY_SSIZE_T_MAX
+
+from libc.math cimport INFINITY, isfinite
 from libc.stdlib cimport free, malloc
 
 
@@ -17,6 +18,21 @@ cdef struct Entry:
     double f
     double g
     long long index
+
+
+cdef struct Transition:
+    long long target
+    long long via
+    long long dx
+    long long dy
+    long long column
+    double cost
+
+
+cdef struct ExtraEdge:
+    long long target
+    double cost
+    Py_ssize_t next
 
 
 cdef inline bint entry_less(Entry a, Entry b) noexcept nogil:
@@ -174,6 +190,8 @@ def astar_flat(
     long long deadline_every,
     object deadline,
     object expired,
+    tuple transitions,
+    dict extra_edges,
 ):
     """Expand from ``starts`` until a goal, a budget, or an empty heap.
 
@@ -193,16 +211,24 @@ def astar_flat(
     budget, finding a goal and sealing all return ``start_left - expansions``.
     The caller stores it verbatim; getting the +1 wrong changes how many nodes
     every later net in the pass is allowed to spend.
+
+    ``transitions`` has one tuple per source level, containing
+    ``(target offset, via offset, dx, dy, base cost)`` rows. A zero via offset
+    is a direct edge, including same-column vertical moves. The supplied cost
+    already includes any level toll; ``level_toll`` remains an ABI argument.
+    ``extra_edges`` contains caller-admitted physical connectors, keyed by
+    source index with ``(landing index, base cost)`` rows. These are direct
+    predecessor links; the caller retains and emits their physical witnesses.
     """
     cdef Py_ssize_t size = flags.shape[0]
-    cdef long long columns = size // levels
+    cdef long long columns, width
     cdef bint negotiating = hist.shape[0] > 0
     cdef Py_ssize_t goal_count = goal_columns.shape[0] // 2
     cdef bint single = goal_count == 1
     cdef long long only_x = goal_columns[0] if goal_count else 0
     cdef long long only_y = goal_columns[1] if goal_count else 0
-    cdef long long bx0 = goal_box[0], by0 = goal_box[1], bx1 = goal_box[2], by1 = goal_box[3]
-    cdef Py_ssize_t b, k, i, bands = 0
+    cdef long long bx0, by0, bx1, by1
+    cdef Py_ssize_t b, k, i, bands = 0, transition_count = 0
     cdef long long lo, hi, dial, at
     cdef long long* band_index = NULL
     cdef long long* band_lo = NULL
@@ -211,17 +237,70 @@ def astar_flat(
     cdef long long* prev = NULL
     cdef long long* via = NULL
     cdef double* hcache = NULL
+    cdef Transition* movement = NULL
+    cdef Py_ssize_t* movement_start = NULL
+    cdef ExtraEdge* extra = NULL
+    cdef Py_ssize_t* extra_start = NULL
+    cdef Py_ssize_t extra_count = 0
+    cdef ExtraEdge edge
+    cdef object source_index
+    cdef Transition move
+    cdef tuple group, row
+    cdef object source_group, transition_row, coordinate
+    cdef object column_offset, target_level
     cdef _Heap heap
     cdef Entry cur
     cdef long long si, col, expansions = 0, start_left = budget_left
-    cdef long long checkpoint, due, q, lvl, nxt, run, top, step, node, found = -1
-    cdef long long walked, walk_limit
-    cdef double g, cost, step_toll, run_base, far, toll2, h0
+    cdef long long checkpoint, due, q, lvl, nxt, run, node, found = -1
+    cdef long long walked, walk_limit, x, y
+    cdef double g, cost, far, h0
     cdef int kind = 2
-    cdef Py_ssize_t d, r
-    cdef long long one, two, colone, coltwo
-    cdef long long moves[4][4]
-    cdef long long ramp_steps[2]
+
+    if levels <= 0 or gh <= 0 or size == 0:
+        raise ValueError("routing dimensions must be positive")
+    if size % levels != 0:
+        raise ValueError("flags must contain complete level columns")
+    columns = size // levels
+    if columns % gh != 0 or xstep <= 0 or xstep % levels != 0 or xstep // levels != gh:
+        raise ValueError("routing strides do not match the grid dimensions")
+    width = columns // gh
+    if goal_flag.shape[0] != size or (negotiating and hist.shape[0] != size):
+        raise ValueError("routing cell buffers must match flags")
+    if len(goal_box) != 4 or goal_columns.shape[0] % 2 != 0:
+        raise ValueError("goal geometry must contain complete coordinates")
+    bx0, by0, bx1, by1 = goal_box
+    for k in range(goal_count):
+        if not (0 <= goal_columns[2 * k] < width and 0 <= goal_columns[2 * k + 1] < gh):
+            raise ValueError("goal column is outside the grid")
+    for i in range(starts.shape[0]):
+        if starts[i] < 0 or starts[i] >= size:
+            raise ValueError("start index is outside the grid")
+    if deadline_every <= 0:
+        raise ValueError("deadline checkpoint interval must be positive")
+    if band_count < 0:
+        raise ValueError("band_count must be nonnegative")
+    if size > PY_SSIZE_T_MAX // sizeof(long long) or levels >= PY_SSIZE_T_MAX // sizeof(Py_ssize_t):
+        raise MemoryError()
+    if len(transitions) != levels:
+        raise ValueError("transitions must contain one group per source level")
+    for source_group in transitions:
+        if not isinstance(source_group, tuple):
+            raise TypeError("each source level's transitions must be a tuple")
+        group = source_group
+        if len(group) > PY_SSIZE_T_MAX // sizeof(Transition) - transition_count:
+            raise MemoryError()
+        transition_count += len(group)
+    for source_index, source_group in extra_edges.items():
+        if not isinstance(source_index, int):
+            raise TypeError("extra edge source indices must be integers")
+        if not 0 <= source_index < size:
+            raise ValueError("extra edge source index is outside the grid")
+        if not isinstance(source_group, tuple):
+            raise TypeError("each extra edge group must be a tuple")
+        group = source_group
+        if len(group) > PY_SSIZE_T_MAX // sizeof(ExtraEdge) - extra_count:
+            raise MemoryError()
+        extra_count += len(group)
 
     # EXACTLY `band_count` fields, not "at least".  `alt` and `alt_flat` are
     # written together and a buffer of the wrong length in either direction
@@ -229,7 +308,9 @@ def astar_flat(
     # by a shorter `alt`, and every dial this reads after that belongs to the
     # wrong landmark.  `boundscheck=False` would neither catch that nor the
     # too-short case, which reads past the buffer outright.
-    if band_count > 0 and band_count * columns != alt_flat.shape[0]:
+    if band_count > 0 and (
+        alt_flat.shape[0] % columns != 0 or alt_flat.shape[0] // columns != band_count
+    ):
         raise ValueError(
             "alt_flat holds a different number of landmark fields than band_count"
         )
@@ -244,12 +325,53 @@ def astar_flat(
             band_hi = <long long*> malloc(band_count * sizeof(long long))
             if band_index == NULL or band_lo == NULL or band_hi == NULL:
                 raise MemoryError()
+        movement_start = <Py_ssize_t*> malloc((levels + 1) * sizeof(Py_ssize_t))
+        if movement_start == NULL:
+            raise MemoryError()
+        if transition_count:
+            movement = <Transition*> malloc(transition_count * sizeof(Transition))
+            if movement == NULL:
+                raise MemoryError()
+        k = 0
+        for i in range(levels):
+            movement_start[i] = k
+            group = transitions[i]
+            for transition_row in group:
+                if not isinstance(transition_row, tuple) or len(transition_row) != 5:
+                    raise ValueError("each transition must be a five-element tuple")
+                row = transition_row
+                for coordinate in row[:4]:
+                    if not isinstance(coordinate, int):
+                        raise TypeError("transition offsets and displacements must be integers")
+                # Keep the consistency arithmetic in Python integers before
+                # narrowing: malformed offsets must not overflow into a legal
+                # altitude or an unsafe heuristic-cache index.
+                column_offset = row[2] * gh + row[3]
+                target_level = i + row[0] - column_offset * levels
+                if not 0 <= target_level < levels:
+                    raise ValueError("transition target level is outside the grid")
+                move.target = row[0]
+                move.via = row[1]
+                move.dx = row[2]
+                move.dy = row[3]
+                move.column = column_offset
+                move.cost = row[4]
+                if not isfinite(move.cost) or move.cost < 0.0:
+                    raise ValueError("transition costs must be finite and nonnegative")
+                movement[k] = move
+                k += 1
+        movement_start[levels] = k
         best = <double*> malloc(size * sizeof(double))
         prev = <long long*> malloc(size * sizeof(long long))
         via = <long long*> malloc(size * sizeof(long long))
         hcache = <double*> malloc(columns * sizeof(double))
         if best == NULL or prev == NULL or via == NULL or hcache == NULL:
             raise MemoryError()
+        if extra_count:
+            extra = <ExtraEdge*> malloc(extra_count * sizeof(ExtraEdge))
+            extra_start = <Py_ssize_t*> malloc(size * sizeof(Py_ssize_t))
+            if extra == NULL or extra_start == NULL:
+                raise MemoryError()
         # Landmark bands: the goals occupy [lo, hi] on each landmark's dial; a
         # landmark that cannot reach every goal is DROPPED, as in Python.
         for b in range(band_count):
@@ -275,17 +397,33 @@ def astar_flat(
             best[i] = INFINITY
             prev[i] = -1
             via[i] = -1
+            if extra_start != NULL:
+                extra_start[i] = -1
         for i in range(columns):
             hcache[i] = -1.0
-
-        # (one-step cell offset, two-step cell offset, one-step column offset,
-        # two-step column offset) for _STEPS = ((1, 0), (-1, 0), (0, 1), (0, -1)).
-        moves[0][0] = xstep;   moves[0][1] = 2 * xstep;   moves[0][2] = gh;   moves[0][3] = 2 * gh
-        moves[1][0] = -xstep;  moves[1][1] = -2 * xstep;  moves[1][2] = -gh;  moves[1][3] = -2 * gh
-        moves[2][0] = levels;  moves[2][1] = 2 * levels;  moves[2][2] = 1;    moves[2][3] = 2
-        moves[3][0] = -levels; moves[3][1] = -2 * levels; moves[3][2] = -1;   moves[3][3] = -2
-        ramp_steps[0] = 1
-        ramp_steps[1] = -1
+        k = 0
+        for source_index, source_group in extra_edges.items():
+            group = source_group
+            if not group:
+                continue
+            si = source_index
+            extra_start[si] = k
+            for transition_row in group:
+                if not isinstance(transition_row, tuple) or len(transition_row) != 2:
+                    raise ValueError("each extra edge must be a two-element tuple")
+                row = transition_row
+                if not isinstance(row[0], int):
+                    raise TypeError("extra edge landing indices must be integers")
+                if not 0 <= row[0] < size:
+                    raise ValueError("extra edge landing index is outside the grid")
+                edge.target = row[0]
+                edge.cost = row[1]
+                if not isfinite(edge.cost) or edge.cost < 0.0:
+                    raise ValueError("extra edge costs must be finite and nonnegative")
+                edge.next = k + 1
+                extra[k] = edge
+                k += 1
+            extra[k - 1].next = -1
 
         heap = _Heap(1024)
         for i in range(starts.shape[0]):
@@ -335,24 +473,35 @@ def astar_flat(
                 break
             q = cur.index // levels
             lvl = cur.index - q * levels
-            step_toll = 1.0 + level_toll[lvl]
-            run_base = g + 3.0
-            for d in range(4):
-                one = moves[d][0]
-                two = moves[d][1]
-                colone = moves[d][2]
-                coltwo = moves[d][3]
-                nxt = cur.index + one
+            x = q // gh
+            y = q - x * gh
+            for k in range(movement_start[lvl], movement_start[lvl + 1]):
+                move = movement[k]
+                # Check before adding offsets, even for malformed/extreme
+                # table values. Coordinate bounds also prevent row wrapping
+                # when a caller has not padded the outer columns with walls.
+                if move.dx < -x or move.dx >= width - x or move.dy < -y or move.dy >= gh - y:
+                    continue
+                if move.target < -cur.index or move.target >= size - cur.index:
+                    continue
+                nxt = cur.index + move.target
                 if not flags[nxt]:
                     continue
-                cost = g + step_toll
+                run = -1
+                if move.via != 0:
+                    if move.via < -cur.index or move.via >= size - cur.index:
+                        continue
+                    run = cur.index + move.via
+                    if not flags[run]:
+                        continue
+                cost = g + move.cost
                 if negotiating:
                     cost += hist[nxt] * pressure
                 if cost < best[nxt]:
                     best[nxt] = cost
                     prev[nxt] = cur.index
-                    via[nxt] = -1
-                    col = q + colone
+                    via[nxt] = run
+                    col = q + move.column
                     far = hcache[col]
                     if far < 0.0:
                         far = _h(col, gh, single, exact_goals, only_x, only_y, goal_columns,
@@ -360,30 +509,28 @@ def astar_flat(
                                  band_hi, alt_flat, columns)
                         hcache[col] = far
                     heap.push(cost + far, cost, nxt)
-                run = cur.index + two
-                for r in range(2):
-                    step = ramp_steps[r]
-                    if lvl + step < 0 or lvl + step >= levels:
-                        continue
-                    toll2 = level_toll[lvl + step]
-                    top = run + step
-                    if not flags[top]:
-                        continue
-                    cost = run_base + toll2
-                    if negotiating:
-                        cost += hist[top] * pressure
-                    if cost < best[top]:
-                        best[top] = cost
-                        prev[top] = cur.index
-                        via[top] = nxt
-                        col = q + coltwo
-                        far = hcache[col]
-                        if far < 0.0:
-                            far = _h(col, gh, single, exact_goals, only_x, only_y, goal_columns,
-                                     goal_count, bx0, by0, bx1, by1, bands, band_index, band_lo,
-                                     band_hi, alt_flat, columns)
-                            hcache[col] = far
-                        heap.push(cost + far, cost, top)
+            k = extra_start[cur.index] if extra_start != NULL else -1
+            while k != -1:
+                edge = extra[k]
+                k = edge.next
+                nxt = edge.target
+                if not flags[nxt]:
+                    continue
+                cost = g + edge.cost
+                if negotiating:
+                    cost += hist[nxt] * pressure
+                if cost < best[nxt]:
+                    best[nxt] = cost
+                    prev[nxt] = cur.index
+                    via[nxt] = -1
+                    col = nxt // levels
+                    far = hcache[col]
+                    if far < 0.0:
+                        far = _h(col, gh, single, exact_goals, only_x, only_y, goal_columns,
+                                 goal_count, bx0, by0, bx1, by1, bands, band_index, band_lo,
+                                 band_hi, alt_flat, columns)
+                        hcache[col] = far
+                    heap.push(cost + far, cost, nxt)
         else:
             # The heap emptied: sealed.  Same write-back as the Python loop.
             budget_left = start_left - expansions
@@ -425,6 +572,10 @@ def astar_flat(
         free(band_index)
         free(band_lo)
         free(band_hi)
+        free(movement)
+        free(movement_start)
+        free(extra)
+        free(extra_start)
 
 
 cdef inline double _congestion(
@@ -500,14 +651,13 @@ def relaxed_search_flat(
     same points in the loop, so the paths and expansion counts are the caller's
     unchanged.
 
-    PRECONDITIONS the caller must establish, because the loop indexes
-    ``cur + 2 * xstep +- 2 * levels +- 1`` with no bounds check of its own:
+    PRECONDITIONS the caller must establish for the flattened movement graph:
 
     * ``flags`` describes a ``gw x gh x levels`` grid whose passable cells all
       sit at least TWO cells inside the extent in x and y -- the ``_Grid`` pad
       invariant.  Every index the loop touches is either a start or a cell that
-      passed ``flags[...]``, so that margin is what keeps the neighbour
-      arithmetic inside every buffer.
+      passed ``flags[...]``, so that margin prevents neighbour arithmetic from
+      wrapping across x/y rows. Target and via buffer bounds are checked below.
     * every start index is passable and inside that margin.
     * ``transitions_via`` names a cell one step from the source at the source's
       own level, and a ramp's target level is already inside ``[0, levels)``.
@@ -530,18 +680,18 @@ def relaxed_search_flat(
     cdef long long* predecessor = NULL
     cdef long long* via = NULL
     cdef unsigned char* is_goal = NULL
-    cdef long long level_start[16]
-    cdef long long level_count[16]
+    cdef Py_ssize_t* level_start = NULL
+    cdef Py_ssize_t* level_count = NULL
     cdef Py_ssize_t i, pos = 0
     cdef long long lv, s, level, t, at, target, run, node, found = -1, expansions = 0
-    cdef long long walked, walk_limit
+    cdef long long walked, walk_limit, count, offset
     cdef double cost0, cost, next_cost
     cdef bint exhausted = False, was_cancelled = False
     cdef _Heap heap
     cdef Entry cur
 
-    if levels < 1 or levels > 16:
-        raise ValueError("relaxed_search_flat supports 1 to 16 levels")
+    if levels < 1:
+        raise ValueError("relaxed_search_flat needs a positive number of levels")
     if gh < 1 or size < 1 or size % levels != 0 or (size // levels) % gh != 0:
         raise ValueError("flags does not describe a gw x gh x levels grid")
     if present.shape[0] != size:
@@ -552,16 +702,14 @@ def relaxed_search_flat(
         raise ValueError("the three transition buffers hold different numbers of entries")
     if goals.shape[0] < 1:
         raise ValueError("relaxed_search_flat needs at least one goal")
-    if goal_xy.shape[0] != 2 * goals.shape[0]:
+    if goal_xy.shape[0] % 2 != 0 or goal_xy.shape[0] // 2 != goals.shape[0]:
         raise ValueError("goal_xy does not hold one (x, y) pair per goal")
-    for lv in range(levels):
-        if pos >= table:
-            raise ValueError("the transition table does not cover every level")
-        level_count[lv] = transitions_target[pos]
-        level_start[lv] = pos + 1
-        if level_count[lv] < 0 or pos + 1 + level_count[lv] > table:
-            raise ValueError("a transition level runs past the end of the table")
-        pos += 1 + level_count[lv]
+    if (
+        size > PY_SSIZE_T_MAX // sizeof(double)
+        or size > PY_SSIZE_T_MAX // sizeof(long long)
+        or levels > PY_SSIZE_T_MAX // sizeof(Py_ssize_t)
+    ):
+        raise MemoryError()
     for i in range(goals.shape[0]):
         if goals[i] < 0 or goals[i] >= size:
             raise ValueError("a goal index lies outside the grid")
@@ -572,8 +720,25 @@ def relaxed_search_flat(
     # The `try` opens on the FIRST allocation so a MemoryError on any later one
     # still frees what came before it.  Every pointer is NULL-initialised above
     # and `free(NULL)` is a no-op, so the `finally` can free unconditionally.
-    best = <double*> malloc(size * sizeof(double))
+    level_start = <Py_ssize_t*> malloc(levels * sizeof(Py_ssize_t))
     try:
+        level_count = <Py_ssize_t*> malloc(levels * sizeof(Py_ssize_t))
+        if level_start == NULL or level_count == NULL:
+            raise MemoryError()
+        for lv in range(levels):
+            if pos >= table:
+                raise ValueError("the transition table does not cover every level")
+            count = transitions_target[pos]
+            # Subtract from the bounded table length before comparing so an
+            # arbitrary signed count cannot overflow the end-position check.
+            if count < 0 or count > table - pos - 1:
+                raise ValueError("a transition level runs past the end of the table")
+            level_start[lv] = pos + 1
+            level_count[lv] = count
+            pos += 1 + count
+        if pos != table:
+            raise ValueError("the transition table contains entries after the last level")
+        best = <double*> malloc(size * sizeof(double))
         predecessor = <long long*> malloc(size * sizeof(long long))
         via = <long long*> malloc(size * sizeof(long long))
         is_goal = <unsigned char*> malloc(size)
@@ -614,12 +779,18 @@ def relaxed_search_flat(
             level = cur.index % levels
             for t in range(level_count[level]):
                 at = level_start[level] + t
-                target = cur.index + transitions_target[at]
+                offset = transitions_target[at]
+                if offset < -cur.index or offset >= size - cur.index:
+                    continue
+                target = cur.index + offset
                 if not flags[target]:
                     continue
                 run = -1
-                if transitions_via[at] != 0:
-                    run = cur.index + transitions_via[at]
+                offset = transitions_via[at]
+                if offset != 0:
+                    if offset < -cur.index or offset >= size - cur.index:
+                        continue
+                    run = cur.index + offset
                     if not flags[run]:
                         continue
                 next_cost = (
@@ -670,3 +841,5 @@ def relaxed_search_flat(
         free(predecessor)
         free(via)
         free(is_goal)
+        free(level_start)
+        free(level_count)

@@ -1,0 +1,17 @@
+................................................F
+=================================== FAILURES ===================================
+_________ test_the_pair_builds_and_pastes_clean[all-products-freeform] _________
+tests/bench/test_broke6_url.py:43: in test_the_pair_builds_and_pastes_clean
+    build = pipeline.build(
+src/flab2bp/pipeline.py:1406: in build
+    raise NoValidLayout(
+E   flab2bp.layout.base.NoValidLayout: no valid layout for all-products after 15s: freeform/all-products: the 15s deadline passed with no completed packing of 7 strips; 1 pack exhausted the deadline during exact preparation, before a net set existed to route. This is a REFUSAL and not a verdict on the spec. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.
+
+During handling of the above exception, another exception occurred:
+tests/bench/test_broke6_url.py:47: in test_the_pair_builds_and_pastes_clean
+    pytest.fail(f"{strategy}/{policy.value} refused: {exc}")
+E   Failed: freeform/all-products refused: no valid layout for all-products after 15s: freeform/all-products: the 15s deadline passed with no completed packing of 7 strips; 1 pack exhausted the deadline during exact preparation, before a net set existed to route. This is a REFUSAL and not a verdict on the spec. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.
+=========================== short test summary info ============================
+FAILED tests/bench/test_broke6_url.py::test_the_pair_builds_and_pastes_clean[all-products-freeform]
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 48 passed in 44.13s

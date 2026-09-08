@@ -1,0 +1,13 @@
+........................................................................ [ 93%]
+....F                                                                    [100%]
+=================================== FAILURES ===================================
+_____ test_boundary_dock_power_does_not_admit_an_uncovered_splitter_stack ______
+tests/layout/test_route_primitives.py:169: in test_boundary_dock_power_does_not_admit_an_uncovered_splitter_stack
+    assert not report.errors, "\n".join(finding.message for finding in report.errors)
+E   AssertionError: building 2 has tile (0,0) outside every tower's supply radius; it would sit unpowered
+E     building 3 has tile (0,0) outside every tower's supply radius; it would sit unpowered
+E   assert not (Finding(check='power.coverage', severity=<Severity.ERROR: 'error'>, message="building 2 has tile (0,0) outside every ...) outside every tower's supply radius; it would sit unpowered", buildings=(3,), detail={'tile': '(0,0)', 'towers': 0}))
+E    +  where (Finding(check='power.coverage', severity=<Severity.ERROR: 'error'>, message="building 2 has tile (0,0) outside every ...) outside every tower's supply radius; it would sit unpowered", buildings=(3,), detail={'tile': '(0,0)', 'towers': 0})) = Report(findings=(Finding(check='power.coverage', severity=<Severity.ERROR: 'error'>, message="building 2 has tile (0,0...ld sit unpowered", buildings=(3,), detail={'tile': '(0,0)', 'towers': 0})), checks_run=('power.coverage',), skipped=()).errors
+=========================== short test summary info ============================
+FAILED tests/layout/test_route_primitives.py::test_boundary_dock_power_does_not_admit_an_uncovered_splitter_stack
+1 failed, 76 passed in 0.70s

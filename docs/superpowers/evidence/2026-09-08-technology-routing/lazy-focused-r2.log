@@ -1,0 +1,12 @@
+........................................................................ [ 38%]
+............F........................................................... [ 76%]
+............................................                             [100%]
+=================================== FAILURES ===================================
+_____ test_source_junction_stack_respects_live_port_reservation_ownership ______
+tests/layout/hierarchy/test_compose.py:1832: in test_source_junction_stack_respects_live_port_reservation_ownership
+    routing_domain._restore_port_corridor(canvas, owner, corridor)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'flab2bp.layout.routing_domain' has no attribute '_restore_port_corridor'
+=========================== short test summary info ============================
+FAILED tests/layout/hierarchy/test_compose.py::test_source_junction_stack_respects_live_port_reservation_ownership
+1 failed, 187 passed in 31.60s

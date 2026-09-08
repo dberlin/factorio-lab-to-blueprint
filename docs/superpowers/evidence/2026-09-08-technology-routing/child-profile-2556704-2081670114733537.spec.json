@@ -1,0 +1,64 @@
+{
+  "groups": [
+    {
+      "recipe_id": "casimir-crystal-advanced",
+      "machine_item_id": "assembling-machine-2",
+      "count": 5,
+      "proliferator_mode": "products",
+      "inputs_per_machine": {
+        "graphene": "64/135",
+        "hydrogen": "128/45",
+        "optical-grating-crystal": "256/135"
+      },
+      "outputs_per_machine": {
+        "casimir-crystal": "8/27"
+      }
+    }
+  ],
+  "external_inputs": {
+    "graphene": "64/27",
+    "hydrogen": "128/9",
+    "optical-grating-crystal": "256/27",
+    "proliferator-3": "1339/13050"
+  },
+  "outputs": {
+    "casimir-crystal": "40/27"
+  },
+  "surplus_outputs": {},
+  "belt_item_id": "conveyor-belt-3",
+  "belt_items_per_second": "30",
+  "belt_upgrades": [],
+  "sorter_item_ids": [
+    "sorter-1",
+    "sorter-2",
+    "sorter-3",
+    "sorter-4"
+  ],
+  "machine_rank": "exact",
+  "machine_moves": [],
+  "power_tower_item_id": "tesla-tower",
+  "belt_stack": 1,
+  "sorter_pick_stacks": [
+    1,
+    1,
+    1,
+    4
+  ],
+  "sorter_place_stacks": [
+    1,
+    1,
+    1,
+    4
+  ],
+  "piler_unlocked": true,
+  "label": "all-products#block6",
+  "belt_required_edges": [],
+  "spray_lanes": {
+    "graphene": true,
+    "hydrogen": true,
+    "optical-grating-crystal": true
+  },
+  "lanes_requiring_split": [],
+  "coproduct_buffer_proofs": [],
+  "self_loop_seeds": []
+}

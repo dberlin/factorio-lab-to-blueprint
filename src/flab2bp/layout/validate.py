@@ -2225,8 +2225,8 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
     So a Spray Coater carries no connection of its own -- all eight in the
     fixture corpus have ``input_obj`` and ``output_obj`` unset -- and is
     supplied entirely by where the belts are.  Area 0 is the cargo belt it
-    rides; area 1 is the proliferator, at ``(0, -1.25, 1)``: a tile and a
-    quarter behind and one altitude LEVEL up.
+    rides; area 1 is the proliferator, 1.25 world units behind and one
+    altitude LEVEL up. Its horizontal offset is not a grid-tile distance.
 
     This is the check that replaced a sorter both strategies used to run into a
     coater.  That sorter could never have worked, and nothing here could see it:

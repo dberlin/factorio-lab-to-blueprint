@@ -1,0 +1,53 @@
+Tue Sep  8 18:39:28 2026    /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/child-profile-2556704-2081670114733537.pstats
+Tue Sep  8 18:39:33 2026    /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/child-profile-2556711-2081670115390274.pstats
+Tue Sep  8 18:39:10 2026    /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/child-profile-2556710-2081646526657974.pstats
+Tue Sep  8 18:39:10 2026    /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/child-profile-2556711-2081646502680029.pstats
+Tue Sep  8 18:39:10 2026    /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/child-profile-2556707-2081646453917568.pstats
+Tue Sep  8 18:39:28 2026    /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/child-profile-2556709-2081670114615727.pstats
+Tue Sep  8 18:39:33 2026    /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/child-profile-2556707-2081670115524045.pstats
+Tue Sep  8 18:39:28 2026    /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/child-profile-2556708-2081670115376230.pstats
+Tue Sep  8 18:39:10 2026    /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/child-profile-2556709-2081646218203279.pstats
+Tue Sep  8 18:39:33 2026    /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/child-profile-2556710-2081670114663923.pstats
+Tue Sep  8 18:39:22 2026    /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/child-profile-2556708-2081658616638454.pstats
+Tue Sep  8 18:39:07 2026    /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/child-profile-2556704-2081646502717258.pstats
+
+         176759336 function calls (175759979 primitive calls) in 114.260 seconds
+
+   Ordered by: cumulative time
+   List reduced from 1772 to 32 due to restriction <32>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       12    0.003    0.000  119.662    9.972 freeform.py:4499(lay_out)
+       12    0.007    0.001  118.100    9.842 freeform.py:4930(_sweep)
+       12    0.291    0.024  117.432    9.786 freeform.py:3655(_build)
+       12    0.016    0.001  112.335    9.361 routing_domain.py:14263(_prepare_routing_problem)
+       12    0.136    0.011   92.845    7.737 routing_domain.py:12179(_prepare_coater_junction_geometry)
+       12   35.303    2.942   91.415    7.618 routing_domain.py:11860(_projected_coater_junction_bans_by_frame)
+ 69725396   19.357    0.000   21.343    0.000 {method 'get' of 'dict' objects}
+  2289804    2.334    0.000   16.188    0.000 dataclasses.py:1763(replace)
+  2289804    7.545    0.000   12.519    0.000 dataclasses.py:1782(_replace)
+   554292    0.770    0.000   10.916    0.000 planet.py:639(pose)
+  1802908    0.774    0.000   10.218    0.000 routing_domain.py:12068(<genexpr>)
+  1584485    1.124    0.000    9.444    0.000 routing_domain.py:1910(_relative_rigid_frame_pose)
+       12    0.201    0.017    7.425    0.619 routing_domain.py:2283(_prepared_junction_ban)
+       41    0.095    0.002    7.127    0.174 routing_domain.py:2208(_cancellable_junction_ban_offsets)
+   555220    1.596    0.000    6.203    0.000 planet.py:477(spherical_rotation)
+    35567    0.308    0.000    6.188    0.000 routing_domain.py:1938(_building_collider_hits)
+    29175    2.739    0.000    5.459    0.000 colliders.py:1065(collisions)
+       12    0.241    0.020    5.051    0.421 routing_domain.py:12791(_power_plan)
+        5    0.001    0.000    4.806    0.961 freeform.py:3729(_build_prepared)
+        5    0.002    0.000    4.748    0.950 routing_domain.py:6104(_route_all)
+   682782    1.590    0.000    4.657    0.000 planet.py:626(direction)
+       21    0.001    0.000    4.628    0.220 routing_domain.py:7021(_search)
+       21    0.390    0.019    4.621    0.220 route_primitives.py:86(edges)
+       12    0.014    0.001    4.592    0.383 routing_domain.py:15947(_place_coaters)
+    19283    0.334    0.000    4.312    0.000 junction.py:247(make_splitter_stack)
+    19070    0.022    0.000    4.308    0.000 routing_domain.py:2096(_splitter_stack_geometry)
+   580401    2.076    0.000    4.147    0.000 colliders.py:1052(target_boxes)
+  7257917    2.198    0.000    3.271    0.000 freeform.py:3669(<lambda>)
+       47    0.987    0.021    3.245    0.069 routing_domain.py:11405(_junction_projection_frames)
+   555220    1.519    0.000    2.775    0.000 planet.py:450(_look_rotation)
+  1485393    1.292    0.000    2.562    0.000 routing_domain.py:2697(free)
+      105    0.003    0.000    2.493    0.024 routing_domain.py:11379(_cached_junction_projection_frames)
+
+

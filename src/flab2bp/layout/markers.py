@@ -52,40 +52,36 @@ def input_belt_heads(placement: Placement) -> list[int]:
 
 
 def output_belt_tails(placement: Placement) -> list[int]:
-    """Terminal belts of lanes fed directly by a producer sorter.
+    """Exposed producer-fed terminals across Splitter and Piler transport.
 
-    A target item can also feed internal consumers. Those branch lanes carry the
-    same item, so ``carries_item`` alone cannot distinguish them from the output
-    port. The producer-fed trunk is the boundary lane; consumer branches begin
-    at splitters and have no producer sorter of their own.
+    A surplus can leave the producer's trunk through a Splitter. Follow the
+    directed belt run, then exclude consumer-drawn terminals and host-port
+    tiles rather than treating every branch as an internal consumer lane.
     """
     buildings = placement.buildings
     building_index = Buildings.of(placement)
-    starts = {
-        b.output_obj
-        for b in buildings
-        if catalog.is_sorter(b.item_id)
-        and b.output_obj is not None
-        and 0 <= b.output_obj < len(buildings)
-        and catalog.is_belt(buildings[b.output_obj].item_id)
-    }
-    tails: set[int] = set()
-    for start in starts:
-        pending = [start]
-        seen: set[int] = set()
-        while pending:
-            cursor = pending.pop()
-            if cursor in seen:
-                continue
-            seen.add(cursor)
-            building = buildings[cursor]
-            if building.item_id == catalog.SPLITTER_ID or _links_splitter(buildings, building):
-                continue
-            if catalog.is_belt(building.item_id) and building.output_obj is None:
-                tails.add(cursor)
-                continue
-            pending.extend(building_index.transport_successors(cursor))
-    return sorted(tails)
+    reached: set[int] = set()
+    sorter_drawn: set[int] = set()
+    for i in building_index.sorters():
+        sorter = buildings[i]
+        if sorter.input_obj is not None:
+            sorter_drawn.add(sorter.input_obj)
+        start = sorter.output_obj
+        if (
+            start is None
+            or start in reached
+            or building_index.by_index(start) is None
+            or not catalog.is_belt(buildings[start].item_id)
+        ):
+            continue
+        reached.update(building_index.belt_run(start, forward=True))
+    return sorted(
+        i
+        for i in reached
+        if buildings[i].output_obj is None
+        and i not in sorter_drawn
+        and not _links_splitter(buildings, buildings[i])
+    )
 
 
 def self_loop_prime_heads(placement: Placement, spec: BuildSpec) -> dict[str, int]:

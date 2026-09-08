@@ -134,15 +134,10 @@ def boundary_lanes(
 ) -> tuple[list[LaneEnd], list[LaneEnd]]:
     """(output tails, entry heads) of one solved block, rated.
 
-    Lifts the endpoint catalogue from
-    ``docs/superpowers/evidence/2026-09-06-exp-hierarchical/proto/compose.py``
-    (lines 315-348): ``markers.output_belt_tails``/``input_belt_heads`` answer
-    "where could an icon go", a superset of "where does the block's boundary
-    lane start/end" -- an INTERNAL lane (a machine's sorter onto a belt, along,
-    off into another machine's sorter) has a head with no belt predecessor and
-    a tail with no belt successor, so both marker functions return it. A
-    boundary output tail is one no sorter draws from; a boundary entry head is
-    one no sorter feeds.
+    ``markers.output_belt_tails`` owns exposed producer-fed output terminals,
+    including surplus branches beyond Splitters and excluding consumer-drawn
+    tails. Input marker heads can still be fed by a producer sorter, so exclude
+    those internal lanes here before rating the remaining boundary entries.
 
     A HEAD IS RATED AT THE BLOCK'S WHOLE DEFICIT, WHICH OVERSTATES WHAT THE CUTS
     OWE IT.  ``sub.external_inputs[item]`` is everything the block is short of,
@@ -168,16 +163,11 @@ def boundary_lanes(
         for i in building_index.sorters()
         if buildings[i].output_obj is not None
     }
-    sorter_drawn = {
-        buildings[i].input_obj
-        for i in building_index.sorters()
-        if buildings[i].input_obj is not None
-    }
 
     tail_indices: dict[str, list[int]] = defaultdict(list)
     for i in markers.output_belt_tails(placement):
         item = buildings[i].carries_item
-        if item is not None and i not in sorter_drawn:
+        if item is not None:
             tail_indices[item].append(i)
 
     head_indices: dict[str, list[int]] = defaultdict(list)

@@ -600,10 +600,6 @@ class HierarchicalLayout:
         block_strategy: BlockStrategyName = "best",
     ) -> None:
         self.band_policy = band_policy
-        #: Whether ramps are REQUIRED; the composer's router takes this as
-        #: ``ramped``.  Same conditional slope rule, and the same default, as
-        #: ``FreeformLayout``.
-        self.ramped = not belt_rules.vertical_construction
         self.belt_rules = belt_rules
         self.workers = workers
         self.strip_cap = strip_cap
@@ -826,7 +822,7 @@ class HierarchicalLayout:
                 allocation.flows,
                 spec,
                 gap=DEFAULT_GAP,
-                ramped=self.ramped,
+                belt_rules=self.belt_rules,
                 policy=self.band_policy,
                 # The PARENT's wall, not the reserve. The reserve is what the
                 # block rounds were made to leave behind for the router; it is

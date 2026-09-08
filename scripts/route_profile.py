@@ -197,6 +197,8 @@ def install(tally: Tally) -> Callable[[], None]:
         released_starts: Collection[Cell] = (),
         forbidden: Collection[Cell] = (),
         blocking_owners: Mapping[Cell, int] | None = None,
+        *,
+        extra_edges: dict[int, tuple[tuple[int, float], ...]] | None = None,
     ) -> routing_domain._PathSearchResult:
         t0 = time.perf_counter()
         out = orig_astar(
@@ -214,6 +216,7 @@ def install(tally: Tally) -> Callable[[], None]:
             released_starts,
             forbidden,
             blocking_owners,
+            extra_edges=extra_edges,
         )
         dt = time.perf_counter() - t0
         tally.add("astar", dt)
@@ -483,7 +486,7 @@ def heights(
         power: bool,
         route: bool,
         policy: BandPolicy,
-        ramped: bool = False,
+        belt_rules: catalog.BeltAltitudeRules = routing_domain._DEFAULT_BELT_RULES,
         deadline: float | None = None,
         budget: dict[str, int] | None = None,
         staged_static_cache: routing_domain._StagedStaticCache | None = None,
@@ -504,7 +507,7 @@ def heights(
                 power=power,
                 route=route,
                 policy=policy,
-                ramped=ramped,
+                belt_rules=belt_rules,
                 deadline=deadline,
                 budget=budget,
                 staged_static_cache=staged_static_cache,

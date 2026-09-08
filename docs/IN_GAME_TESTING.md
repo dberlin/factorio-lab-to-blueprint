@@ -1,9 +1,9 @@
 # In-game testing
 
-Everything else in this project is our validator agreeing with itself. The only
-check that is not circular is pasting a blueprint into Dyson Sphere Program, and
-that costs a human a context switch -- so each paste should be a repeatable
-experiment rather than a fresh unknown.
+Our validators are not independent proof that a blueprint pastes. Executing a
+shipped game method can independently check that method's predicate, but only a
+real paste exercises the complete game, physics and planet state. Each paste
+should therefore be a repeatable experiment rather than a fresh unknown.
 
 ## The fixed test location
 
@@ -40,6 +40,27 @@ verification loop onto the build machine: nothing here runs the game, so a paste
 cannot be reproduced locally. Whether the seed finder exposes enough terrain
 detail to predict `NeedGround` offline is **unverified** -- it would need actual
 per-point heights, not just planet type and vein layout. Do not assume it does.
+
+## Managed-method checks are partial evidence
+
+When the installed game exposes a callable managed predicate, execute that
+method against the reported blueprint's actual objects and connections. Record
+the game assembly, predicate, blueprint checksum, placement frame and rotations.
+Keep a failing original control alongside the repaired case; a transcribed
+predicate or our validator is not execution of the shipped method.
+
+For Spray Coaters, `BuildTool_BlueprintPaste.AddonPass` can discriminate the
+raised supply's approach direction. Check both the supply and item-output
+neighborhoods, including each belt's real predecessor and successor. The
+prefab's horizontal addon offsets are **world units**, not grid tiles: projected
+checks rotate that world offset at the coater's world pose; flat-grid checks
+convert it by `GRID_ARC`. A straight item-output run must extend beyond the
+coater's body before turning, and the raised supply approaches transversely.
+
+An `AddonPass` result does **not** execute native Unity Physics, the complete
+`CheckBuildConditions` path, terrain checks or the live cursor. Report those
+boundaries explicitly. Analytical collider checks and source-derived
+existing-belt clauses are separate evidence, not a full-paste certification.
 
 ## Protocol
 

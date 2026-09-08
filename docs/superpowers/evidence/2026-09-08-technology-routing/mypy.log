@@ -1,0 +1,3 @@
+src/flab2bp/layout/routing_domain.py:2356: error: Argument 1 to "get" of "dict" has incompatible type "tuple[int, int, int, int, float, Fraction, int]"; expected "tuple[int, int, int, int, float, Fraction]"  [arg-type]
+src/flab2bp/layout/routing_domain.py:2365: error: Invalid index type "tuple[int, int, int, int, float, Fraction, int]" for "dict[tuple[int, int, int, int, float, Fraction], frozenset[tuple[int, int, int]]]"; expected type "tuple[int, int, int, int, float, Fraction]"  [index]
+Found 2 errors in 1 file (checked 8 source files)

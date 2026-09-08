@@ -12,6 +12,7 @@ from fractions import Fraction
 
 import pytest
 
+from flab2bp.dsp import catalog
 from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import Placement
@@ -90,7 +91,9 @@ def chain_spec() -> BuildSpec:
 
 
 @pytest.fixture(scope="module")
-def two_solved_blocks() -> tuple[Placement, Placement, list[LaneFlow], BuildSpec, bool]:
+def two_solved_blocks() -> tuple[
+    Placement, Placement, list[LaneFlow], BuildSpec, catalog.BeltAltitudeRules
+]:
     """``chain_spec`` split at its one cut, both halves laid out for real.
 
     Module-scoped because the two solves are the expensive part and neither
@@ -118,5 +121,4 @@ def two_solved_blocks() -> tuple[Placement, Placement, list[LaneFlow], BuildSpec
     flows = assign_lanes(partition.cuts, tails, heads)
     assert flows, "the chain's one cut must produce at least one lane flow"
     left, right = placements
-    # The fully researched policy permits vertical links without the ramp limit.
-    return left, right, flows, spec, False
+    return left, right, flows, spec, _BELT_RULES

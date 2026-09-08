@@ -1,0 +1,7 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+   Building flab2bp @ file:///home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing
+      Built flab2bp @ file:///home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing
+Prepared 1 package in 29.53s
+Uninstalled 1 package in 8ms
+Installed 1 package in 626ms
+ ~ flab2bp==0.1.0 (from file:///home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing)

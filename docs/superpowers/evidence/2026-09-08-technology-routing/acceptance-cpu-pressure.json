@@ -1,0 +1,12 @@
+{
+  "tool": "vmstat 1 6",
+  "last_five_runnable": [
+    16,
+    16,
+    3,
+    17,
+    2
+  ],
+  "mean_runnable": 10.8,
+  "load_average_used": false
+}

@@ -1,0 +1,60 @@
+{
+  "groups": [
+    {
+      "recipe_id": "graphene-advanced",
+      "machine_item_id": "chemical-plant",
+      "count": 4,
+      "proliferator_mode": "products",
+      "inputs_per_machine": {
+        "fire-ice": "64/75"
+      },
+      "outputs_per_machine": {
+        "graphene": "16/15",
+        "hydrogen": "8/15"
+      }
+    }
+  ],
+  "external_inputs": {
+    "fire-ice": "256/75",
+    "proliferator-3": "2678/32625"
+  },
+  "outputs": {
+    "graphene": "64/15",
+    "hydrogen": "32/15"
+  },
+  "surplus_outputs": {},
+  "belt_item_id": "conveyor-belt-3",
+  "belt_items_per_second": "30",
+  "belt_upgrades": [],
+  "sorter_item_ids": [
+    "sorter-1",
+    "sorter-2",
+    "sorter-3",
+    "sorter-4"
+  ],
+  "machine_rank": "exact",
+  "machine_moves": [],
+  "power_tower_item_id": "tesla-tower",
+  "belt_stack": 1,
+  "sorter_pick_stacks": [
+    1,
+    1,
+    1,
+    4
+  ],
+  "sorter_place_stacks": [
+    1,
+    1,
+    1,
+    4
+  ],
+  "piler_unlocked": true,
+  "label": "all-products#block5",
+  "belt_required_edges": [],
+  "spray_lanes": {
+    "fire-ice": true
+  },
+  "lanes_requiring_split": [],
+  "coproduct_buffer_proofs": [],
+  "self_loop_seeds": []
+}

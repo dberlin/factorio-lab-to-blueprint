@@ -129,10 +129,10 @@ def _boundary_spec() -> BuildSpec:
 
 
 def _boundary_placement() -> Placement:
-    """A hand-made block: two output tails, one entry head, and one INTERNAL
-    lane -- fed by a producer sorter and drawn by a consumer sorter, so it
-    would satisfy ``markers.output_belt_tails``/``input_belt_heads`` on its
-    own but must be excluded from both by the sorter-fed/sorter-drawn filter.
+    """Two output tails, one entry head, and one internal sorter-fed/drawn lane.
+
+    The canonical output catalogue excludes the internal tail; hierarchy's
+    input-side filter excludes its producer-fed head.
     """
     b = PlacedBuilding
     buildings = (
@@ -298,6 +298,41 @@ def test_boundary_lanes_falls_back_to_even_split_when_any_tail_lacks_a_strip():
         LaneEnd(block=0, building=5, item="ingredientA", rate=Fraction(4)),
     ]
     assert sum(t.rate for t in tails) == Fraction(8)
+
+
+def test_boundary_allocation_uses_surplus_beyond_splitter_not_consumer_tail():
+    b = PlacedBuilding
+    belt = dict(item_id=BELT, model_index=0, carries_item="ingredientA")
+    placement = Placement(
+        buildings=(
+            b(item_id=9999, model_index=0, recipe_id=100, x=0, y=0),
+            b(item_id=SORTER, model_index=0, x=0, y=1, input_obj=0, output_obj=2),
+            b(**belt, x=0, y=2, output_obj=3),
+            b(item_id=catalog.SPLITTER_ID, model_index=38, x=1, y=2),
+            b(**belt, x=2, y=2, input_obj=3, output_obj=5),
+            b(**belt, x=3, y=2),
+            b(item_id=SORTER, model_index=0, x=3, y=3, input_obj=5, output_obj=7),
+            b(item_id=9999, model_index=0, recipe_id=101, x=3, y=4),
+            b(**belt, x=1, y=3, input_obj=3, output_obj=9),
+            b(**belt, x=1, y=4),
+            b(**belt, x=5, y=2),
+        )
+    )
+    spec = _spec_with_output("ingredientA", Fraction(6))
+    tails, _heads = boundary_lanes(placement, spec, block=0)
+    demand = LaneEnd(block=1, building=0, item="ingredientA", rate=Fraction(6))
+
+    allocation = allocate_cuts(
+        spec,
+        [Cut("ingredientA", 0, 1, Fraction(6))],
+        {0: tails},
+        {1: [demand]},
+    )
+
+    assert [(flow.src, flow.dst, flow.rate) for flow in allocation.flows] == [
+        (LaneEnd(block=0, building=9, item="ingredientA", rate=Fraction(6)), demand, Fraction(6))
+    ]
+    assert not allocation.player_fed
 
 
 def _stripless_docked_placement() -> Placement:

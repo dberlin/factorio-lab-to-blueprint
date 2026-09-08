@@ -1,0 +1,9 @@
+  Determining projects to restore...
+  Restored /home/dannyb/sources/factorio-lab-to-blueprint/.superpowers/coater-full9/evidence/CoaterProbe.csproj (in 126 ms).
+  CoaterProbe -> /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/coater-oracle-bin/CoaterProbe.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:05.12

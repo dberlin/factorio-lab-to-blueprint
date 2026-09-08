@@ -1312,9 +1312,9 @@ class SlotPose:
 class AddonSupplyPose:
     """One game-extracted positional belt connection for an addon.
 
-    Horizontal offsets are in grid tiles and ``dz`` is in project altitude
-    levels.  Fractions keep routing decisions exact after the asset loader has
-    normalized Unity's rounded world-height value.
+    Horizontal offsets are prefab-local world units with Unity's axes mapped
+    onto the layout axes; ``dz`` is in project altitude levels. Grid seating
+    rounds these offsets, but projected checks must transform the world pose.
     """
 
     dx: Fraction
@@ -1652,7 +1652,7 @@ def vertical_construction_allowed(
 
 
 def _addon_areas_for(prefab: str, table: _PoseTable) -> tuple[AddonSupplyPose, ...]:
-    """``prefab``'s addon areas, in tiles across and altitude levels up."""
+    """``prefab``'s addon areas: horizontal world offsets and altitude levels."""
     entry = table.get(prefab)
     if entry is None:
         return ()

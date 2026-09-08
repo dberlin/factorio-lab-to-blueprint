@@ -1,0 +1,32 @@
+Tue Sep  8 19:02:28 2026    /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/technology-routing/.superpowers/technology-routing-verification/lazy-child-r3.pstats
+
+         20622250 function calls (20591110 primitive calls) in 11.700 seconds
+
+   Ordered by: cumulative time
+   List reduced from 1408 to 22 due to restriction <22>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000   11.941   11.941 freeform.py:4499(lay_out)
+        1    0.007    0.007   11.736   11.736 freeform.py:4930(_sweep)
+        1    0.003    0.003   11.702   11.702 freeform.py:3655(_build)
+        1    0.000    0.000    8.259    8.259 freeform.py:3729(_build_prepared)
+        1    0.001    0.001    8.187    8.187 routing_domain.py:6145(_route_all)
+        4    0.000    0.000    6.563    1.641 routing_domain.py:7064(_search)
+        4    0.586    0.146    6.542    1.635 route_primitives.py:105(edges)
+  2189954    2.009    0.000    4.028    0.000 routing_domain.py:2717(free)
+   369072    0.805    0.000    3.967    0.000 route_primitives.py:208(_belt_alternative)
+        1    0.003    0.003    3.441    3.441 routing_domain.py:14304(_prepare_routing_problem)
+  1525125    0.527    0.000    2.684    0.000 route_primitives.py:217(<genexpr>)
+  2114485    1.054    0.000    1.648    0.000 <frozen _collections_abc>:792(get)
+       12    0.000    0.000    1.617    0.135 routing_domain.py:2683(projected_buildings_are_clear)
+       11    0.001    0.000    1.615    0.147 routing_domain.py:12381(allows_buildings)
+       11    0.000    0.000    1.615    0.147 routing_domain.py:12396(allows)
+        4    0.001    0.000    1.607    0.402 routing_domain.py:6793(_ends)
+        4    0.000    0.000    1.604    0.401 routing_domain.py:6548(_can_junction)
+        5    0.000    0.000    1.581    0.316 routing_domain.py:2640(junction_is_clear)
+        1    0.021    0.021    1.580    1.580 routing_domain.py:2283(_prepared_junction_ban)
+        4    0.021    0.005    1.540    0.385 routing_domain.py:2208(_cancellable_junction_ban_offsets)
+       18    0.000    0.000    1.494    0.083 routing_domain.py:12429(<genexpr>)
+        9    0.000    0.000    1.494    0.166 routing_domain.py:12630(_frame_clear)
+
+

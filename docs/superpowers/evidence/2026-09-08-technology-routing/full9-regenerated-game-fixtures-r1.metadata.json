@@ -1,0 +1,8 @@
+{
+  "blueprint_sha256": "8cce9867d384de35c930db368aee78742eb59115746d4fea5ff85669817e7994",
+  "hash_valid": true,
+  "buildings": 2162,
+  "coaters": 21,
+  "neighborhoods": 21,
+  "scope": "Actual regenerated adjacency, four equatorial rotations; not Unity Physics or live cursor"
+}
