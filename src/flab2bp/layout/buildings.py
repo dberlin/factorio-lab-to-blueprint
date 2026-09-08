@@ -410,15 +410,15 @@ class _BuildingsQueries:
     def belt_run(
         self, index: int, *, forward: bool, through_any_host: bool = False
     ) -> frozenset[int]:
-        """Every belt of the run through ``index``, in one direction.
+        """Every belt of the run anchored by belt ``index``, in one direction.
 
         Belt chains are forward-linked, so a tail's run is everything that
         flows INTO it (``forward=False``) and a head's run is everything it
         flows into (``forward=True``). Splitters and pilers (``Kind.OTHER``)
         are crossed rather than stopped at: the belts around one name it as
-        their ``output_obj``/``input_obj`` and the cargo passes through, so
-        ``index`` itself need not be a belt to anchor a run -- only the
-        neighbours actually walked must be. Cycle-safe via a visited set.
+        their ``output_obj``/``input_obj`` and the cargo passes through.
+        The seed must be a belt; hosts are transit points reached from a belt,
+        not supported starting anchors. Cycle-safe via a visited set.
 
         ``through_any_host`` also crosses other valid non-belt hosts. Hierarchy
         lane weighting uses this to retain the input/output belt connection
