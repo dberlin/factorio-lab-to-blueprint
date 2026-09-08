@@ -1,0 +1,1611 @@
+$ rstest run tests/ui/BuildPanel.test.tsx -t "final artifact resists late trace and can be restored"
+  Rstest v0.11.12
+
+ ✗ tests/ui/BuildPanel.test.tsx (43)
+  ✗ final artifact resists late trace and can be restored after scrubbing or newer import (389ms)
+    Unable to find an accessible element with the role "button" and name "Show completed blueprint"
+
+Here are the accessible roles:
+
+  textbox:
+
+  Name "FactorioLab URL":
+  [36m<input[39m
+    [33mid[39m=[32m"_r_0_"[39m
+    [33mplaceholder[39m=[32m"https://factoriolab.github.io/dsp/flow?o=…"[39m
+    [33mspellcheck[39m=[32m"false"[39m
+    [33mvalue[39m=[32m"https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"[39m
+  [36m/>[39m
+
+  Name "Name":
+  [36m<input[39m
+    [33mid[39m=[32m"_r_1_"[39m
+    [33mmaxlength[39m=[32m"60"[39m
+    [33mplaceholder[39m=[32m"(defaults to what it makes)"[39m
+    [33mvalue[39m=[32m""[39m
+  [36m/>[39m
+
+  Name "Flow export (optional)":
+  [36m<textarea[39m
+    [33mdata-testid[39m=[32m"flow-text"[39m
+    [33mid[39m=[32m"_r_8_"[39m
+    [33mplaceholder[39m=[32m"Paste FactorioLab's CSV export, or choose the file — pins WHICH recipe makes what"[39m
+    [33mrows[39m=[32m"3"[39m
+    [33mspellcheck[39m=[32m"false"[39m
+  [36m/>[39m
+
+  Name "Blueprint string":
+  [36m<textarea[39m
+    [33mid[39m=[32m"_r_9_"[39m
+    [33mplaceholder[39m=[32m"BLUEPRINT:0,10,…  — or drop a .txt file here"[39m
+    [33mspellcheck[39m=[32m"false"[39m
+  [36m/>[39m
+
+  Name "or URL":
+  [36m<input[39m
+    [33mid[39m=[32m"_r_a_"[39m
+    [33mplaceholder[39m=[32m"https://www.dysonsphereblueprints.com/blueprints/…"[39m
+    [33mvalue[39m=[32m""[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  button:
+
+  Name "Build":
+  [36m<button[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Load":
+  [36m<button[39m
+    [33mdisabled[39m=[32m""[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Fetch":
+  [36m<button[39m
+    [33mdisabled[39m=[32m""[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  combobox:
+
+  Name "Strategy":
+  [36m<select[39m
+    [33mid[39m=[32m"_r_2_"[39m
+  [36m/>[39m
+
+  Name "Latitude band":
+  [36m<select[39m
+    [33mid[39m=[32m"_r_3_"[39m
+  [36m/>[39m
+
+  Name "Proliferator tier":
+  [36m<select[39m
+    [33mid[39m=[32m"_r_5_"[39m
+  [36m/>[39m
+
+  Name "Machine ranking":
+  [36m<select[39m
+    [33mid[39m=[32m"_r_6_"[39m
+  [36m/>[39m
+
+  Name "Power tower":
+  [36m<select[39m
+    [33mid[39m=[32m"_r_7_"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  option:
+
+  Name "best (freeform + sequence-pair, smallest valid wins)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"best"[39m
+  [36m/>[39m
+
+  Name "freeform":
+  [36m<option[39m
+    [33mvalue[39m=[32m"freeform"[39m
+  [36m/>[39m
+
+  Name "sequence-pair":
+  [36m<option[39m
+    [33mvalue[39m=[32m"sequence-pair"[39m
+  [36m/>[39m
+
+  Name "hierarchical (explicit only: block decomposition, experimental; may overshoot the budget by its settlement phase)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"hierarchical"[39m
+  [36m/>[39m
+
+  Name "Portable (smallest + up to two wider)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"portable"[39m
+  [36m/>[39m
+
+  Name "5 × 20 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"5x20"[39m
+  [36m/>[39m
+
+  Name "5 × 40 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"5x40"[39m
+  [36m/>[39m
+
+  Name "5 × 80 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"5x80"[39m
+  [36m/>[39m
+
+  Name "5 × 100 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"5x100"[39m
+  [36m/>[39m
+
+  Name "10 × 160 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"10x160"[39m
+  [36m/>[39m
+
+  Name "10 × 200 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"10x200"[39m
+  [36m/>[39m
+
+  Name "15 × 300 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"15x300"[39m
+  [36m/>[39m
+
+  Name "15 × 400 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"15x400"[39m
+  [36m/>[39m
+
+  Name "25 × 500 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"25x500"[39m
+  [36m/>[39m
+
+  Name "25 × 600 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"25x600"[39m
+  [36m/>[39m
+
+  Name "50 × 800 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"50x800"[39m
+  [36m/>[39m
+
+  Name "160 × 1000 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"160x1000"[39m
+  [36m/>[39m
+
+  Name "URL selection (Mk.III if unspecified)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"auto"[39m
+  [36m/>[39m
+
+  Name "None":
+  [36m<option[39m
+    [33mvalue[39m=[32m"none"[39m
+  [36m/>[39m
+
+  Name "Mk.I":
+  [36m<option[39m
+    [33mvalue[39m=[32m"1"[39m
+  [36m/>[39m
+
+  Name "Mk.II":
+  [36m<option[39m
+    [33mvalue[39m=[32m"2"[39m
+  [36m/>[39m
+
+  Name "Mk.III":
+  [36m<option[39m
+    [33mvalue[39m=[32m"3"[39m
+  [36m/>[39m
+
+  Name "Exact (the URL’s machine)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"exact"[39m
+  [36m/>[39m
+
+  Name "Up to (fewest machines at or below it)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"up-to"[39m
+  [36m/>[39m
+
+  Name "URL selection (Tesla Tower if unspecified)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"auto"[39m
+  [36m/>[39m
+
+  Name "Tesla Tower":
+  [36m<option[39m
+    [33mvalue[39m=[32m"tesla"[39m
+  [36m/>[39m
+
+  Name "Satellite Substation":
+  [36m<option[39m
+    [33mvalue[39m=[32m"substation"[39m
+  [36m/>[39m
+
+  Name "Wireless Power Tower":
+  [36m<option[39m
+    [33mvalue[39m=[32m"wireless"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  checkbox:
+
+  Name "Trace search (live)":
+  [36m<input[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  Name "all-products":
+  [36m<input[39m
+    [33mchecked[39m=[32m""[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  Name "output-products":
+  [36m<input[39m
+    [33mchecked[39m=[32m""[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  Name "no-proliferator":
+  [36m<input[39m
+    [33mchecked[39m=[32m""[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  Name "Fetch FactorioLab flow automatically":
+  [36m<input[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  Name "Live tail":
+  [36m<input[39m
+    [33mchecked[39m=[32m""[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  Name "Stranded nets":
+  [36m<input[39m
+    [33mchecked[39m=[32m""[39m
+    [33mdata-testid[39m=[32m"trace-show-stranded"[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  Name "No-goods (approximate — index-based, not to scale)":
+  [36m<input[39m
+    [33mchecked[39m=[32m""[39m
+    [33mdata-testid[39m=[32m"trace-show-no-goods"[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  group:
+
+  Name "Candidate policies":
+  [36m<fieldset[39m
+    [33mclass[39m=[32m"candidate-policies checkbox"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  spinbutton:
+
+  Name "Budget (s/layout)":
+  [36m<input[39m
+    [33mid[39m=[32m"_r_4_"[39m
+    [33mmin[39m=[32m"0.5"[39m
+    [33mstep[39m=[32m"0.5"[39m
+    [33mtype[39m=[32m"number"[39m
+    [33mvalue[39m=[32m"15"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  paragraph:
+
+  Name "":
+  [36m<p[39m
+    [33mclass[39m=[32m"note"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<p[39m
+    [33mclass[39m=[32m"trace-caption"[39m
+    [33mdata-testid[39m=[32m"trace-caption"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<p[39m
+    [33mclass[39m=[32m"note"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<p[39m
+    [33mclass[39m=[32m"warn"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  code:
+
+  Name "":
+  [36m<code />[39m
+
+  Name "":
+  [36m<code />[39m
+
+  Name "":
+  [36m<code />[39m
+
+  --------------------------------------------------
+  slider:
+
+  Name "Snapshot":
+  [36m<input[39m
+    [33mid[39m=[32m"_r_b_"[39m
+    [33mmax[39m=[32m"0"[39m
+    [33mmin[39m=[32m"0"[39m
+    [33mtype[39m=[32m"range"[39m
+    [33mvalue[39m=[32m"0"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  term:
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  --------------------------------------------------
+  definition:
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd[39m
+    [33mdata-testid[39m=[32m"trace-stranded"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<dd[39m
+    [33mdata-testid[39m=[32m"trace-no-goods"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  --------------------------------------------------
+  heading:
+
+  Name "electromagnetic-matrix 60/min":
+  [36m<h2[39m
+    [33mdata-testid[39m=[32m"report-title"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  strong:
+
+  Name "":
+  [36m<strong />[39m
+
+  Name "":
+  [36m<strong />[39m
+
+  --------------------------------------------------
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<section[39m
+      [33mclass[39m=[32m"build-panel"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"row"[39m
+      [36m>[39m
+        [36m<label[39m
+          [33mfor[39m=[32m"_r_0_"[39m
+        [36m>[39m
+          [0mFactorioLab URL[0m
+        [36m</label>[39m
+        [36m<input[39m
+          [33mid[39m=[32m"_r_0_"[39m
+          [33mplaceholder[39m=[32m"https://factoriolab.github.io/dsp/flow?o=…"[39m
+          [33mspellcheck[39m=[32m"false"[39m
+          [33mvalue[39m=[32m"https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"[39m
+        [36m/>[39m
+        [36m<button[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mBuild[0m
+        [36m</button>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"row options"[39m
+      [36m>[39m
+        [36m<label[39m
+          [33mfor[39m=[32m"_r_2_"[39m
+        [36m>[39m
+          [0mStrategy[0m
+        [36m</label>[39m
+        [36m<select[39m
+          [33mid[39m=[32m"_r_2_"[39m
+        [36m>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"best"[39m
+          [36m>[39m
+            [0mbest (freeform + sequence-pair, smallest valid wins)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"freeform"[39m
+          [36m>[39m
+            [0mfreeform[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"sequence-pair"[39m
+          [36m>[39m
+            [0msequence-pair[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"hierarchical"[39m
+          [36m>[39m
+            [0mhierarchical (explicit only: block decomposition, experimental; may overshoot the budget by its settlement phase)[0m
+          [36m</option>[39m
+        [36m</select>[39m
+        [36m<label[39m
+          [33mfor[39m=[32m"_r_3_"[39m
+        [36m>[39m
+          [0mLatitude band[0m
+        [36m</label>[39m
+        [36m<select[39m
+          [33mid[39m=[32m"_r_3_"[39m
+        [36m>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"portable"[39m
+          [36m>[39m
+            [0mPortable (smallest + up to two wider)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"5x20"[39m
+          [36m>[39m
+            [0m5 × 20 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"5x40"[39m
+          [36m>[39m
+            [0m5 × 40 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"5x80"[39m
+          [36m>[39m
+            [0m5 × 80 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"5x100"[39m
+          [36m>[39m
+            [0m5 × 100 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"10x160"[39m
+          [36m>[39m
+            [0m10 × 160 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"10x200"[39m
+          [36m>[39m
+            [0m10 × 200 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"15x300"[39m
+          [36m>[39m
+            [0m15 × 300 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"15x400"[39m
+          [36m>[39m
+            [0m15 × 400 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"25x500"[39m
+          [36m>[39m
+            [0m25 × 500 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"25x600"[39m
+          [36m>[39m
+            [0m25 × 600 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"50x800"[39m
+          [36m>[39m
+            [0m50 × 800 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"160x1000"[39m
+          [36m>[39m
+            [0m160 × 1000 (height × width)[0m
+          [36m</option>[39m
+        [36m</select>[39m
+        [36m<label[39m
+          [33mfor[39m=[32m"_r_5_"[39m
+        [36m>[39m
+          [0mProliferator tier[0m
+        [36m</label>[39m
+        [36m<select[39m
+          [33mid[39m=[32m"_r_5_"[39m
+        [36m>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"auto"[39m
+          [36m>[39m
+            [0mURL selection (Mk.III if unspecified)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"none"[39m
+          [36m>[39m
+            [0mNone[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"1"[39m
+          [36m>[39m
+            [0mMk.I[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"2"[39m
+          [36m>[39m
+            [0mMk.II[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"3"[39m
+          [36m>[39m
+            [0mMk.III[0m
+          [36m</option>[39m
+        [36m</select>[39m
+        [36m<label[39m
+          [33mfor[39m=[32m"_r_6_"[39m
+        [36m>[39m
+          [0mMachine ranking[0m
+        [36m</label>[39m
+        [36m<select[39m
+          [33mid[39m=[32m"_r_6_"[39m
+        [36m>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"exact"[39m
+          [36m>[39m
+            [0mExact (the URL’s machine)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"up-to"[39m
+          [36m>[39m
+            [0mUp to (fewest machines at or below it)[0m
+          [36m</option>[39m
+        [36m</select>[39m
+        [36m<label[39m
+          [33mfor[39m=[32m"_r_7_"[39m
+        [36m>[39m
+          [0mPower tower[0m
+        [36m</label>[39m
+        [36m<select[39m
+          [33mid[39m=[32m"_r_7_"[39m
+        [36m>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"auto"[39m
+          [36m>[39m
+            [0mURL selection (Tesla Tower if unspecified)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"tesla"[39m
+          [36m>[39m
+            [0mTesla Tower[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"substation"[39m
+          [36m>[39m
+            [0mSatellite Substation[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"wireless"[39m
+          [36m>[39m
+           ...
+  - build is disabled until there is a URL (0ms)
+  - machine ranking exposes exact and up-to and submits the selected mode (0ms)
+  - the Name input exposes the game title limit to the browser (0ms)
+  - candidate policies are all checked in presentation order by default (0ms)
+  - an exact candidate policy subset is submitted in presentation order (1ms)
+  - empty candidate policy selection disables Build and shows inline validation (0ms)
+  - the power tower selection is sent as an explicit override (0ms)
+  - automatic flow fetch is off by default and is submitted when selected (0ms)
+  - automatic fetch and supplied CSV cannot both be selected (0ms)
+  - a file read that finishes after automatic fetch was selected remains mutually exclusive (0ms)
+  - a finished build shows the string and renders it without a second click (0ms)
+  - candidate rows select the blueprint string, viewer model, and copy source (0ms)
+  - a clipboard completion cannot report success for a newly selected candidate (0ms)
+  - candidate rows support keyboard selection and unavailable blueprints cannot be selected (0ms)
+  - a new result resets selection to its best available candidate (0ms)
+  - an unpinned report offers both automatic fetch and a supplied flow (0ms)
+  - a refusal is shown as a result, with one line per pair (0ms)
+  - a bad URL is an error, and is distinct from a refusal (1ms)
+  - a 400 from the server is shown rather than swallowed (0ms)
+  - an invalid build withholds the string and offers it explicitly (0ms)
+  - progress says where the job is while it is still running (0ms)
+  - latitude band selector exposes every authoritative height by width option (0ms)
+  - latitude band 50x800 reaches the build request unchanged (0ms)
+  - latitude band 160x1000 reaches the build request unchanged (0ms)
+  - the strategy choices are exactly the request strategy set (0ms)
+  - proliferator tier exposes auto and every spray tier (0ms)
+  - submits an explicit None proliferation tier (0ms)
+  - submits an explicit Mk.II proliferation tier (0ms)
+  - submits an explicit Mk.III proliferation tier (0ms)
+  - the budget copy follows selected and pinned effective candidates (0ms)
+  - a long projected total warns instead of blocking the build (0ms)
+  - the warning follows the projected TOTAL, not the per-layout budget (0ms)
+  - a budget far past the old 300s ceiling is submitted exactly as asked (0ms)
+  - the blueprint title is what the game will show, and it names the product (0ms)
+  - the copy button says what it copies (0ms)
+  - a build that has reached the layout loop counts pairs, not seconds (0ms)
+  - before the layout loop starts there is nothing to count, and it says so (0ms)
+  - warnings from a VALID build are shown, not swallowed by the string being emitted (0ms)
+  - a refusal marks the blueprint on screen as the previous build (0ms)
+  - the trace panel gates on the job's own trace option, not the live form checkbox (0ms)
+  - ticking trace mid-build does not mount a panel for a job that was never traced (0ms)
+  - the trace panel keeps polling past job settlement until it observes complete, so late frames are not lost (0ms)
+
+Summary of all failing tests:
+
+ FAIL  tests/ui/BuildPanel.test.tsx > final artifact resists late trace and can be restored after scrubbing or newer import
+TestingLibraryElementError: Unable to find an accessible element with the role "button" and name "Show completed blueprint"
+
+Here are the accessible roles:
+
+  textbox:
+
+  Name "FactorioLab URL":
+  [36m<input[39m
+    [33mid[39m=[32m"_r_0_"[39m
+    [33mplaceholder[39m=[32m"https://factoriolab.github.io/dsp/flow?o=…"[39m
+    [33mspellcheck[39m=[32m"false"[39m
+    [33mvalue[39m=[32m"https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"[39m
+  [36m/>[39m
+
+  Name "Name":
+  [36m<input[39m
+    [33mid[39m=[32m"_r_1_"[39m
+    [33mmaxlength[39m=[32m"60"[39m
+    [33mplaceholder[39m=[32m"(defaults to what it makes)"[39m
+    [33mvalue[39m=[32m""[39m
+  [36m/>[39m
+
+  Name "Flow export (optional)":
+  [36m<textarea[39m
+    [33mdata-testid[39m=[32m"flow-text"[39m
+    [33mid[39m=[32m"_r_8_"[39m
+    [33mplaceholder[39m=[32m"Paste FactorioLab's CSV export, or choose the file — pins WHICH recipe makes what"[39m
+    [33mrows[39m=[32m"3"[39m
+    [33mspellcheck[39m=[32m"false"[39m
+  [36m/>[39m
+
+  Name "Blueprint string":
+  [36m<textarea[39m
+    [33mid[39m=[32m"_r_9_"[39m
+    [33mplaceholder[39m=[32m"BLUEPRINT:0,10,…  — or drop a .txt file here"[39m
+    [33mspellcheck[39m=[32m"false"[39m
+  [36m/>[39m
+
+  Name "or URL":
+  [36m<input[39m
+    [33mid[39m=[32m"_r_a_"[39m
+    [33mplaceholder[39m=[32m"https://www.dysonsphereblueprints.com/blueprints/…"[39m
+    [33mvalue[39m=[32m""[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  button:
+
+  Name "Build":
+  [36m<button[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Load":
+  [36m<button[39m
+    [33mdisabled[39m=[32m""[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Fetch":
+  [36m<button[39m
+    [33mdisabled[39m=[32m""[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  combobox:
+
+  Name "Strategy":
+  [36m<select[39m
+    [33mid[39m=[32m"_r_2_"[39m
+  [36m/>[39m
+
+  Name "Latitude band":
+  [36m<select[39m
+    [33mid[39m=[32m"_r_3_"[39m
+  [36m/>[39m
+
+  Name "Proliferator tier":
+  [36m<select[39m
+    [33mid[39m=[32m"_r_5_"[39m
+  [36m/>[39m
+
+  Name "Machine ranking":
+  [36m<select[39m
+    [33mid[39m=[32m"_r_6_"[39m
+  [36m/>[39m
+
+  Name "Power tower":
+  [36m<select[39m
+    [33mid[39m=[32m"_r_7_"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  option:
+
+  Name "best (freeform + sequence-pair, smallest valid wins)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"best"[39m
+  [36m/>[39m
+
+  Name "freeform":
+  [36m<option[39m
+    [33mvalue[39m=[32m"freeform"[39m
+  [36m/>[39m
+
+  Name "sequence-pair":
+  [36m<option[39m
+    [33mvalue[39m=[32m"sequence-pair"[39m
+  [36m/>[39m
+
+  Name "hierarchical (explicit only: block decomposition, experimental; may overshoot the budget by its settlement phase)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"hierarchical"[39m
+  [36m/>[39m
+
+  Name "Portable (smallest + up to two wider)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"portable"[39m
+  [36m/>[39m
+
+  Name "5 × 20 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"5x20"[39m
+  [36m/>[39m
+
+  Name "5 × 40 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"5x40"[39m
+  [36m/>[39m
+
+  Name "5 × 80 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"5x80"[39m
+  [36m/>[39m
+
+  Name "5 × 100 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"5x100"[39m
+  [36m/>[39m
+
+  Name "10 × 160 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"10x160"[39m
+  [36m/>[39m
+
+  Name "10 × 200 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"10x200"[39m
+  [36m/>[39m
+
+  Name "15 × 300 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"15x300"[39m
+  [36m/>[39m
+
+  Name "15 × 400 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"15x400"[39m
+  [36m/>[39m
+
+  Name "25 × 500 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"25x500"[39m
+  [36m/>[39m
+
+  Name "25 × 600 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"25x600"[39m
+  [36m/>[39m
+
+  Name "50 × 800 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"50x800"[39m
+  [36m/>[39m
+
+  Name "160 × 1000 (height × width)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"160x1000"[39m
+  [36m/>[39m
+
+  Name "URL selection (Mk.III if unspecified)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"auto"[39m
+  [36m/>[39m
+
+  Name "None":
+  [36m<option[39m
+    [33mvalue[39m=[32m"none"[39m
+  [36m/>[39m
+
+  Name "Mk.I":
+  [36m<option[39m
+    [33mvalue[39m=[32m"1"[39m
+  [36m/>[39m
+
+  Name "Mk.II":
+  [36m<option[39m
+    [33mvalue[39m=[32m"2"[39m
+  [36m/>[39m
+
+  Name "Mk.III":
+  [36m<option[39m
+    [33mvalue[39m=[32m"3"[39m
+  [36m/>[39m
+
+  Name "Exact (the URL’s machine)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"exact"[39m
+  [36m/>[39m
+
+  Name "Up to (fewest machines at or below it)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"up-to"[39m
+  [36m/>[39m
+
+  Name "URL selection (Tesla Tower if unspecified)":
+  [36m<option[39m
+    [33mvalue[39m=[32m"auto"[39m
+  [36m/>[39m
+
+  Name "Tesla Tower":
+  [36m<option[39m
+    [33mvalue[39m=[32m"tesla"[39m
+  [36m/>[39m
+
+  Name "Satellite Substation":
+  [36m<option[39m
+    [33mvalue[39m=[32m"substation"[39m
+  [36m/>[39m
+
+  Name "Wireless Power Tower":
+  [36m<option[39m
+    [33mvalue[39m=[32m"wireless"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  checkbox:
+
+  Name "Trace search (live)":
+  [36m<input[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  Name "all-products":
+  [36m<input[39m
+    [33mchecked[39m=[32m""[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  Name "output-products":
+  [36m<input[39m
+    [33mchecked[39m=[32m""[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  Name "no-proliferator":
+  [36m<input[39m
+    [33mchecked[39m=[32m""[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  Name "Fetch FactorioLab flow automatically":
+  [36m<input[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  Name "Live tail":
+  [36m<input[39m
+    [33mchecked[39m=[32m""[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  Name "Stranded nets":
+  [36m<input[39m
+    [33mchecked[39m=[32m""[39m
+    [33mdata-testid[39m=[32m"trace-show-stranded"[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  Name "No-goods (approximate — index-based, not to scale)":
+  [36m<input[39m
+    [33mchecked[39m=[32m""[39m
+    [33mdata-testid[39m=[32m"trace-show-no-goods"[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  group:
+
+  Name "Candidate policies":
+  [36m<fieldset[39m
+    [33mclass[39m=[32m"candidate-policies checkbox"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  spinbutton:
+
+  Name "Budget (s/layout)":
+  [36m<input[39m
+    [33mid[39m=[32m"_r_4_"[39m
+    [33mmin[39m=[32m"0.5"[39m
+    [33mstep[39m=[32m"0.5"[39m
+    [33mtype[39m=[32m"number"[39m
+    [33mvalue[39m=[32m"15"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  paragraph:
+
+  Name "":
+  [36m<p[39m
+    [33mclass[39m=[32m"note"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<p[39m
+    [33mclass[39m=[32m"trace-caption"[39m
+    [33mdata-testid[39m=[32m"trace-caption"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<p[39m
+    [33mclass[39m=[32m"note"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<p[39m
+    [33mclass[39m=[32m"warn"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  code:
+
+  Name "":
+  [36m<code />[39m
+
+  Name "":
+  [36m<code />[39m
+
+  Name "":
+  [36m<code />[39m
+
+  --------------------------------------------------
+  slider:
+
+  Name "Snapshot":
+  [36m<input[39m
+    [33mid[39m=[32m"_r_b_"[39m
+    [33mmax[39m=[32m"0"[39m
+    [33mmin[39m=[32m"0"[39m
+    [33mtype[39m=[32m"range"[39m
+    [33mvalue[39m=[32m"0"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  term:
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  Name "":
+  [36m<dt />[39m
+
+  --------------------------------------------------
+  definition:
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd[39m
+    [33mdata-testid[39m=[32m"trace-stranded"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<dd[39m
+    [33mdata-testid[39m=[32m"trace-no-goods"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  Name "":
+  [36m<dd />[39m
+
+  --------------------------------------------------
+  heading:
+
+  Name "electromagnetic-matrix 60/min":
+  [36m<h2[39m
+    [33mdata-testid[39m=[32m"report-title"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  strong:
+
+  Name "":
+  [36m<strong />[39m
+
+  Name "":
+  [36m<strong />[39m
+
+  --------------------------------------------------
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<section[39m
+      [33mclass[39m=[32m"build-panel"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"row"[39m
+      [36m>[39m
+        [36m<label[39m
+          [33mfor[39m=[32m"_r_0_"[39m
+        [36m>[39m
+          [0mFactorioLab URL[0m
+        [36m</label>[39m
+        [36m<input[39m
+          [33mid[39m=[32m"_r_0_"[39m
+          [33mplaceholder[39m=[32m"https://factoriolab.github.io/dsp/flow?o=…"[39m
+          [33mspellcheck[39m=[32m"false"[39m
+          [33mvalue[39m=[32m"https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"[39m
+        [36m/>[39m
+        [36m<button[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mBuild[0m
+        [36m</button>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"row options"[39m
+      [36m>[39m
+        [36m<label[39m
+          [33mfor[39m=[32m"_r_2_"[39m
+        [36m>[39m
+          [0mStrategy[0m
+        [36m</label>[39m
+        [36m<select[39m
+          [33mid[39m=[32m"_r_2_"[39m
+        [36m>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"best"[39m
+          [36m>[39m
+            [0mbest (freeform + sequence-pair, smallest valid wins)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"freeform"[39m
+          [36m>[39m
+            [0mfreeform[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"sequence-pair"[39m
+          [36m>[39m
+            [0msequence-pair[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"hierarchical"[39m
+          [36m>[39m
+            [0mhierarchical (explicit only: block decomposition, experimental; may overshoot the budget by its settlement phase)[0m
+          [36m</option>[39m
+        [36m</select>[39m
+        [36m<label[39m
+          [33mfor[39m=[32m"_r_3_"[39m
+        [36m>[39m
+          [0mLatitude band[0m
+        [36m</label>[39m
+        [36m<select[39m
+          [33mid[39m=[32m"_r_3_"[39m
+        [36m>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"portable"[39m
+          [36m>[39m
+            [0mPortable (smallest + up to two wider)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"5x20"[39m
+          [36m>[39m
+            [0m5 × 20 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"5x40"[39m
+          [36m>[39m
+            [0m5 × 40 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"5x80"[39m
+          [36m>[39m
+            [0m5 × 80 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"5x100"[39m
+          [36m>[39m
+            [0m5 × 100 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"10x160"[39m
+          [36m>[39m
+            [0m10 × 160 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"10x200"[39m
+          [36m>[39m
+            [0m10 × 200 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"15x300"[39m
+          [36m>[39m
+            [0m15 × 300 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"15x400"[39m
+          [36m>[39m
+            [0m15 × 400 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"25x500"[39m
+          [36m>[39m
+            [0m25 × 500 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"25x600"[39m
+          [36m>[39m
+            [0m25 × 600 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"50x800"[39m
+          [36m>[39m
+            [0m50 × 800 (height × width)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"160x1000"[39m
+          [36m>[39m
+            [0m160 × 1000 (height × width)[0m
+          [36m</option>[39m
+        [36m</select>[39m
+        [36m<label[39m
+          [33mfor[39m=[32m"_r_5_"[39m
+        [36m>[39m
+          [0mProliferator tier[0m
+        [36m</label>[39m
+        [36m<select[39m
+          [33mid[39m=[32m"_r_5_"[39m
+        [36m>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"auto"[39m
+          [36m>[39m
+            [0mURL selection (Mk.III if unspecified)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"none"[39m
+          [36m>[39m
+            [0mNone[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"1"[39m
+          [36m>[39m
+            [0mMk.I[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"2"[39m
+          [36m>[39m
+            [0mMk.II[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"3"[39m
+          [36m>[39m
+            [0mMk.III[0m
+          [36m</option>[39m
+        [36m</select>[39m
+        [36m<label[39m
+          [33mfor[39m=[32m"_r_6_"[39m
+        [36m>[39m
+          [0mMachine ranking[0m
+        [36m</label>[39m
+        [36m<select[39m
+          [33mid[39m=[32m"_r_6_"[39m
+        [36m>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"exact"[39m
+          [36m>[39m
+            [0mExact (the URL’s machine)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"up-to"[39m
+          [36m>[39m
+            [0mUp to (fewest machines at or below it)[0m
+          [36m</option>[39m
+        [36m</select>[39m
+        [36m<label[39m
+          [33mfor[39m=[32m"_r_7_"[39m
+        [36m>[39m
+          [0mPower tower[0m
+        [36m</label>[39m
+        [36m<select[39m
+          [33mid[39m=[32m"_r_7_"[39m
+        [36m>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"auto"[39m
+          [36m>[39m
+            [0mURL selection (Tesla Tower if unspecified)[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"tesla"[39m
+          [36m>[39m
+            [0mTesla Tower[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"substation"[39m
+          [36m>[39m
+            [0mSatellite Substation[0m
+          [36m</option>[39m
+          [36m<option[39m
+            [33mvalue[39m=[32m"wireless"[39m
+          [36m>[39m
+           ...
+
+  337 |   getElementError(message, container) {
+  338 |     const prettifiedDOM = prettyDOM(container);
+> 339 |     const error = new Error([message, "Ignored nodes: comments, " + config.defaultIgnore + "\n" + prettifiedDOM].filter(Boolean).join('\n\n'));
+      | ^
+  340 |     error.name = 'TestingLibraryElementError';
+  341 |     return error;
+
+        at Object.getElementError (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:339:1)
+        at node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1206:1
+        at node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1185:1
+        at screen (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1228:1)
+        at tests/ui/BuildPanel.test.tsx:77:19
+
+
+ Test Files 1 failed
+      Tests 1 failed | 42 skipped (43)
+   Duration 1.42s (build 256ms, tests 1.16s)
+
+error: script "test" exited with code 1

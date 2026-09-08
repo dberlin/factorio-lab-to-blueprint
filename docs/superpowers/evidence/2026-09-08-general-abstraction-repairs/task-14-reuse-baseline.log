@@ -1,0 +1,2 @@
+{"mode": "report_reuse", "case": "raw_changed", "cleanup_changed": false, "cached_report": false, "projection_same_object": false, "same_buildings": false, "same_frame": false, "cached_ok": null, "returned_geometry_clean": true, "checks": []}
+{"mode": "report_reuse", "case": "already_completed", "cleanup_changed": false, "cached_report": false, "projection_same_object": true, "same_buildings": true, "same_frame": true, "cached_ok": null, "returned_geometry_clean": true, "checks": []}

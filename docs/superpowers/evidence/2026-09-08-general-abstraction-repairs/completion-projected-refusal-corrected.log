@@ -1,0 +1,75 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_sequence_completion_rejects_invalid_projection_after_clean_compaction __
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f19a83f96e0>
+
+    def test_sequence_completion_rejects_invalid_projection_after_clean_compaction(
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        spec = two_stage_spec()
+        policy = BandPolicy("portable")
+        production = _production_run(
+            spec,
+            belt_rules=_BELT_RULES,
+            band_policy=policy,
+            time_budget_s=20.0,
+            power=False,
+            strip_len=6,
+            config=SequenceSolverConfig.test(),
+        )
+        routed = _placement(area=10, belt_tiles=2)
+        compacted = _placement(area=9, belt_tiles=1)
+        projected = replace(
+            _placement(area=8, belt_tiles=1),
+            buildings=(),
+            frame=AreaFrame(
+                width=8,
+                height=1,
+                primary_band=40,
+                certified_bands=(40,),
+                rotated=False,
+            ),
+        )
+        trace: list[tuple[str, Placement]] = []
+    
+        def compact(
+            candidate: Placement,
+            *_args: object,
+            **_kwargs: object,
+        ) -> finalize.BoundaryCompactionResult:
+            trace.append(("compact", candidate))
+            return finalize.BoundaryCompactionResult(compacted, validate.Report(findings=()))
+    
+        def project(
+            candidate: Placement,
+            *_args: object,
+            **_kwargs: object,
+        ) -> Placement:
+            trace.append(("finalize", candidate))
+            return projected
+    
+        def certify(
+            candidate: Placement,
+            *_args: object,
+            **_kwargs: object,
+        ) -> validate.Report:
+            trace.append(("validate", candidate))
+            return validate.certify(candidate, spec, belt_rules=_BELT_RULES, expect_power=False)
+    
+        monkeypatch.setattr(finalize, "compact_open_boundary_belts_certified", compact)
+        monkeypatch.setattr(finalize, "finalize_placement", project)
+        monkeypatch.setattr(finalize, "_certify", certify)
+    
+        verdict = production.solver.adapters.validate(routed)
+    
+        assert not verdict.ok
+        assert verdict.placement is None
+>       assert "flow.conservation" in verdict.failed_checks
+E       AssertionError: assert 'flow.conservation' in ('spec.machine_counts',)
+E        +  where ('spec.machine_counts',) = ValidationVerdict(ok=False, failed_checks=('spec.machine_counts',), placement=None, projection_failures=(), status=<DetailedRouteStatus.INVALID: 'invalid'>).failed_checks
+
+tests/layout/test_sequence_solver.py:8615: AssertionError
+=========================== short test summary info ============================
+FAILED tests/layout/test_sequence_solver.py::test_sequence_completion_rejects_invalid_projection_after_clean_compaction

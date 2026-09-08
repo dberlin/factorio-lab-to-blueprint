@@ -1,0 +1,81 @@
+[
+  {
+    "label": "task-14-completion-integrated",
+    "exit": 0,
+    "command": [
+      ".venv/bin/python",
+      ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "completion"
+    ]
+  },
+  {
+    "label": "task-14-reuse-integrated",
+    "exit": 0,
+    "command": [
+      ".venv/bin/python",
+      ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "reuse"
+    ]
+  },
+  {
+    "label": "task-14-gate-integrated",
+    "exit": 0,
+    "command": [
+      ".venv/bin/python",
+      ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "gate"
+    ]
+  },
+  {
+    "label": "task-15-mixed-integrated",
+    "exit": 0,
+    "command": [
+      ".venv/bin/python",
+      ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-15-packing-probe.py",
+      "--case",
+      "mixed",
+      "--expect",
+      "envelope",
+      "--budget",
+      "30"
+    ]
+  },
+  {
+    "label": "task-15-rotated-integrated",
+    "exit": 0,
+    "command": [
+      ".venv/bin/python",
+      ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-15-packing-probe.py",
+      "--case",
+      "rotated",
+      "--expect",
+      "envelope",
+      "--budget",
+      "30"
+    ]
+  },
+  {
+    "label": "task-15-overflow-integrated",
+    "exit": 0,
+    "command": [
+      ".venv/bin/python",
+      ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-15-packing-probe.py",
+      "--case",
+      "overflow",
+      "--expect",
+      "envelope",
+      "--budget",
+      "30"
+    ]
+  },
+  {
+    "label": "task-14-clock-matrix-integrated",
+    "exit": 0,
+    "command": [
+      ".venv/bin/python",
+      ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-matrix.py",
+      "--label",
+      "integrated"
+    ]
+  }
+]

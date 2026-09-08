@@ -1,0 +1,7 @@
+$ oxlint . && oxfmt --check .
+Found 0 warnings and 0 errors.
+Finished in 286ms on 88 files with 135 rules using 128 threads.
+Checking formatting...
+
+All matched files use the correct format.
+Finished in 3519ms on 96 files using 128 threads.

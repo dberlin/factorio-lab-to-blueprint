@@ -1,0 +1,99 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+...F....                                                                 [100%]
+=================================== FAILURES ===================================
+__ test_sequence_completion_rejects_invalid_projection_after_clean_compaction __
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f796134a3f0>
+
+    def test_sequence_completion_rejects_invalid_projection_after_clean_compaction(
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        spec = two_stage_spec()
+        policy = BandPolicy("portable")
+        production = _production_run(
+            spec,
+            belt_rules=_BELT_RULES,
+            band_policy=policy,
+            time_budget_s=20.0,
+            power=False,
+            strip_len=6,
+            config=SequenceSolverConfig.test(),
+        )
+        routed = _placement(area=10, belt_tiles=2)
+        compacted = _placement(area=9, belt_tiles=1)
+        projected = replace(
+            _placement(area=8, belt_tiles=1),
+            frame=AreaFrame(
+                width=8,
+                height=1,
+                primary_band=40,
+                certified_bands=(40,),
+                rotated=False,
+            ),
+        )
+        trace: list[tuple[str, Placement]] = []
+    
+        def compact(
+            candidate: Placement,
+            *_args: object,
+            **_kwargs: object,
+        ) -> finalize.BoundaryCompactionResult:
+            trace.append(("compact", candidate))
+            return finalize.BoundaryCompactionResult(compacted, validate.Report(findings=()))
+    
+        def project(
+            candidate: Placement,
+            *_args: object,
+            **_kwargs: object,
+        ) -> Placement:
+            trace.append(("finalize", candidate))
+            return projected
+    
+        def certify(
+            candidate: Placement,
+            *_args: object,
+            **_kwargs: object,
+        ) -> validate.Report:
+            trace.append(("validate", candidate))
+            return validate.certify(candidate, spec, belt_rules=_BELT_RULES, expect_power=False)
+    
+        monkeypatch.setattr(finalize, "compact_open_boundary_belts_certified", compact)
+        monkeypatch.setattr(finalize, "finalize_placement", project)
+        monkeypatch.setattr(finalize, "_certify", certify)
+    
+>       verdict = production.solver.adapters.validate(routed)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/layout/test_sequence_solver.py:8610: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/flab2bp/layout/sequence_solver.py:5564: in certify
+    completion = finalize.complete_placement(projection)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/flab2bp/layout/finalize.py:3968: in complete_placement
+    report = _certify(
+tests/layout/test_sequence_solver.py:8604: in certify
+    return validate.certify(candidate, spec, belt_rules=_BELT_RULES, expect_power=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/flab2bp/layout/validate.py:6807: in certify
+    return judge_placement(
+src/flab2bp/layout/validate.py:6772: in judge_placement
+    return validate(
+src/flab2bp/layout/validate.py:6877: in validate
+    findings.extend(fn(ctx))
+src/flab2bp/layout/validate.py:2242: in _addon_supply
+    i for i, building in enumerate(bs) if cat.building(building.item_id).is_belt_addon
+                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+item_id = 1
+
+    def building(item_id: int) -> Building:
+        try:
+            return _load()[item_id]
+        except KeyError:
+>           raise KeyError(f"no DSP building with item id {item_id}") from None
+E           KeyError: 'no DSP building with item id 1'
+
+src/flab2bp/dsp/catalog.py:1793: KeyError
+=========================== short test summary info ============================
+FAILED tests/layout/test_sequence_solver.py::test_sequence_completion_rejects_invalid_projection_after_clean_compaction

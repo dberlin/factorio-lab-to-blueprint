@@ -1,0 +1,11 @@
+url=https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11&tre=B rules=BeltAltitudeRules(max_z=Fraction(171, 20), vertical_construction=False, storage_level=2, lab_level=3, from_url=True)
+production: ('geom.altitude_range', 'geom.altitude_step', 'spec.machine_counts')
+bench: ('geom.altitude_range', 'geom.altitude_step', 'spec.machine_counts')
+audit: ('geom.altitude_range', 'geom.altitude_step', 'spec.machine_counts')
+ab: ('geom.altitude_range', 'geom.altitude_step', 'spec.machine_counts')
+url=https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11 rules=BeltAltitudeRules(max_z=Fraction(531, 20), vertical_construction=True, storage_level=8, lab_level=9, from_url=False)
+production: ('spec.machine_counts',)
+bench: ('spec.machine_counts',)
+audit: ('spec.machine_counts',)
+ab: ('spec.machine_counts',)
+FAILURES: []

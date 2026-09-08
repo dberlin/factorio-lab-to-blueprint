@@ -1,0 +1,1 @@
+FAIL incompatible audit candidate labels: AuditCellKey(strategy='freeform', url_id='iron-ingot', spec_index=0, spec_label='no-proliferator', budget=4.0, power=True) -> AuditCellKey(strategy='freeform', url_id='iron-ingot', spec_index=0, spec_label='changed', budget=4.0, power=True)

@@ -1,0 +1,27 @@
+{
+  "scope": "logical transport graph fixtures, not physical paste validation",
+  "boundary": {
+    "expected_output_tail": 4,
+    "marker_output_tails": [],
+    "marker_input_heads": [
+      2,
+      4
+    ],
+    "hierarchy_output_tails": [],
+    "hierarchy_input_heads": [
+      4
+    ]
+  },
+  "cycle": {
+    "leads_back": false,
+    "committed_path_closes_cycle": false,
+    "validator_errors": [
+      {
+        "check": "belt.acyclic",
+        "message": "belt chain forms a cycle through [0, 1, 2]"
+      }
+    ]
+  }
+}
+
+EXIT=0

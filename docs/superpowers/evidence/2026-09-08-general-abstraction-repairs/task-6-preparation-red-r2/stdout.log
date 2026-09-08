@@ -1,0 +1,13 @@
+2 cells, 2 at a time, 64 CP-SAT workers each, cap 3s
+
+!! WALL-CLOCK CAP HIT at 3s with 2 cells unreached.
+
+=== freeform: 0/1 clean -- NOT CLEAN   (refused 0, invalid 0, crashed 0, not run 1)
+    by check: {}
+
+=== sequence-pair: 0/1 clean -- NOT CLEAN   (refused 0, invalid 0, crashed 0, not run 1)
+    by check: {}
+
+24s wall, 0/2 cells
+
+NOT CLEAN. An INVALID cell is worse than a REFUSED one: refusing emits nothing, while an invalid blueprint pastes and then does not run. Fix the invalid ones first.

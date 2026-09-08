@@ -1,0 +1,11 @@
+{
+  "name": "master-web-lint",
+  "command": [
+    "bun",
+    "run",
+    "lint"
+  ],
+  "cwd": "/home/dannyb/sources/factorio-lab-to-blueprint/web",
+  "exit": 0,
+  "wall_s": 4.303567032795399
+}

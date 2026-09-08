@@ -1,0 +1,1 @@
+{"mode": "incumbent_gate", "projected": 6, "certified": 3, "gate_rejections": 3, "projected_without_certification": 3, "rejected_keys": [[[276, 60.0], [276, 60.0], false], [[276, 60.0], [276, 58.0], false], [[276, 58.0], [276, 58.0], false]], "returned_clean": true}

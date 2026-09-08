@@ -1,0 +1,488 @@
+[
+  {
+    "strategy": "freeform",
+    "boundary": "none",
+    "offset": 0.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-freeform-none-0.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "freeform",
+      "--boundary",
+      "none",
+      "--offset",
+      "0.25"
+    ]
+  },
+  {
+    "strategy": "freeform",
+    "boundary": "before_cleanup",
+    "offset": 0.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-freeform-before_cleanup-0.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "freeform",
+      "--boundary",
+      "before_cleanup",
+      "--offset",
+      "0.25"
+    ]
+  },
+  {
+    "strategy": "freeform",
+    "boundary": "before_cleanup",
+    "offset": 5.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-freeform-before_cleanup-5.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "freeform",
+      "--boundary",
+      "before_cleanup",
+      "--offset",
+      "5.25"
+    ]
+  },
+  {
+    "strategy": "freeform",
+    "boundary": "after_cleanup",
+    "offset": 0.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-freeform-after_cleanup-0.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "freeform",
+      "--boundary",
+      "after_cleanup",
+      "--offset",
+      "0.25"
+    ]
+  },
+  {
+    "strategy": "freeform",
+    "boundary": "after_cleanup",
+    "offset": 5.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-freeform-after_cleanup-5.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "freeform",
+      "--boundary",
+      "after_cleanup",
+      "--offset",
+      "5.25"
+    ]
+  },
+  {
+    "strategy": "freeform",
+    "boundary": "after_projection",
+    "offset": 0.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-freeform-after_projection-0.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "freeform",
+      "--boundary",
+      "after_projection",
+      "--offset",
+      "0.25"
+    ]
+  },
+  {
+    "strategy": "freeform",
+    "boundary": "after_projection",
+    "offset": 5.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-freeform-after_projection-5.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "freeform",
+      "--boundary",
+      "after_projection",
+      "--offset",
+      "5.25"
+    ]
+  },
+  {
+    "strategy": "freeform",
+    "boundary": "during_certification",
+    "offset": 0.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-freeform-during_certification-0.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "freeform",
+      "--boundary",
+      "during_certification",
+      "--offset",
+      "0.25"
+    ]
+  },
+  {
+    "strategy": "freeform",
+    "boundary": "during_certification",
+    "offset": 5.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-freeform-during_certification-5.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "freeform",
+      "--boundary",
+      "during_certification",
+      "--offset",
+      "5.25"
+    ]
+  },
+  {
+    "strategy": "sequence",
+    "boundary": "none",
+    "offset": 0.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-sequence-none-0.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "sequence",
+      "--boundary",
+      "none",
+      "--offset",
+      "0.25"
+    ]
+  },
+  {
+    "strategy": "sequence",
+    "boundary": "before_cleanup",
+    "offset": 0.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-sequence-before_cleanup-0.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "sequence",
+      "--boundary",
+      "before_cleanup",
+      "--offset",
+      "0.25"
+    ]
+  },
+  {
+    "strategy": "sequence",
+    "boundary": "before_cleanup",
+    "offset": 5.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-sequence-before_cleanup-5.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "sequence",
+      "--boundary",
+      "before_cleanup",
+      "--offset",
+      "5.25"
+    ]
+  },
+  {
+    "strategy": "sequence",
+    "boundary": "after_cleanup",
+    "offset": 0.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-sequence-after_cleanup-0.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "sequence",
+      "--boundary",
+      "after_cleanup",
+      "--offset",
+      "0.25"
+    ]
+  },
+  {
+    "strategy": "sequence",
+    "boundary": "after_cleanup",
+    "offset": 5.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-sequence-after_cleanup-5.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "sequence",
+      "--boundary",
+      "after_cleanup",
+      "--offset",
+      "5.25"
+    ]
+  },
+  {
+    "strategy": "sequence",
+    "boundary": "after_projection",
+    "offset": 0.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-sequence-after_projection-0.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "sequence",
+      "--boundary",
+      "after_projection",
+      "--offset",
+      "0.25"
+    ]
+  },
+  {
+    "strategy": "sequence",
+    "boundary": "after_projection",
+    "offset": 5.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-sequence-after_projection-5.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "sequence",
+      "--boundary",
+      "after_projection",
+      "--offset",
+      "5.25"
+    ]
+  },
+  {
+    "strategy": "sequence",
+    "boundary": "during_certification",
+    "offset": 0.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-sequence-during_certification-0.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "sequence",
+      "--boundary",
+      "during_certification",
+      "--offset",
+      "0.25"
+    ]
+  },
+  {
+    "strategy": "sequence",
+    "boundary": "during_certification",
+    "offset": 5.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-sequence-during_certification-5.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "sequence",
+      "--boundary",
+      "during_certification",
+      "--offset",
+      "5.25"
+    ]
+  },
+  {
+    "strategy": "hierarchy",
+    "boundary": "none",
+    "offset": 0.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-hierarchy-none-0.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "hierarchy",
+      "--boundary",
+      "none",
+      "--offset",
+      "0.25"
+    ]
+  },
+  {
+    "strategy": "hierarchy",
+    "boundary": "before_cleanup",
+    "offset": 0.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-hierarchy-before_cleanup-0.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "hierarchy",
+      "--boundary",
+      "before_cleanup",
+      "--offset",
+      "0.25"
+    ]
+  },
+  {
+    "strategy": "hierarchy",
+    "boundary": "before_cleanup",
+    "offset": 5.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-hierarchy-before_cleanup-5.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "hierarchy",
+      "--boundary",
+      "before_cleanup",
+      "--offset",
+      "5.25"
+    ]
+  },
+  {
+    "strategy": "hierarchy",
+    "boundary": "after_cleanup",
+    "offset": 0.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-hierarchy-after_cleanup-0.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "hierarchy",
+      "--boundary",
+      "after_cleanup",
+      "--offset",
+      "0.25"
+    ]
+  },
+  {
+    "strategy": "hierarchy",
+    "boundary": "after_cleanup",
+    "offset": 5.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-hierarchy-after_cleanup-5.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "hierarchy",
+      "--boundary",
+      "after_cleanup",
+      "--offset",
+      "5.25"
+    ]
+  },
+  {
+    "strategy": "hierarchy",
+    "boundary": "after_projection",
+    "offset": 0.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-hierarchy-after_projection-0.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "hierarchy",
+      "--boundary",
+      "after_projection",
+      "--offset",
+      "0.25"
+    ]
+  },
+  {
+    "strategy": "hierarchy",
+    "boundary": "after_projection",
+    "offset": 5.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-hierarchy-after_projection-5.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "hierarchy",
+      "--boundary",
+      "after_projection",
+      "--offset",
+      "5.25"
+    ]
+  },
+  {
+    "strategy": "hierarchy",
+    "boundary": "during_certification",
+    "offset": 0.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-hierarchy-during_certification-0.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "hierarchy",
+      "--boundary",
+      "during_certification",
+      "--offset",
+      "0.25"
+    ]
+  },
+  {
+    "strategy": "hierarchy",
+    "boundary": "during_certification",
+    "offset": 5.25,
+    "exit": 0,
+    "log": ".superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-clock-hierarchy-during_certification-5.25-integrated.log",
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python",
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-14-completion-probe.py",
+      "clock",
+      "--strategy",
+      "hierarchy",
+      "--boundary",
+      "during_certification",
+      "--offset",
+      "5.25"
+    ]
+  }
+]

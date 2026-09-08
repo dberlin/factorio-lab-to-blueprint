@@ -1,0 +1,6 @@
+{
+  "overall_correctness": "correct",
+  "explanation": "No actionable patch-introduced integration findings were found against bbc8889d, including the formerly frozen 30-file completion/band tranche now committed as 9d32ec99: reviewed request/save-policy transport, pipeline/race/island/hierarchy consumers, completion-result dispatch and report validity, audit terminal accounting/comparison, routing-owner migration, band-envelope admission, and web trace/document publication boundaries. The reviewed tranche is merge-ready based on source inspection and retained evidence: final Ruff/format/mypy gates, Main’s 156 passing focused cases, 27/27 clock probes, frozen routing equivalence, real completion/band witnesses, and browser final-drain/Stop-watching results. This read-only review ran no project execution and used static inspection after LSP references failed; it does not claim global test or factory success, and broad routing-suite timeouts, the inherited cold all-products refusal, unexercised Windows behavior, deferred machine/alias semantics, and separately scoped hierarchy target failures remain explicit limits.",
+  "confidence": 0.9,
+  "findings": []
+}

@@ -1,0 +1,6 @@
+{
+  "overall_correctness": "correct",
+  "explanation": "Spec review passes for the Tasks11/12 implementation: AttemptFacts preserves the server’s seed records, nullable heads, exact rational strings and entry-lane counts; BuildReport selects attempt-local facts before winner fallback, presents priming as one-time startup rather than recurring supply, and retains invalid-artifact withholding. Quality review passes: the new report regression exercises actual pollBuild decoding and observable winner/loser/no-seed differences, while the bounds regression independently transforms corners of separated rectangular objects at 0°, 90° and 37°; the extent correction matches BuildingInstances and CameraRig without changing physical dimensions, visual scale or instance transforms. No patch-introduced actionable defects found; no validation or edits were performed, and actual-browser acceptance remains pending with Main’s integrated scenario rather than being inferred from the reported 59 passing client cases.",
+  "confidence": 0.94,
+  "findings": []
+}

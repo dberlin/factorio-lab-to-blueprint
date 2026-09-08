@@ -1,0 +1,16 @@
+{
+  "findings": [
+    {
+      "title": "Release the result transport before declaring audit teardown complete",
+      "body": "If the cap kills a worker while it is sending a result larger than the pipe's atomic-write capacity (for example, a Result carrying many projection/attempt failures), CPython's executor manager can already be blocked inside result_reader.recv() on the incomplete frame. kill_workers() calls shutdown(wait=False), which neither closes the retained result queue nor joins that manager; joining only multiprocessing children leaves the parent's queue writer open, so the reader cannot receive EOF. The CLI then hangs indefinitely in concurrent.futures.process._python_exit() joining the manager even though every worker was reaped, violating the whole-audit cap. Retain and release the transport/manager ownership as part of bounded teardown; the existing strategy_race._terminate_executor handles this same partial-message hazard.",
+      "priority": 1,
+      "confidence": 0.98,
+      "file_path": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/scripts/audit.py",
+      "line_start": 799,
+      "line_end": 802
+    }
+  ],
+  "overall_correctness": "incorrect",
+  "explanation": "Task6 spec verdict: not yet approved—the ordinal ledger, once-per-URL supervised preparation, jobs=1 shared supervision, final ready-result harvest, original worker-error outcomes, bounded metadata clock, and explicit TERMINATED/NOT_RUN dispatch address the earlier attribution/preparation/accounting defects, but the whole-process lifetime requirement remains incomplete because executor result-transport teardown can hang at interpreter exit. Task6 quality verdict: one remaining P1 at scripts/audit.py:799–802; Main's supplied reverse proof (3.245s total, 0.02364s post-cutoff, sequence-pair CLEAN plus freeform TERMINATED) and preparation proof (3.017s, two NOT_RUN), both with no survivors, establish those exercised paths but do not cover interrupted result-frame transport, and this read-only review ran no validation or Windows runtime proof. Task5 exact-first correction verdict: addressed—identity.py:94–119 reserves complete-key matches before unmatched label-treatment resolution, preserves ambiguity rejection and checks metadata on exact pairs; distinct equal-slot keys, mixed exact/rename and ambiguity controls are present, the earlier Tasks4/5 approval otherwise stands, and inherited audit_compare nonfinite-metric handling remains an explicitly excluded limitation rather than a patch finding.",
+  "confidence": 0.97
+}

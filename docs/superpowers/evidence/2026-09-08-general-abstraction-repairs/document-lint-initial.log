@@ -1,0 +1,14 @@
+$ oxlint . && oxfmt --check .
+
+  x react(no-array-index-key): Usage of Array index in keys is not allowed
+     ,-[src/ui/BuildReport.tsx:169:21]
+ 168 |               seeds.recipes.map((seed, index) => (
+ 169 |                 <li key={`${item}/${seed.recipe}/${index}`}>
+     :                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 170 |                   {item}: {seed.seed_items} items — {seed.recipe}, {seed.machines} machines
+     `----
+  help: Use a unique data-dependent key to avoid unnecessary rerenders
+
+Found 0 warnings and 1 error.
+Finished in 147ms on 88 files with 135 rules using 128 threads.
+error: script "lint" exited with code 1

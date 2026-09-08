@@ -1,0 +1,9 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_collector_failure_keeps_complete_frames_from_the_same_queue_pass _____
+tests/web/test_jobs.py:822: in test_collector_failure_keeps_complete_frames_from_the_same_queue_pass
+    _object(frame)["candidate"] for frame in cast(list[JsonValue], page["frames"])
+                                                                   ^^^^^^^^^^^^^^
+E   KeyError: 'frames'
+=========================== short test summary info ============================
+FAILED tests/web/test_jobs.py::test_collector_failure_keeps_complete_frames_from_the_same_queue_pass

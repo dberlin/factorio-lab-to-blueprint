@@ -1,0 +1,1 @@
+FAIL incompatible audit power_tower for AuditCellKey(strategy='freeform', url_id='iron-ingot', spec_index=0, spec_label='no-proliferator', budget=4.0, power=True): 'auto' -> 'satellite-substation'

@@ -1,0 +1,15 @@
+{
+  "name": "master-ruff",
+  "command": [
+    "uv",
+    "run",
+    "ruff",
+    "check",
+    "src",
+    "tests",
+    "scripts"
+  ],
+  "cwd": "/home/dannyb/sources/factorio-lab-to-blueprint",
+  "exit": 0,
+  "wall_s": 0.2666679921094328
+}

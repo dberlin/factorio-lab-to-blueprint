@@ -1,0 +1,23 @@
+$ rstest run tests/state/BlueprintProvider.test.tsx tests/ui/BuildPanel.test.tsx tests/ui/TracePanel.test.tsx tests/ui/InputPanel.test.tsx tests/ui/Toolbar.test.tsx tests/ui/InfoPanel.test.tsx tests/ui/BomPanel.test.tsx
+  Rstest v0.11.12
+
+ ✓ tests/ui/BomPanel.test.tsx (2)
+ ✓ tests/ui/Toolbar.test.tsx (3)
+ ✓ tests/ui/InfoPanel.test.tsx (3)
+ ✓ tests/state/BlueprintProvider.test.tsx (10)
+ ✓ tests/ui/InputPanel.test.tsx (11)
+ ✓ tests/ui/BuildPanel.test.tsx (43)
+  ✓ progress says where the job is while it is still running (328ms)
+  ✓ the trace panel keeps polling past job settlement until it observes complete, so late frames are not lost (562ms)
+ ✓ tests/ui/TracePanel.test.tsx (21)
+  ✓ passes the returned cursor straight back as `from`, with no off-by-one (307ms)
+  ✓ an empty open page does not hide the delayed final frame from the scrubber (875ms)
+  ✓ unmounting mid-poll stops the loop and makes no further requests (767ms)
+  ✓ a transient poll failure is retried, not treated as the permanent end of the live tail (560ms)
+  ✓ the poll loop says so once it gives up after repeated consecutive failures (2.52s)
+  ✓ a pinned snapshot that ages out of the buffered window says so, rather than silently tracking newest (337ms)
+
+ Test Files 7 passed
+      Tests 93 passed
+   Duration 6.84s (build 242ms, tests 6.59s)
+

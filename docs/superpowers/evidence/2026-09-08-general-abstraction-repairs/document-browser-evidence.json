@@ -1,0 +1,15 @@
+{
+  "evidence": [
+    "winner instructions visible",
+    "late trace collected without replacing artifact",
+    "explicit scrub publishes non-pasteable rotated scene; inspect screenshot framing",
+    "selected losing attempt has its own exact priming and lane instructions",
+    "explicit trace clears prior parse error",
+    "newer manual import wins over older URL completion",
+    "no-seed result has no priming warning",
+    "single completed artifact restored after explicit trace without rebuilding",
+    "single completed artifact restored after newer import without rebuilding"
+  ],
+  "manualTitle": "QuickStart-Step3-Oil-RedCube",
+  "visualFollowup": "Inspect rotated screenshot; click a rendered plant and then scrub to check inspector clears. Exercise Q/E/O framing and Stop watching versus solving separately."
+}

@@ -1,0 +1,16 @@
+{
+  "overall_correctness": "incorrect",
+  "explanation": "Scoped spec/quality review found one remaining frame-preservation defect: a transport error discards valid events already dequeued in the same batch. Otherwise, the reviewed native framing adapter, parent-only spawn serialization, producer half-close, executor acquisition/release, and closed/error publication paths match the requested lifecycle contract. Main reports 11 passing cases in 20.07 seconds; this review inspected source and retained reports without rerunning validation, and Windows received source review only.",
+  "confidence": 0.92,
+  "findings": [
+    {
+      "title": "Preserve successfully dequeued events before reporting transport failure",
+      "body": "When a drain pass reads one or more complete SearchEvents and then encounters an interrupted header/body, the newly propagated OSError escapes before `taken` is returned. `TraceCollector.drain_once()` therefore receives none of those successfully decoded events and records failure without publishing them; a healthy frame immediately preceding the damaged frame can disappear entirely. Previously, the OSError/ValueError handler returned the accumulated events. Preserve that successful prefix while still propagating the real failure to the collector—for example, deliver events incrementally before reporting the error. The retained regressions publish their prior frame in a separate pass, so they do not cover this same-pass loss.",
+      "priority": 2,
+      "confidence": 0.98,
+      "file_path": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/src/flab2bp/layout/observe_channel.py",
+      "line_start": 161,
+      "line_end": 168
+    }
+  ]
+}

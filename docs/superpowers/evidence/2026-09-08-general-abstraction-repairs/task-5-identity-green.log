@@ -1,0 +1,5 @@
+duplicate exit 1 FAIL duplicate audit cell: AuditCellKey(strategy='freeform', url_id='iron-ingot', spec_index=0, spec_label='no-proliferator', budget=4.0, power=True)
+rank exit 1 FAIL incompatible audit machine_rank for AuditCellKey(strategy='freeform', url_id='iron-ingot', spec_index=0, spec_label='no-proliferator', budget=4.0, power=True): 'exact' -> 'up-to'
+missing exit 1 FAIL missing exact audit identity/configuration fields: ['budget']
+reordered exit 0 clean 2  refused 0  invalid 0  crashed 0  paired 2  area ratio 1.0000  p95 1.0s
+PASS

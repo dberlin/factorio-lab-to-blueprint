@@ -1,0 +1,12 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_distinct_full_keys_share_a_slot_without_becoming_duplicates _______
+tests/scripts/test_audit_compare.py:384: in test_distinct_full_keys_share_a_slot_without_becoming_duplicates
+    verdict = audit_compare.compare(
+scripts/audit_compare.py:72: in compare
+    pairs = pair_audit_cells(
+src/flab2bp/bench/identity.py:94: in pair_audit_cells
+    raise ValueError(f"incompatible audit candidate slot: {key}")
+E   ValueError: incompatible audit candidate slot: AuditCellKey(strategy='freeform', url_id='iron', spec_index=0, spec_label='sprayed', budget=30.0, power=True)
+=========================== short test summary info ============================
+FAILED tests/scripts/test_audit_compare.py::test_distinct_full_keys_share_a_slot_without_becoming_duplicates

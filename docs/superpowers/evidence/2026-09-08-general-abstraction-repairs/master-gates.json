@@ -1,0 +1,97 @@
+[
+  {
+    "name": "master-ruff",
+    "command": [
+      "uv",
+      "run",
+      "ruff",
+      "check",
+      "src",
+      "tests",
+      "scripts"
+    ],
+    "cwd": "/home/dannyb/sources/factorio-lab-to-blueprint",
+    "exit": 0,
+    "wall_s": 0.2666679921094328
+  },
+  {
+    "name": "master-mypy",
+    "command": [
+      "uv",
+      "run",
+      "mypy",
+      "src"
+    ],
+    "cwd": "/home/dannyb/sources/factorio-lab-to-blueprint",
+    "exit": 0,
+    "wall_s": 9.23043622681871
+  },
+  {
+    "name": "master-consumers",
+    "command": [
+      "taskset",
+      "-c",
+      "96-127",
+      "uv",
+      "run",
+      "pytest",
+      "-q",
+      "tests/layout/hierarchy/test_compose.py",
+      "tests/layout/test_finalize.py",
+      "tests/indexed",
+      "tests/test_pipeline_cli_strategy.py",
+      "tests/layout/test_sequence_solver.py::test_sequence_completion_rejects_invalid_projection_after_clean_compaction",
+      "tests/layout/test_sequence_solver.py::test_validator_finishes_inside_atomic_completion_grace",
+      "tests/layout/test_sequence_solver.py::test_validator_crossing_atomic_completion_grace_returns_incomplete_budget",
+      "tests/layout/test_sequence_solver.py::test_projection_crossing_deadline_returns_incomplete_budget",
+      "tests/layout/test_freeform.py::test_sweep_validates_exact_compacted_and_finalized_placement_before_completion"
+    ],
+    "cwd": "/home/dannyb/sources/factorio-lab-to-blueprint",
+    "exit": 0,
+    "wall_s": 26.09190167207271
+  },
+  {
+    "name": "master-web-typecheck",
+    "command": [
+      "bun",
+      "run",
+      "typecheck"
+    ],
+    "cwd": "/home/dannyb/sources/factorio-lab-to-blueprint/web",
+    "exit": 0,
+    "wall_s": 1.578136808006093
+  },
+  {
+    "name": "master-web-lint",
+    "command": [
+      "bun",
+      "run",
+      "lint"
+    ],
+    "cwd": "/home/dannyb/sources/factorio-lab-to-blueprint/web",
+    "exit": 0,
+    "wall_s": 4.303567032795399
+  },
+  {
+    "name": "master-web-test",
+    "command": [
+      "bun",
+      "run",
+      "test"
+    ],
+    "cwd": "/home/dannyb/sources/factorio-lab-to-blueprint/web",
+    "exit": 0,
+    "wall_s": 9.951944824075326
+  },
+  {
+    "name": "master-web-build",
+    "command": [
+      "bun",
+      "run",
+      "build"
+    ],
+    "cwd": "/home/dannyb/sources/factorio-lab-to-blueprint/web",
+    "exit": 0,
+    "wall_s": 2.0189663311466575
+  }
+]

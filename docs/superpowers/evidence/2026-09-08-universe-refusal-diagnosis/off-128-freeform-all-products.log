@@ -1,0 +1,3 @@
+off 128 freeform all-products REFUSED 0.0 the 30s deadline passed with no completed packing of 53 strips; 2 packs were routed in that time and the best of them still left 17 nets unrouted (worst 30), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec
+
+EXIT=0

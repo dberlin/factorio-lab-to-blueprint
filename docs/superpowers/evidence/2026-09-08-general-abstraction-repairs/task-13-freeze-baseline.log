@@ -1,0 +1,4 @@
+{"preserved": "two-stage"}
+{"preserved": "sharing-arrival"}
+{"preserved": "cargo-and-surplus"}
+{"frozen": "late-surplus", "digest": "9ce450f60db959e705146aa2e8197cb3f7bc7973fd0567d0be668001474987b3", "preparation": {"wall_s": 3.34071018290706, "peak_bytes": 378069, "calls": {"call:_CorridorReservations.snapshot": 2, "call:_make_grid": 1, "call:_routing_flags": 18, "call:_with_sibling_groups": 1, "construct:Buildings": 1, "construct:MutableBuildings": 1, "construct:Nets": 1, "construct:PortReservations": 1, "construct:_Canvas": 1, "construct:_Grid": 1, "construct:_Net": 5, "construct:_PreparedNet": 7, "construct:_PreparedRoutingProblem": 1}}}

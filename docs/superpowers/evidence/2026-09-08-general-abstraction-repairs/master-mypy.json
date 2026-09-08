@@ -1,0 +1,12 @@
+{
+  "name": "master-mypy",
+  "command": [
+    "uv",
+    "run",
+    "mypy",
+    "src"
+  ],
+  "cwd": "/home/dannyb/sources/factorio-lab-to-blueprint",
+  "exit": 0,
+  "wall_s": 9.23043622681871
+}

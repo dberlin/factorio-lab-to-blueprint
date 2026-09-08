@@ -1,0 +1,17 @@
+{"case": "two-stage", "phase": "detailed", "calls": "identical", "before_wall_s": 0.043045582016929984, "after_wall_s": 0.0446725320070982, "before_peak_bytes": 250147, "after_peak_bytes": 250147}
+{"case": "two-stage", "phase": "interrupted", "calls": "identical", "before_wall_s": 0.009131185943260789, "after_wall_s": 0.01047887816093862, "before_peak_bytes": 127398, "after_peak_bytes": 127398}
+{"case": "two-stage", "phase": "preparation", "calls": "identical", "before_wall_s": 0.3217909580562264, "after_wall_s": 0.32503608195111156, "before_peak_bytes": 721458, "after_peak_bytes": 721434}
+{"case": "two-stage", "phase": "relaxed", "calls": "identical", "before_wall_s": 0.008521406911313534, "after_wall_s": 0.011894634924829006, "before_peak_bytes": 136931, "after_peak_bytes": 136931}
+{"case": "sharing-arrival", "phase": "detailed", "calls": "identical", "before_wall_s": 1.0683400249108672, "after_wall_s": 1.081718147965148, "before_peak_bytes": 679346, "after_peak_bytes": 679146}
+{"case": "sharing-arrival", "phase": "interrupted", "calls": "identical", "before_wall_s": 0.016550678992643952, "after_wall_s": 0.016319721937179565, "before_peak_bytes": 136126, "after_peak_bytes": 136126}
+{"case": "sharing-arrival", "phase": "preparation", "calls": "identical", "before_wall_s": 0.9785612020641565, "after_wall_s": 0.9987544808536768, "before_peak_bytes": 292032, "after_peak_bytes": 298751}
+{"case": "sharing-arrival", "phase": "relaxed", "calls": "identical", "before_wall_s": 0.027836748864501715, "after_wall_s": 0.024233856005594134, "before_peak_bytes": 165019, "after_peak_bytes": 165019}
+{"case": "cargo-and-surplus", "phase": "detailed", "calls": "identical", "before_wall_s": 0.1309150760062039, "after_wall_s": 0.13419519504532218, "before_peak_bytes": 433563, "after_peak_bytes": 433713}
+{"case": "cargo-and-surplus", "phase": "interrupted", "calls": "identical", "before_wall_s": 0.015034236013889313, "after_wall_s": 0.015545148868113756, "before_peak_bytes": 182794, "after_peak_bytes": 182794}
+{"case": "cargo-and-surplus", "phase": "preparation", "calls": "identical", "before_wall_s": 4.917374582029879, "after_wall_s": 4.975822065956891, "before_peak_bytes": 5733543, "after_peak_bytes": 5729644}
+{"case": "cargo-and-surplus", "phase": "relaxed", "calls": "identical", "before_wall_s": 0.012941761873662472, "after_wall_s": 0.012568922014907002, "before_peak_bytes": 199067, "after_peak_bytes": 199067}
+{"case": "late-surplus", "phase": "detailed", "calls": "identical", "before_wall_s": 0.03735202900134027, "after_wall_s": 0.034368769032880664, "before_peak_bytes": 197483, "after_peak_bytes": 197483}
+{"case": "late-surplus", "phase": "interrupted", "calls": "identical", "before_wall_s": 0.009095219895243645, "after_wall_s": 0.008464107988402247, "before_peak_bytes": 111526, "after_peak_bytes": 111526}
+{"case": "late-surplus", "phase": "preparation", "calls": "identical", "before_wall_s": 1.459962849970907, "after_wall_s": 1.381002448964864, "before_peak_bytes": 224403, "after_peak_bytes": 225061}
+{"case": "late-surplus", "phase": "relaxed", "calls": "identical", "before_wall_s": 0.006930047878995538, "after_wall_s": 0.005940305069088936, "before_peak_bytes": 110947, "after_peak_bytes": 110947}
+same prepared snapshots, relaxed outcomes, detailed links/findings, isolation and instrumented construction/copy counts

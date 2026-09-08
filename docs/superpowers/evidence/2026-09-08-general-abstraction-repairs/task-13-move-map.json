@@ -1,0 +1,2940 @@
+{
+  "source": "src/flab2bp/layout/freeform.py",
+  "destination": "src/flab2bp/layout/routing_domain.py",
+  "symbols": [
+    {
+      "name": "WEST_CHANNEL",
+      "start": 215,
+      "end": 215
+    },
+    {
+      "name": "_LEVEL_HEIGHT",
+      "start": 239,
+      "end": 239
+    },
+    {
+      "name": "LEVELS",
+      "start": 290,
+      "end": 290
+    },
+    {
+      "name": "_crossing_ban_levels",
+      "start": 293,
+      "end": 339
+    },
+    {
+      "name": "RRR_MAX",
+      "start": 343,
+      "end": 343
+    },
+    {
+      "name": "_SINGLE_ROUND_NETS",
+      "start": 347,
+      "end": 347
+    },
+    {
+      "name": "_COMMIT_REPAIR_PASSES",
+      "start": 352,
+      "end": 352
+    },
+    {
+      "name": "_RELATION_STRIP_PAIR",
+      "start": 363,
+      "end": 363
+    },
+    {
+      "name": "_ACCESS_TIE_DETERMINISTIC_WORK",
+      "start": 389,
+      "end": 389
+    },
+    {
+      "name": "_ACCESS_RANK_DETERMINISTIC_WORK",
+      "start": 396,
+      "end": 396
+    },
+    {
+      "name": "_ACCESS_CUT_ROUNDS",
+      "start": 398,
+      "end": 398
+    },
+    {
+      "name": "_PORT_ACCESS_PROBE_KEEP",
+      "start": 408,
+      "end": 408
+    },
+    {
+      "name": "_RRR_STALE_ROUNDS",
+      "start": 417,
+      "end": 417
+    },
+    {
+      "name": "_REPAIR_CROSSING",
+      "start": 482,
+      "end": 482
+    },
+    {
+      "name": "_REPAIR_MAX_VICTIMS",
+      "start": 489,
+      "end": 489
+    },
+    {
+      "name": "_REPAIR_PASSES",
+      "start": 495,
+      "end": 495
+    },
+    {
+      "name": "_EXACT_HEURISTIC_GOALS",
+      "start": 500,
+      "end": 500
+    },
+    {
+      "name": "_ALT_LANDMARKS",
+      "start": 558,
+      "end": 558
+    },
+    {
+      "name": "_MAX_EXPANSIONS",
+      "start": 565,
+      "end": 565
+    },
+    {
+      "name": "_ROUTING_BUDGET",
+      "start": 570,
+      "end": 570
+    },
+    {
+      "name": "_GROUND_TOLL",
+      "start": 608,
+      "end": 608
+    },
+    {
+      "name": "_LEVEL_TOLL",
+      "start": 612,
+      "end": 612
+    },
+    {
+      "name": "_RAMPS",
+      "start": 619,
+      "end": 622
+    },
+    {
+      "name": "_TENTATIVE",
+      "start": 627,
+      "end": 627
+    },
+    {
+      "name": "_BLAME_MAX_POCKET",
+      "start": 637,
+      "end": 637
+    },
+    {
+      "name": "_BLAME_MAX_WALL",
+      "start": 666,
+      "end": 666
+    },
+    {
+      "name": "_BLAME_WEIGHT",
+      "start": 676,
+      "end": 676
+    },
+    {
+      "name": "_DEADLINE_CHECK_EVERY",
+      "start": 685,
+      "end": 685
+    },
+    {
+      "name": "_ROUTE_RING",
+      "start": 711,
+      "end": 711
+    },
+    {
+      "name": "_ENTRY_RING",
+      "start": 712,
+      "end": 712
+    },
+    {
+      "name": "_expired",
+      "start": 764,
+      "end": 781
+    },
+    {
+      "name": "CargoKey",
+      "start": 799,
+      "end": 799
+    },
+    {
+      "name": "_CargoSink",
+      "start": 800,
+      "end": 800
+    },
+    {
+      "name": "_Group",
+      "start": 803,
+      "end": 826
+    },
+    {
+      "name": "StagedStaticVariantId",
+      "start": 829,
+      "end": 838
+    },
+    {
+      "name": "StagedStaticClearanceKey",
+      "start": 841,
+      "end": 857
+    },
+    {
+      "name": "StagedStaticClearanceRequirement",
+      "start": 860,
+      "end": 876
+    },
+    {
+      "name": "Strip",
+      "start": 879,
+      "end": 1314
+    },
+    {
+      "name": "_staged_static_clearance_key",
+      "start": 1317,
+      "end": 1336
+    },
+    {
+      "name": "_STAGED_CLEARANCE_KEYS_MEMO",
+      "start": 1355,
+      "end": 1355
+    },
+    {
+      "name": "_STAGED_CLEARANCE_KEYS_MEMO_LIMIT",
+      "start": 1356,
+      "end": 1356
+    },
+    {
+      "name": "_STAGED_CLEARANCE_KEY_FIELDS",
+      "start": 1366,
+      "end": 1377
+    },
+    {
+      "name": "_UNREAD_BY_STAGED_CLEARANCE",
+      "start": 1378,
+      "end": 1402
+    },
+    {
+      "name": "_staged_static_clearance_keys",
+      "start": 1405,
+      "end": 1450
+    },
+    {
+      "name": "_staged_static_clearance_keys_uncached",
+      "start": 1453,
+      "end": 1477
+    },
+    {
+      "name": "_STAGED_STATIC_PROOF_CANCELLED",
+      "start": 1480,
+      "end": 1483
+    },
+    {
+      "name": "_poll_staged_static_proof_deadline",
+      "start": 1486,
+      "end": 1489
+    },
+    {
+      "name": "_staged_static_effective_anchor_ranges",
+      "start": 1492,
+      "end": 1512
+    },
+    {
+      "name": "_staged_static_relation_projection_risks_uncached",
+      "start": 1515,
+      "end": 1699
+    },
+    {
+      "name": "_staged_static_relation_projection_risk_uncached",
+      "start": 1702,
+      "end": 1710
+    },
+    {
+      "name": "_STAGED_STATIC_RELATION_RISK_CACHE",
+      "start": 1713,
+      "end": 1716
+    },
+    {
+      "name": "_staged_static_relation_projection_risks",
+      "start": 1719,
+      "end": 1739
+    },
+    {
+      "name": "_staged_static_relation_projection_risk",
+      "start": 1742,
+      "end": 1747
+    },
+    {
+      "name": "_staged_static_preclearance_proof_uncached",
+      "start": 1750,
+      "end": 1760
+    },
+    {
+      "name": "_cached_staged_static_preclearance_proved",
+      "start": 1763,
+      "end": 1769
+    },
+    {
+      "name": "_StagedStaticPreclearanceProof",
+      "start": 1772,
+      "end": 1794
+    },
+    {
+      "name": "_staged_static_preclearance_proved",
+      "start": 1797,
+      "end": 1797
+    },
+    {
+      "name": "_staged_static_projection_peers",
+      "start": 1800,
+      "end": 1822
+    },
+    {
+      "name": "_sink_demand",
+      "start": 1836,
+      "end": 1871
+    },
+    {
+      "name": "DEST_SEP",
+      "start": 1878,
+      "end": 1878
+    },
+    {
+      "name": "_dests",
+      "start": 1881,
+      "end": 1887
+    },
+    {
+      "name": "_adapt",
+      "start": 2117,
+      "end": 2152
+    },
+    {
+      "name": "_strip_output_lane_id",
+      "start": 2448,
+      "end": 2467
+    },
+    {
+      "name": "_producer_output_stack",
+      "start": 2470,
+      "end": 2517
+    },
+    {
+      "name": "_strip_merge_plans",
+      "start": 2520,
+      "end": 2576
+    },
+    {
+      "name": "DirectInsertId",
+      "start": 2934,
+      "end": 2953
+    },
+    {
+      "name": "_ExactRetrySource",
+      "start": 3723,
+      "end": 3723
+    },
+    {
+      "name": "_ExactRetryBuildingSignature",
+      "start": 3724,
+      "end": 3732
+    },
+    {
+      "name": "_ExactRetryEvidence",
+      "start": 3735,
+      "end": 3741
+    },
+    {
+      "name": "_exact_retry_evidence",
+      "start": 3753,
+      "end": 3784
+    },
+    {
+      "name": "_Pack",
+      "start": 3870,
+      "end": 3880
+    },
+    {
+      "name": "_staged_static_clearance_requirement",
+      "start": 4028,
+      "end": 4057
+    },
+    {
+      "name": "_collision_pose",
+      "start": 5302,
+      "end": 5313
+    },
+    {
+      "name": "_relative_rigid_frame_pose",
+      "start": 5316,
+      "end": 5334
+    },
+    {
+      "name": "_static_collider_span",
+      "start": 5337,
+      "end": 5341
+    },
+    {
+      "name": "_building_collider_hits",
+      "start": 5344,
+      "end": 5390
+    },
+    {
+      "name": "_coater_keepout_hits",
+      "start": 5393,
+      "end": 5499
+    },
+    {
+      "name": "_splitter_stack_geometry",
+      "start": 5502,
+      "end": 5522
+    },
+    {
+      "name": "_power_coverage_discs",
+      "start": 5525,
+      "end": 5561
+    },
+    {
+      "name": "_buildings_are_powered",
+      "start": 5564,
+      "end": 5573
+    },
+    {
+      "name": "_junction_site_is_clear",
+      "start": 5576,
+      "end": 5586
+    },
+    {
+      "name": "JunctionOffsetKey",
+      "start": 5589,
+      "end": 5589
+    },
+    {
+      "name": "_JUNCTION_BAN_OFFSET_CACHE",
+      "start": 5595,
+      "end": 5595
+    },
+    {
+      "name": "_junction_ban_offsets",
+      "start": 5598,
+      "end": 5644
+    },
+    {
+      "name": "_cancellable_junction_ban_offsets",
+      "start": 5647,
+      "end": 5701
+    },
+    {
+      "name": "_prepared_junction_ban",
+      "start": 5704,
+      "end": 5791
+    },
+    {
+      "name": "_SorterStacks",
+      "start": 5794,
+      "end": 5810
+    },
+    {
+      "name": "_NO_SORTER_STACKS",
+      "start": 5814,
+      "end": 5814
+    },
+    {
+      "name": "_LaneStacks",
+      "start": 5817,
+      "end": 5844
+    },
+    {
+      "name": "_NO_LANE_STACKS",
+      "start": 5848,
+      "end": 5848
+    },
+    {
+      "name": "_Canvas",
+      "start": 5851,
+      "end": 6181
+    },
+    {
+      "name": "_core_bounds",
+      "start": 6184,
+      "end": 6193
+    },
+    {
+      "name": "_grow",
+      "start": 6196,
+      "end": 6198
+    },
+    {
+      "name": "_sorter_tiers_for",
+      "start": 6201,
+      "end": 6210
+    },
+    {
+      "name": "_sorter_stacks_for",
+      "start": 6213,
+      "end": 6230
+    },
+    {
+      "name": "_lane_stacks_for",
+      "start": 6233,
+      "end": 6245
+    },
+    {
+      "name": "_pick_sorter",
+      "start": 6248,
+      "end": 6282
+    },
+    {
+      "name": "_Port",
+      "start": 6285,
+      "end": 6347
+    },
+    {
+      "name": "_PreparedPort",
+      "start": 6350,
+      "end": 6360
+    },
+    {
+      "name": "CoaterSupplyPort",
+      "start": 6363,
+      "end": 6378
+    },
+    {
+      "name": "_StagedCoater",
+      "start": 6381,
+      "end": 6389
+    },
+    {
+      "name": "_projected_coater_supply_failure",
+      "start": 6392,
+      "end": 6433
+    },
+    {
+      "name": "_projected_coater_supply_frame_failure",
+      "start": 6436,
+      "end": 6468
+    },
+    {
+      "name": "_projected_coater_supply_context_key",
+      "start": 6471,
+      "end": 6529
+    },
+    {
+      "name": "_prepare_port",
+      "start": 6532,
+      "end": 6543
+    },
+    {
+      "name": "_bind_prepared_port",
+      "start": 6546,
+      "end": 6562
+    },
+    {
+      "name": "_lane_filter",
+      "start": 6565,
+      "end": 6578
+    },
+    {
+      "name": "_piler_plan_for_output",
+      "start": 6581,
+      "end": 6591
+    },
+    {
+      "name": "_piled_output_tail_column",
+      "start": 6594,
+      "end": 6600
+    },
+    {
+      "name": "_emit_piler_tail",
+      "start": 6603,
+      "end": 6711
+    },
+    {
+      "name": "_emit_strip",
+      "start": 6714,
+      "end": 7016
+    },
+    {
+      "name": "_flank_lane",
+      "start": 7019,
+      "end": 7131
+    },
+    {
+      "name": "_port_approach",
+      "start": 7134,
+      "end": 7173
+    },
+    {
+      "name": "_port_approach_offset",
+      "start": 7176,
+      "end": 7202
+    },
+    {
+      "name": "_dock_input_lane",
+      "start": 7205,
+      "end": 7319
+    },
+    {
+      "name": "_dock_lane",
+      "start": 7322,
+      "end": 7408
+    },
+    {
+      "name": "_link_lane",
+      "start": 7411,
+      "end": 7493
+    },
+    {
+      "name": "_relink",
+      "start": 7496,
+      "end": 7518
+    },
+    {
+      "name": "_STEPS",
+      "start": 7523,
+      "end": 7523
+    },
+    {
+      "name": "_RoutingTransition",
+      "start": 7525,
+      "end": 7525
+    },
+    {
+      "name": "_routing_transitions",
+      "start": 7528,
+      "end": 7560
+    },
+    {
+      "name": "_cut_loops",
+      "start": 7563,
+      "end": 7591
+    },
+    {
+      "name": "TransitionForm",
+      "start": 7594,
+      "end": 7604
+    },
+    {
+      "name": "transition_form",
+      "start": 7607,
+      "end": 7651
+    },
+    {
+      "name": "_altitude_profile",
+      "start": 7654,
+      "end": 7690
+    },
+    {
+      "name": "_altitude_profile_cached",
+      "start": 7693,
+      "end": 7741
+    },
+    {
+      "name": "_legal_link",
+      "start": 7744,
+      "end": 7772
+    },
+    {
+      "name": "_lattice_cell",
+      "start": 7775,
+      "end": 7787
+    },
+    {
+      "name": "_Grid",
+      "start": 7790,
+      "end": 7962
+    },
+    {
+      "name": "_span_for",
+      "start": 7965,
+      "end": 7985
+    },
+    {
+      "name": "_route_box",
+      "start": 7988,
+      "end": 8001
+    },
+    {
+      "name": "_canvas_span",
+      "start": 8004,
+      "end": 8015
+    },
+    {
+      "name": "_make_grid",
+      "start": 8018,
+      "end": 8098
+    },
+    {
+      "name": "_routing_flags",
+      "start": 8101,
+      "end": 8114
+    },
+    {
+      "name": "_PathSearchResult",
+      "start": 8117,
+      "end": 8122
+    },
+    {
+      "name": "_kernel_margin_holds",
+      "start": 8125,
+      "end": 8164
+    },
+    {
+      "name": "_astar_python_loop",
+      "start": 8167,
+      "end": 8398
+    },
+    {
+      "name": "_astar",
+      "start": 8401,
+      "end": 8836
+    },
+    {
+      "name": "_Net",
+      "start": 8839,
+      "end": 8862
+    },
+    {
+      "name": "_PreparedNet",
+      "start": 8865,
+      "end": 8880
+    },
+    {
+      "name": "_with_sibling_groups",
+      "start": 8883,
+      "end": 8929
+    },
+    {
+      "name": "_junction_geometry_required",
+      "start": 8932,
+      "end": 8941
+    },
+    {
+      "name": "_RoutingWorkspace",
+      "start": 8944,
+      "end": 8949
+    },
+    {
+      "name": "_PreparedRoutingProblem",
+      "start": 8952,
+      "end": 9043
+    },
+    {
+      "name": "_protected_template_belt_indices",
+      "start": 9046,
+      "end": 9061
+    },
+    {
+      "name": "_prepared_candidate_area_lower_bound",
+      "start": 9064,
+      "end": 9088
+    },
+    {
+      "name": "PreparedRoutingLowerBound",
+      "start": 9091,
+      "end": 9098
+    },
+    {
+      "name": "_prepared_routing_lower_bound",
+      "start": 9101,
+      "end": 9183
+    },
+    {
+      "name": "_bind_prepared_net",
+      "start": 9186,
+      "end": 9195
+    },
+    {
+      "name": "_cardinal_direction",
+      "start": 9198,
+      "end": 9203
+    },
+    {
+      "name": "_straight_path_direction",
+      "start": 9206,
+      "end": 9222
+    },
+    {
+      "name": "_merge_frontier",
+      "start": 9225,
+      "end": 9396
+    },
+    {
+      "name": "_junction_belt_clear",
+      "start": 9399,
+      "end": 9450
+    },
+    {
+      "name": "_CommitFailure",
+      "start": 9453,
+      "end": 9462
+    },
+    {
+      "name": "_junction_guard_victims",
+      "start": 9465,
+      "end": 9482
+    },
+    {
+      "name": "_route_all",
+      "start": 9485,
+      "end": 11678
+    },
+    {
+      "name": "PortAccessKind",
+      "start": 11681,
+      "end": 11694
+    },
+    {
+      "name": "PortAccessDemand",
+      "start": 11697,
+      "end": 11710
+    },
+    {
+      "name": "PortAccessInventory",
+      "start": 11713,
+      "end": 11718
+    },
+    {
+      "name": "_port_access_inventory",
+      "start": 11721,
+      "end": 11774
+    },
+    {
+      "name": "PortAccessEvidence",
+      "start": 11777,
+      "end": 11787
+    },
+    {
+      "name": "PortAccessReservation",
+      "start": 11790,
+      "end": 11806
+    },
+    {
+      "name": "PortAccessCorridor",
+      "start": 11809,
+      "end": 11815
+    },
+    {
+      "name": "_CorridorRelease",
+      "start": 11818,
+      "end": 11831
+    },
+    {
+      "name": "_CorridorReservations",
+      "start": 11834,
+      "end": 12049
+    },
+    {
+      "name": "_CorridorMatch",
+      "start": 12052,
+      "end": 12067
+    },
+    {
+      "name": "_match_access_corridors",
+      "start": 12070,
+      "end": 12288
+    },
+    {
+      "name": "_reserve_port_access",
+      "start": 12291,
+      "end": 12616
+    },
+    {
+      "name": "_commit_paths",
+      "start": 12619,
+      "end": 12938
+    },
+    {
+      "name": "_mixed_height_branch_endpoint",
+      "start": 12941,
+      "end": 12950
+    },
+    {
+      "name": "_source_for",
+      "start": 12953,
+      "end": 13086
+    },
+    {
+      "name": "_output_tail_nets",
+      "start": 13089,
+      "end": 13168
+    },
+    {
+      "name": "_leads_back",
+      "start": 13171,
+      "end": 13200
+    },
+    {
+      "name": "_committed_path_closes_cycle",
+      "start": 13203,
+      "end": 13274
+    },
+    {
+      "name": "_sink_for",
+      "start": 13277,
+      "end": 13409
+    },
+    {
+      "name": "_run_cells",
+      "start": 13412,
+      "end": 13462
+    },
+    {
+      "name": "_belt_keepout_blockers",
+      "start": 13465,
+      "end": 13481
+    },
+    {
+      "name": "_belt_keepout_clear",
+      "start": 13484,
+      "end": 13497
+    },
+    {
+      "name": "_tap_source",
+      "start": 13500,
+      "end": 13766
+    },
+    {
+      "name": "_straight_to_edge",
+      "start": 13772,
+      "end": 13792
+    },
+    {
+      "name": "_route_boundary_nets",
+      "start": 13795,
+      "end": 14031
+    },
+    {
+      "name": "_route_external_inputs",
+      "start": 14034,
+      "end": 14052
+    },
+    {
+      "name": "_route_external_outputs",
+      "start": 14055,
+      "end": 14073
+    },
+    {
+      "name": "_PreparationDeadline",
+      "start": 14076,
+      "end": 14077
+    },
+    {
+      "name": "_Unseatable",
+      "start": 14080,
+      "end": 14126
+    },
+    {
+      "name": "_Unpowerable",
+      "start": 14129,
+      "end": 14154
+    },
+    {
+      "name": "_JunctionProjectionFrame",
+      "start": 14157,
+      "end": 14163
+    },
+    {
+      "name": "_FrameWitnessRank",
+      "start": 14166,
+      "end": 14166
+    },
+    {
+      "name": "_ReachableFrameInterval",
+      "start": 14169,
+      "end": 14214
+    },
+    {
+      "name": "_collider_broad_phase_bounds",
+      "start": 14217,
+      "end": 14237
+    },
+    {
+      "name": "_minimum_projection_grid_scale",
+      "start": 14240,
+      "end": 14264
+    },
+    {
+      "name": "_power_projection_contexts",
+      "start": 14267,
+      "end": 14285
+    },
+    {
+      "name": "_projected_power_peer_possible",
+      "start": 14288,
+      "end": 14350
+    },
+    {
+      "name": "_ProjectedObstacleIndex",
+      "start": 14353,
+      "end": 14478
+    },
+    {
+      "name": "_StagedStaticCache",
+      "start": 14481,
+      "end": 14558
+    },
+    {
+      "name": "_prospective_static_broad_phase",
+      "start": 14561,
+      "end": 14573
+    },
+    {
+      "name": "_prospective_static_broad_phase_for_bands",
+      "start": 14576,
+      "end": 14593
+    },
+    {
+      "name": "_cached_cleanup_survivor_bounds",
+      "start": 14596,
+      "end": 14620
+    },
+    {
+      "name": "_cleanup_snapshot_with_linkless_static",
+      "start": 14623,
+      "end": 14642
+    },
+    {
+      "name": "_cached_junction_projection_frames",
+      "start": 14645,
+      "end": 14668
+    },
+    {
+      "name": "_junction_projection_frames",
+      "start": 14671,
+      "end": 14945
+    },
+    {
+      "name": "_prospective_static_failure",
+      "start": 14948,
+      "end": 15048
+    },
+    {
+      "name": "_projected_coater_junction_bans_by_frame",
+      "start": 15051,
+      "end": 15353
+    },
+    {
+      "name": "_prepare_coater_junction_geometry",
+      "start": 15356,
+      "end": 15399
+    },
+    {
+      "name": "_projection_envelope",
+      "start": 15402,
+      "end": 15539
+    },
+    {
+      "name": "_power_projection_envelope",
+      "start": 15542,
+      "end": 15568
+    },
+    {
+      "name": "_power_reservation",
+      "start": 15571,
+      "end": 15583
+    },
+    {
+      "name": "_power_plan",
+      "start": 15586,
+      "end": 16274
+    },
+    {
+      "name": "_place_power",
+      "start": 16277,
+      "end": 16326
+    },
+    {
+      "name": "plan_power_infill",
+      "start": 16329,
+      "end": 16502
+    },
+    {
+      "name": "_pair_lanes",
+      "start": 16508,
+      "end": 16552
+    },
+    {
+      "name": "_connect_short_cuts",
+      "start": 16555,
+      "end": 16650
+    },
+    {
+      "name": "_join_shard_islands",
+      "start": 16653,
+      "end": 16816
+    },
+    {
+      "name": "_plan_shared_external_inputs",
+      "start": 16819,
+      "end": 16931
+    },
+    {
+      "name": "_SHARED_EXTERNAL_TAP_SPACING",
+      "start": 16937,
+      "end": 16937
+    },
+    {
+      "name": "_place_shared_external_input_trunks",
+      "start": 16940,
+      "end": 17020
+    },
+    {
+      "name": "_prepare_routing_problem",
+      "start": 17023,
+      "end": 18074
+    },
+    {
+      "name": "StrandedPort",
+      "start": 18086,
+      "end": 18111
+    },
+    {
+      "name": "_bridge",
+      "start": 18713,
+      "end": 18863
+    },
+    {
+      "name": "_COATER_NODE_TILES",
+      "start": 18891,
+      "end": 18891
+    },
+    {
+      "name": "_emit_coater_node",
+      "start": 18894,
+      "end": 18954
+    },
+    {
+      "name": "_coater_node_site_is_clear",
+      "start": 18957,
+      "end": 18993
+    },
+    {
+      "name": "_coater_node_site",
+      "start": 18996,
+      "end": 19038
+    },
+    {
+      "name": "_coater_body_half_span",
+      "start": 19041,
+      "end": 19050
+    },
+    {
+      "name": "_coater_seat_candidate_indices",
+      "start": 19053,
+      "end": 19070
+    },
+    {
+      "name": "_coater_seats",
+      "start": 19073,
+      "end": 19158
+    },
+    {
+      "name": "_coater_candidate_rides_a_merge",
+      "start": 19161,
+      "end": 19210
+    },
+    {
+      "name": "_coater_candidate_has_ambiguous_supply",
+      "start": 19213,
+      "end": 19257
+    },
+    {
+      "name": "_reserve_coater_belt_ban",
+      "start": 19260,
+      "end": 19317
+    },
+    {
+      "name": "_place_coaters",
+      "start": 19320,
+      "end": 19988
+    },
+    {
+      "name": "_proliferator_item",
+      "start": 19991,
+      "end": 20000
+    },
+    {
+      "name": "_extend_core_for_unique_proliferator_roots",
+      "start": 20003,
+      "end": 20018
+    },
+    {
+      "name": "_proliferator_supply_tree",
+      "start": 20021,
+      "end": 20266
+    },
+    {
+      "name": "_place_proliferator_entry",
+      "start": 20269,
+      "end": 20304
+    }
+  ],
+  "consumers": {
+    "src/flab2bp/dsp/registry.py": {
+      "_astar": [
+        1187
+      ],
+      "_route_all": [
+        1199
+      ]
+    },
+    "src/flab2bp/layout/sequence_solver.py": {
+      "DirectInsertId": [
+        45
+      ],
+      "PreparedRoutingLowerBound": [
+        45
+      ],
+      "Strip": [
+        45
+      ],
+      "WEST_CHANNEL": [
+        45
+      ],
+      "_ENTRY_RING": [
+        45
+      ],
+      "_Pack": [
+        45
+      ],
+      "_PreparationDeadline": [
+        45
+      ],
+      "_PreparedRoutingProblem": [
+        45
+      ],
+      "_ROUTING_BUDGET": [
+        45
+      ],
+      "_StagedStaticCache": [
+        45
+      ],
+      "_Unpowerable": [
+        45
+      ],
+      "_Unseatable": [
+        45
+      ],
+      "_dests": [
+        45
+      ],
+      "_prepare_routing_problem": [
+        45
+      ],
+      "_prepared_candidate_area_lower_bound": [
+        45
+      ],
+      "_prepared_routing_lower_bound": [
+        45
+      ],
+      "_staged_static_clearance_keys": [
+        45
+      ],
+      "_staged_static_preclearance_proved": [
+        45
+      ]
+    },
+    "src/flab2bp/layout/global_router.py": {
+      "LEVELS": [
+        12
+      ],
+      "_Grid": [
+        12
+      ],
+      "_PreparedNet": [
+        12
+      ],
+      "_PreparedRoutingProblem": [
+        12
+      ],
+      "_STEPS": [
+        12
+      ],
+      "_canvas_span": [
+        12
+      ],
+      "_cut_loops": [
+        12
+      ],
+      "_make_grid": [
+        12
+      ],
+      "_route_box": [
+        12
+      ],
+      "_routing_flags": [
+        12
+      ],
+      "_routing_transitions": [
+        12
+      ]
+    },
+    "src/flab2bp/layout/last_mile.py": {
+      "_PathSearchResult": [
+        37
+      ]
+    },
+    "src/flab2bp/layout/strip_variants.py": {
+      "DEST_SEP": [
+        1306
+      ],
+      "_Group": [
+        31
+      ],
+      "_SorterStacks": [
+        31
+      ],
+      "_adapt": [
+        1306,
+        2058
+      ],
+      "_dests": [
+        881
+      ],
+      "_sink_demand": [
+        1306
+      ],
+      "_sorter_stacks_for": [
+        979
+      ],
+      "_sorter_tiers_for": [
+        979
+      ]
+    },
+    "src/flab2bp/layout/geometry_memo.py": {
+      "_StagedStaticCache": [
+        19
+      ]
+    },
+    "src/flab2bp/layout/hierarchy/compose.py": {
+      "PortAccessDemand": [
+        38
+      ],
+      "PortAccessEvidence": [
+        38
+      ],
+      "PortAccessReservation": [
+        38
+      ],
+      "_Canvas": [
+        38
+      ],
+      "_Net": [
+        38
+      ],
+      "_Port": [
+        38
+      ],
+      "_PreparationDeadline": [
+        38
+      ],
+      "_Unpowerable": [
+        38
+      ],
+      "_lane_stacks_for": [
+        38
+      ],
+      "_place_power": [
+        38
+      ],
+      "_port_access_inventory": [
+        38
+      ],
+      "_power_reservation": [
+        38
+      ],
+      "_prepare_coater_junction_geometry": [
+        38
+      ],
+      "_reserve_coater_belt_ban": [
+        38
+      ],
+      "_reserve_port_access": [
+        38
+      ],
+      "_route_all": [
+        38
+      ],
+      "_sorter_stacks_for": [
+        38
+      ],
+      "_sorter_tiers_for": [
+        38
+      ],
+      "plan_power_infill": [
+        38
+      ]
+    },
+    "tests/conftest.py": {
+      "_JUNCTION_BAN_OFFSET_CACHE": [
+        174
+      ],
+      "_STAGED_CLEARANCE_KEYS_MEMO": [
+        195
+      ],
+      "_junction_ban_offsets": [
+        175
+      ]
+    },
+    "tests/test_pipeline.py": {
+      "_PreparationDeadline": [
+        917,
+        923
+      ]
+    },
+    "tests/indexed/test_nets.py": {
+      "_Net": [
+        165
+      ],
+      "_Port": [
+        165
+      ]
+    },
+    "tests/scripts/test_route_profile.py": {
+      "_Canvas": [
+        17
+      ],
+      "_PathSearchResult": [
+        12,
+        13,
+        26,
+        43
+      ],
+      "_astar": [
+        14,
+        19
+      ],
+      "_merge_frontier": [
+        73,
+        76
+      ]
+    },
+    "tests/bench/test_route_profile.py": {
+      "_prepare_routing_problem": [
+        145,
+        159
+      ],
+      "_prepared_junction_ban": [
+        122,
+        125,
+        126,
+        129
+      ],
+      "_route_all": [
+        107,
+        110
+      ]
+    },
+    "tests/rules/probes.py": {
+      "_altitude_profile": [
+        172
+      ],
+      "_legal_link": [
+        156
+      ]
+    },
+    "tests/layout/test_geometry_memo.py": {
+      "_StagedStaticCache": [
+        10
+      ],
+      "_prepare_routing_problem": [
+        10
+      ]
+    },
+    "tests/layout/test_slots_ports.py": {
+      "_port_approach": [
+        125,
+        139
+      ],
+      "_port_approach_offset": [
+        185
+      ]
+    },
+    "tests/layout/test_coater_node.py": {
+      "Strip": [
+        38
+      ],
+      "WEST_CHANNEL": [
+        38
+      ],
+      "_Canvas": [
+        38
+      ],
+      "_Port": [
+        38
+      ],
+      "_coater_body_half_span": [
+        161,
+        162,
+        178,
+        190,
+        331
+      ],
+      "_coater_seats": [
+        176,
+        188
+      ],
+      "_reserve_coater_belt_ban": [
+        246,
+        328,
+        343
+      ]
+    },
+    "tests/layout/test_last_mile.py": {
+      "LEVELS": [
+        459
+      ],
+      "_Canvas": [
+        8
+      ],
+      "_PathSearchResult": [
+        8
+      ],
+      "_astar": [
+        8
+      ]
+    },
+    "tests/layout/test_freeform.py": {
+      "CoaterSupplyPort": [
+        39,
+        25294
+      ],
+      "DirectInsertId": [
+        39
+      ],
+      "LEVELS": [
+        39,
+        14206
+      ],
+      "PortAccessCorridor": [
+        21401,
+        21402,
+        21444,
+        21447,
+        21450,
+        21737,
+        25288,
+        25465,
+        25468,
+        25539,
+        25542,
+        25854,
+        25883,
+        26436,
+        26443,
+        26516
+      ],
+      "PortAccessDemand": [
+        12732,
+        12733,
+        25273,
+        25274,
+        25355,
+        25373,
+        25468,
+        25469,
+        25542,
+        25543,
+        25581,
+        25604,
+        25609,
+        25614,
+        25655,
+        25670,
+        25676,
+        25680,
+        25681,
+        25883,
+        25884,
+        26409,
+        26411,
+        26421,
+        26436,
+        26437,
+        26443,
+        26444,
+        26516,
+        26517
+      ],
+      "PortAccessKind": [
+        12601,
+        12602,
+        12740,
+        12741,
+        21399,
+        21400,
+        21445,
+        21448,
+        25269,
+        25297,
+        25364,
+        25366,
+        25431,
+        25432,
+        25451,
+        25498,
+        25526,
+        25600,
+        25618,
+        25655,
+        25703,
+        25718,
+        25738,
+        25751,
+        25772,
+        25807,
+        25879,
+        26413
+      ],
+      "RRR_MAX": [
+        15386,
+        15475,
+        15531,
+        15825,
+        15882,
+        16021,
+        16108,
+        16183,
+        16315,
+        16400,
+        16521,
+        16567,
+        21384,
+        21499
+      ],
+      "StagedStaticClearanceKey": [
+        435,
+        470,
+        7276,
+        7553,
+        10053,
+        10057,
+        19426
+      ],
+      "StrandedPort": [
+        24390
+      ],
+      "Strip": [
+        39
+      ],
+      "_ACCESS_RANK_DETERMINISTIC_WORK": [
+        12766
+      ],
+      "_ACCESS_TIE_DETERMINISTIC_WORK": [
+        25488,
+        25489,
+        25507,
+        25535
+      ],
+      "_BLAME_MAX_POCKET": [
+        16896
+      ],
+      "_BLAME_MAX_WALL": [
+        39
+      ],
+      "_Canvas": [
+        39
+      ],
+      "_CommitFailure": [
+        1404,
+        1409,
+        1498,
+        1504,
+        1604,
+        1608,
+        15204,
+        16090,
+        16097
+      ],
+      "_CorridorMatch": [
+        25683
+      ],
+      "_ENTRY_RING": [
+        39
+      ],
+      "_Grid": [
+        39,
+        4798,
+        4800,
+        4808,
+        25407
+      ],
+      "_Group": [
+        2148,
+        2313
+      ],
+      "_JunctionProjectionFrame": [
+        9317,
+        9381,
+        9399,
+        9415,
+        13540,
+        18645,
+        18703,
+        18775,
+        18886,
+        20112,
+        20247
+      ],
+      "_LEVEL_HEIGHT": [
+        12173,
+        12186,
+        12303,
+        12380
+      ],
+      "_LEVEL_TOLL": [
+        39
+      ],
+      "_MAX_EXPANSIONS": [
+        15474,
+        15530
+      ],
+      "_Net": [
+        39
+      ],
+      "_PORT_ACCESS_PROBE_KEEP": [
+        25710,
+        25723
+      ],
+      "_Pack": [
+        3744,
+        3762,
+        4263,
+        4265,
+        4861,
+        4864,
+        4869,
+        4895,
+        4909,
+        4988,
+        4991,
+        5046,
+        5048,
+        5097,
+        5099,
+        5117,
+        5178,
+        5180,
+        5828,
+        6065,
+        6067,
+        6328,
+        6371,
+        6384,
+        6386,
+        6443,
+        6449,
+        6458,
+        6461,
+        6470,
+        6536,
+        6542,
+        6559,
+        6566,
+        7104,
+        7423,
+        7452,
+        7461,
+        7640,
+        7649,
+        7765,
+        7769,
+        7784,
+        7806,
+        8161,
+        8167,
+        8177,
+        8194,
+        8310,
+        8871,
+        9161,
+        9178,
+        9883,
+        9893,
+        10141,
+        10166,
+        10248,
+        10259,
+        10440,
+        10488,
+        10620,
+        10627,
+        19577,
+        22847,
+        22956,
+        22979,
+        22993,
+        23027,
+        23203,
+        23254,
+        23506,
+        23615,
+        24724,
+        24795,
+        24797,
+        25229,
+        25241,
+        25255,
+        25824
+      ],
+      "_PathSearchResult": [
+        39,
+        25860,
+        25863
+      ],
+      "_Port": [
+        39
+      ],
+      "_PreparationDeadline": [
+        9838,
+        19701,
+        19731,
+        19786,
+        19805,
+        19845,
+        20264,
+        20327,
+        20407,
+        20434,
+        20494,
+        20507,
+        21419,
+        25866,
+        25889,
+        26518
+      ],
+      "_PreparedNet": [
+        39
+      ],
+      "_PreparedPort": [
+        39
+      ],
+      "_PreparedRoutingProblem": [
+        39,
+        20431,
+        20459,
+        20462,
+        20829,
+        21164
+      ],
+      "_ProjectedObstacleIndex": [
+        9694
+      ],
+      "_REPAIR_PASSES": [
+        15387,
+        15476,
+        15532,
+        15602,
+        15826,
+        15883,
+        16022,
+        16109,
+        16184,
+        16316,
+        16401,
+        16522,
+        16568
+      ],
+      "_ROUTE_RING": [
+        39
+      ],
+      "_STAGED_CLEARANCE_KEYS_MEMO": [
+        2424,
+        2428,
+        2433,
+        2435,
+        2437,
+        2449,
+        2452,
+        2590,
+        2592,
+        2595
+      ],
+      "_STAGED_CLEARANCE_KEY_FIELDS": [
+        2597,
+        2599,
+        2603
+      ],
+      "_STAGED_STATIC_PROOF_CANCELLED": [
+        19699,
+        19707
+      ],
+      "_STAGED_STATIC_RELATION_RISK_CACHE": [
+        19698,
+        19710
+      ],
+      "_STEPS": [
+        12692
+      ],
+      "_SorterStacks": [
+        20673,
+        20689
+      ],
+      "_StagedCoater": [
+        18845,
+        18884,
+        20013
+      ],
+      "_StagedStaticCache": [
+        9571,
+        9620,
+        9778,
+        9830,
+        13529,
+        13534,
+        13575,
+        18648,
+        18706,
+        18778,
+        18879,
+        19797,
+        19830,
+        19898,
+        20405
+      ],
+      "_TENTATIVE": [
+        39,
+        18027,
+        18045
+      ],
+      "_UNREAD_BY_STAGED_CLEARANCE": [
+        2597,
+        2599
+      ],
+      "_Unpowerable": [
+        39,
+        10507
+      ],
+      "_Unseatable": [
+        10181,
+        10274,
+        10513,
+        18310,
+        18353,
+        18410,
+        18427,
+        18480,
+        18515,
+        18586,
+        18731,
+        18797,
+        18955
+      ],
+      "_adapt": [
+        956,
+        2145,
+        2153,
+        2310,
+        2318,
+        20587,
+        20591,
+        20615,
+        20637
+      ],
+      "_altitude_profile": [
+        12174,
+        12183,
+        12187,
+        12191,
+        12192,
+        12195,
+        17091,
+        17096,
+        17108,
+        17113,
+        17137,
+        17142,
+        17152,
+        17157,
+        17178,
+        17182,
+        17187,
+        17198
+      ],
+      "_astar": [
+        39,
+        1781,
+        15385,
+        15473,
+        15529,
+        15597,
+        15651,
+        15824,
+        15881,
+        16019,
+        16106,
+        16182,
+        16314,
+        16399,
+        16520,
+        16566,
+        16604,
+        16668,
+        16735,
+        25865
+      ],
+      "_bridge": [
+        39,
+        3989
+      ],
+      "_buildings_are_powered": [
+        13460,
+        13464,
+        26130
+      ],
+      "_cached_cleanup_survivor_bounds": [
+        9573,
+        9578,
+        9583,
+        9619
+      ],
+      "_cached_junction_projection_frames": [
+        13531,
+        13551,
+        19806
+      ],
+      "_cancellable_junction_ban_offsets": [
+        19873,
+        19897,
+        19932,
+        19968,
+        19972
+      ],
+      "_canvas_span": [
+        39
+      ],
+      "_cleanup_snapshot_with_linkless_static": [
+        12245
+      ],
+      "_coater_keepout_hits": [
+        18245,
+        18581,
+        18624,
+        18625,
+        18662,
+        18720,
+        18790
+      ],
+      "_coater_seats": [
+        18214,
+        18498,
+        19034,
+        19037
+      ],
+      "_collision_pose": [
+        17585,
+        17586,
+        20017,
+        20187,
+        20198,
+        20206,
+        20215
+      ],
+      "_commit_paths": [
+        39,
+        1354,
+        1390,
+        1428,
+        1484,
+        1522,
+        1591,
+        1626,
+        12638,
+        15477,
+        15533,
+        15607,
+        15660,
+        15827,
+        15884,
+        16020,
+        16107,
+        16185,
+        16317,
+        16523,
+        16569,
+        16605,
+        16669,
+        16736,
+        21360,
+        21383,
+        21461,
+        21498,
+        21906,
+        21923,
+        21958,
+        21977
+      ],
+      "_committed_path_closes_cycle": [
+        12011,
+        12030,
+        12033,
+        12034,
+        12071,
+        12075,
+        12080,
+        12081,
+        12085,
+        12089,
+        12101,
+        12102,
+        12122,
+        14832,
+        14842
+      ],
+      "_connect_short_cuts": [
+        39
+      ],
+      "_core_bounds": [
+        19302
+      ],
+      "_crossing_ban_levels": [
+        12371,
+        12399,
+        12411,
+        12412
+      ],
+      "_dests": [
+        39
+      ],
+      "_dock_lane": [
+        19167
+      ],
+      "_emit_strip": [
+        39
+      ],
+      "_exact_retry_evidence": [
+        9873,
+        10358,
+        10361,
+        10362,
+        10376,
+        10377,
+        10423
+      ],
+      "_expired": [
+        22061
+      ],
+      "_extend_core_for_unique_proliferator_roots": [
+        12935,
+        12940
+      ],
+      "_join_shard_islands": [
+        39
+      ],
+      "_junction_ban_offsets": [
+        19973
+      ],
+      "_junction_belt_clear": [
+        16438
+      ],
+      "_junction_geometry_required": [
+        17621,
+        17642,
+        17665,
+        17698
+      ],
+      "_junction_guard_victims": [
+        16420
+      ],
+      "_junction_projection_frames": [
+        9456,
+        9462,
+        9492,
+        9527,
+        9652,
+        9689,
+        9751,
+        9825,
+        17532,
+        17556
+      ],
+      "_junction_site_is_clear": [
+        17500,
+        19843,
+        19957,
+        19963
+      ],
+      "_lane_stacks_for": [
+        20745,
+        20759
+      ],
+      "_leads_back": [
+        12010,
+        12029,
+        12032,
+        12065
+      ],
+      "_legal_link": [
+        17207,
+        17208
+      ],
+      "_make_grid": [
+        39,
+        21459,
+        21495,
+        21761,
+        21769,
+        25405,
+        25411
+      ],
+      "_match_access_corridors": [
+        12603,
+        12760,
+        12785,
+        25434,
+        25474,
+        25512,
+        25552,
+        25677,
+        25687,
+        25890,
+        26448,
+        26459,
+        26471,
+        26481,
+        26499,
+        26520
+      ],
+      "_merge_frontier": [
+        15144,
+        15900,
+        15907,
+        15952,
+        16018,
+        16207,
+        16214,
+        17713,
+        18029,
+        18047,
+        18145,
+        18160,
+        22424,
+        22443
+      ],
+      "_minimum_projection_grid_scale": [
+        14175,
+        20298
+      ],
+      "_output_tail_nets": [
+        12048,
+        12056,
+        25785
+      ],
+      "_pair_lanes": [
+        39
+      ],
+      "_pick_sorter": [
+        20678,
+        20680,
+        20682,
+        20693,
+        20762,
+        20770,
+        20772,
+        20774
+      ],
+      "_place_coaters": [
+        18311,
+        18354,
+        18374,
+        18415,
+        18481,
+        18516,
+        18587,
+        18673,
+        18732,
+        18798,
+        18818,
+        18861,
+        18901,
+        18929,
+        18956,
+        25287,
+        25303
+      ],
+      "_place_power": [
+        597,
+        13441,
+        14124,
+        26018,
+        26168,
+        26241,
+        26289
+      ],
+      "_place_shared_external_input_trunks": [
+        39
+      ],
+      "_port_access_inventory": [
+        12439,
+        12462,
+        12492,
+        12531,
+        12568,
+        12592,
+        12635,
+        12671,
+        12721,
+        22370,
+        25329,
+        25765
+      ],
+      "_power_coverage_discs": [
+        13458,
+        26064,
+        26065,
+        26066,
+        26128
+      ],
+      "_power_plan": [
+        39,
+        3990,
+        13404,
+        13421,
+        13996,
+        19297
+      ],
+      "_power_projection_envelope": [
+        13936,
+        19787,
+        20379
+      ],
+      "_prepare_routing_problem": [
+        39,
+        20436,
+        20471
+      ],
+      "_prepared_candidate_area_lower_bound": [
+        25049
+      ],
+      "_prepared_junction_ban": [
+        17497,
+        17504,
+        17537,
+        17592,
+        17593,
+        19846,
+        19872,
+        19899,
+        19938,
+        26069,
+        26070,
+        26071
+      ],
+      "_prepared_routing_lower_bound": [
+        25043,
+        25071,
+        25134,
+        25158,
+        25168
+      ],
+      "_projected_coater_junction_bans_by_frame": [
+        20154,
+        20265
+      ],
+      "_projected_coater_supply_failure": [
+        18855,
+        20076
+      ],
+      "_projected_coater_supply_frame_failure": [
+        18881,
+        18894
+      ],
+      "_projected_power_peer_possible": [
+        13598,
+        13612,
+        14190,
+        14196,
+        20302,
+        20312,
+        20328,
+        20400
+      ],
+      "_projection_envelope": [
+        13731,
+        13770,
+        13847,
+        13885
+      ],
+      "_proliferator_supply_tree": [
+        39
+      ],
+      "_prospective_static_failure": [
+        9658,
+        9705,
+        9712,
+        9757,
+        9780,
+        9839,
+        18667,
+        18725,
+        18791
+      ],
+      "_relative_rigid_frame_pose": [
+        20214
+      ],
+      "_relink": [
+        39
+      ],
+      "_reserve_port_access": [
+        39,
+        21726,
+        21742,
+        22368,
+        25391,
+        25413,
+        25420,
+        25570,
+        25754,
+        25867
+      ],
+      "_route_all": [
+        39,
+        526,
+        592,
+        4643,
+        4689,
+        4736,
+        4815,
+        13997,
+        18416,
+        21333,
+        21548,
+        21583,
+        21611,
+        21644,
+        21685,
+        21771,
+        21855,
+        21925,
+        21978,
+        22021,
+        22062,
+        22164,
+        22308,
+        22388,
+        22520,
+        22572,
+        22612,
+        22641,
+        22649,
+        22697,
+        22751,
+        22799
+      ],
+      "_route_external_inputs": [
+        39,
+        582,
+        4602,
+        4618
+      ],
+      "_route_external_outputs": [
+        587
+      ],
+      "_routing_flags": [
+        39
+      ],
+      "_sink_demand": [
+        955
+      ],
+      "_sink_for": [
+        39
+      ],
+      "_sorter_stacks_for": [
+        20760
+      ],
+      "_sorter_tiers_for": [
+        20761,
+        20780,
+        20781
+      ],
+      "_source_for": [
+        39
+      ],
+      "_splitter_stack_geometry": [
+        13461,
+        13465,
+        20189
+      ],
+      "_staged_static_clearance_key": [
+        18243
+      ],
+      "_staged_static_clearance_keys": [
+        2413,
+        2426,
+        2432,
+        2436,
+        2451,
+        2591,
+        2594,
+        9965,
+        10096,
+        10173,
+        10266,
+        18447,
+        18455,
+        18467,
+        18469,
+        19382,
+        19384,
+        19510,
+        19521,
+        19535,
+        19538,
+        19541,
+        19554,
+        19668,
+        19670,
+        19720,
+        19722
+      ],
+      "_staged_static_clearance_requirement": [
+        10174,
+        10267
+      ],
+      "_staged_static_effective_anchor_ranges": [
+        19369,
+        19687
+      ],
+      "_staged_static_preclearance_proof_uncached": [
+        19467,
+        19738
+      ],
+      "_staged_static_preclearance_proved": [
+        9959,
+        9968,
+        9995,
+        10003,
+        10052,
+        10073,
+        10086,
+        10111,
+        10220,
+        10326,
+        18448,
+        19509,
+        19522,
+        19573,
+        19622,
+        19723,
+        19732,
+        19743,
+        19749
+      ],
+      "_staged_static_projection_peers": [
+        10038
+      ],
+      "_staged_static_relation_projection_risk": [
+        10032,
+        18246,
+        18454,
+        18473,
+        19524,
+        19525,
+        19537
+      ],
+      "_staged_static_relation_projection_risk_uncached": [
+        19411
+      ],
+      "_staged_static_relation_projection_risks": [
+        9996,
+        10087,
+        10221,
+        19702
+      ],
+      "_staged_static_relation_projection_risks_uncached": [
+        10054,
+        10063
+      ],
+      "_static_collider_span": [
+        18628
+      ],
+      "_straight_to_edge": [
+        1723,
+        1780,
+        1845
+      ],
+      "_tap_source": [
+        39,
+        17743,
+        17795,
+        17825,
+        17845,
+        17854,
+        17879,
+        17924,
+        17955,
+        18003,
+        18083,
+        18097
+      ],
+      "plan_power_infill": [
+        10822,
+        10833,
+        10844,
+        10869,
+        26164,
+        26178
+      ]
+    },
+    "tests/layout/test_global_router.py": {
+      "LEVELS": [
+        14
+      ],
+      "_PreparedNet": [
+        14
+      ],
+      "_PreparedPort": [
+        14
+      ],
+      "_PreparedRoutingProblem": [
+        14
+      ],
+      "_with_sibling_groups": [
+        14
+      ]
+    },
+    "tests/layout/test_finalize.py": {
+      "_ENTRY_RING": [
+        3636,
+        3654
+      ]
+    },
+    "tests/layout/test_strip_variants.py": {
+      "Strip": [
+        1879
+      ],
+      "_adapt": [
+        266,
+        2047,
+        2098
+      ],
+      "_dests": [
+        2335
+      ]
+    },
+    "tests/layout/test_route_kernel.py": {
+      "_Canvas": [
+        253
+      ],
+      "_DEADLINE_CHECK_EVERY": [
+        222
+      ],
+      "_MAX_EXPANSIONS": [
+        175
+      ],
+      "_PathSearchResult": [
+        13
+      ],
+      "_astar": [
+        25,
+        77,
+        85,
+        112,
+        283
+      ],
+      "_astar_python_loop": [
+        261,
+        276
+      ],
+      "_expired": [
+        223
+      ],
+      "_kernel_margin_holds": [
+        286,
+        297
+      ],
+      "_make_grid": [
+        256,
+        262,
+        277
+      ]
+    },
+    "tests/layout/test_sequence_solver.py": {
+      "DirectInsertId": [
+        3866
+      ],
+      "PortAccessCorridor": [
+        3813
+      ],
+      "PortAccessDemand": [
+        3800,
+        3812,
+        3815
+      ],
+      "PortAccessKind": [
+        3802
+      ],
+      "PreparedRoutingLowerBound": [
+        38
+      ],
+      "StagedStaticClearanceKey": [
+        6487,
+        8940,
+        9461,
+        9489,
+        9557
+      ],
+      "Strip": [
+        3256,
+        3526,
+        3870,
+        5569,
+        5658,
+        5930,
+        5931,
+        5949,
+        5971,
+        6014,
+        6049,
+        6083,
+        8945,
+        9466,
+        9482,
+        9494,
+        9562,
+        9773,
+        10956
+      ],
+      "_COATER_NODE_TILES": [
+        38
+      ],
+      "_ENTRY_RING": [
+        38,
+        11415,
+        11417
+      ],
+      "_Group": [
+        5932
+      ],
+      "_Pack": [
+        3257,
+        3528,
+        3871,
+        3966,
+        7165
+      ],
+      "_PreparationDeadline": [
+        3875
+      ],
+      "_Unpowerable": [
+        3384
+      ],
+      "_Unseatable": [
+        3265
+      ],
+      "_core_bounds": [
+        9842
+      ],
+      "_match_access_corridors": [
+        3820
+      ],
+      "_power_plan": [
+        9837
+      ],
+      "_prepare_routing_problem": [
+        38,
+        3267,
+        3831,
+        3877
+      ],
+      "_prepared_junction_ban": [
+        9263,
+        9264,
+        9271
+      ],
+      "_staged_static_preclearance_proved": [
+        6493
+      ]
+    },
+    "tests/layout/hierarchy/test_compose.py": {
+      "PortAccessCorridor": [
+        14
+      ],
+      "PortAccessDemand": [
+        14
+      ],
+      "PortAccessEvidence": [
+        14
+      ],
+      "PortAccessKind": [
+        14
+      ],
+      "PortAccessReservation": [
+        14
+      ],
+      "_Canvas": [
+        14
+      ],
+      "_Net": [
+        305
+      ],
+      "_Port": [
+        298,
+        299
+      ],
+      "_collision_pose": [
+        347,
+        350
+      ],
+      "_junction_projection_frames": [
+        333
+      ],
+      "_port_access_inventory": [
+        446
+      ],
+      "_reserve_port_access": [
+        388,
+        428,
+        506,
+        552,
+        734,
+        757,
+        779,
+        830,
+        875,
+        901,
+        920,
+        953,
+        991,
+        1029,
+        1056,
+        1088,
+        1256,
+        1513
+      ],
+      "_route_all": [
+        1419,
+        1442,
+        1463
+      ],
+      "plan_power_infill": [
+        1336
+      ]
+    },
+    "scripts/route_bench.py": {
+      "_Canvas": [
+        58,
+        62,
+        115,
+        217
+      ],
+      "_Grid": [
+        59,
+        63,
+        124,
+        218
+      ],
+      "_PathSearchResult": [
+        129
+      ],
+      "_astar": [
+        110,
+        170,
+        179,
+        322
+      ]
+    },
+    "scripts/prepare_parity.py": {
+      "_prepare_routing_problem": [
+        23
+      ]
+    },
+    "scripts/last_mile_bench.py": {
+      "_astar": [
+        28
+      ]
+    },
+    "scripts/route_profile.py": {
+      "Strip": [
+        475
+      ],
+      "_Canvas": [
+        181,
+        225,
+        256,
+        285,
+        315
+      ],
+      "_CommitFailure": [
+        266
+      ],
+      "_Grid": [
+        174,
+        175,
+        190,
+        289,
+        295,
+        300,
+        427,
+        428,
+        438,
+        439
+      ],
+      "_Net": [
+        226,
+        257
+      ],
+      "_Pack": [
+        476
+      ],
+      "_PathSearchResult": [
+        195
+      ],
+      "_StagedStaticCache": [
+        484
+      ],
+      "_astar": [
+        170,
+        423,
+        434
+      ],
+      "_commit_paths": [
+        172,
+        425,
+        436
+      ],
+      "_make_grid": [
+        173,
+        426,
+        437
+      ],
+      "_merge_frontier": [
+        177,
+        430,
+        441
+      ],
+      "_place_coaters": [
+        389
+      ],
+      "_power_plan": [
+        397
+      ],
+      "_prepare_routing_problem": [
+        385
+      ],
+      "_prepared_junction_ban": [
+        396
+      ],
+      "_projected_coater_junction_bans_by_frame": [
+        393
+      ],
+      "_reserve_port_access": [
+        176,
+        429,
+        440
+      ],
+      "_route_all": [
+        171,
+        424,
+        435
+      ],
+      "_staged_static_relation_projection_risks_uncached": [
+        401
+      ]
+    }
+  }
+}

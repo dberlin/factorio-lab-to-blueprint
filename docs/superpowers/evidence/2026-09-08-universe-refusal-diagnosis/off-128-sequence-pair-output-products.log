@@ -1,0 +1,3 @@
+off 128 sequence-pair output-products REFUSED 0.0 all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an exact layout; island 3: deadline exhausted before finding an exact layout
+
+EXIT=0

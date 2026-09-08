@@ -12,7 +12,9 @@
 
 ## Status, recommendation and scope
 
-Approved for execution by the user on2026-09-08; execution started in isolated worktree `.claude/worktrees/abstraction-general`. The [original eight-task abstraction repair plan](2026-09-08-abstraction-repairs.md) remains the first separate tranche, retaining the two reproduced Piler fixes and all five other original dispositions. Independent request/physical-identity work starts alongside it; routing extraction still waits for its original-owner and v5 prerequisites. Nothing below replaces them.
+All sixteen tasks are implemented, independently reviewed and integrated on master `2523c92d`. The original repairs and hierarchy-v5 prerequisites were merged first. The approved checklists below are retained as the execution protocol; actual dispositions, commands, failures and limits are recorded in the [integrated acceptance report](../evidence/2026-09-08-general-abstraction-repairs/report.md).
+
+Fresh merged-master gates: Ruff, mypy106 source files,280 Python consumer cases,409 web cases, web typecheck/lint/build, and six actual emitted/decoded CLI cases across three strategies and two save policies. The broader Python-suite timeouts and inherited factory refusals remain explicit; they are not promoted to PASS. No push was performed.
 
 Recommended: staged domain-owned cutovers. A bug-only pass would leave algorithm coupling and duplicate lifecycle state intact. A broad module-splitting/framework pass would add churn without demonstrating a better contract. This plan takes the middle path: each task below must remove a named coupling, policy divergence or duplicate authority. The routing-domain extraction is selected for that reason, not because Freeform is large.
 

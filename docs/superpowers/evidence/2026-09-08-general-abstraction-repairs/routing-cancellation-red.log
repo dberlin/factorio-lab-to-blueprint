@@ -1,0 +1,22 @@
+============================= test session starts ==============================
+platform linux -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general
+configfile: pyproject.toml
+plugins: xdist-3.8.0, timeout-2.4.0, anyio-4.14.2, cov-7.1.0
+timeout: 120.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+tests/layout/test_freeform.py::test_batched_relation_anchor_collection_cancels_without_caching FAILED [100%]
+
+=================================== FAILURES ===================================
+_______ test_batched_relation_anchor_collection_cancels_without_caching ________
+tests/layout/test_freeform.py:19711: in test_batched_relation_anchor_collection_cancels_without_caching
+    with pytest.raises(routing_domain._PreparationDeadline):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE _PreparationDeadline
+=========================== short test summary info ============================
+FAILED tests/layout/test_freeform.py::test_batched_relation_anchor_collection_cancels_without_caching
+============================== 1 failed in 0.87s ===============================

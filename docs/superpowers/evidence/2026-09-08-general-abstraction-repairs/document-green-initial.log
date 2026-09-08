@@ -1,0 +1,1935 @@
+$ rstest run tests/state/BlueprintProvider.test.tsx tests/ui/BuildPanel.test.tsx tests/ui/TracePanel.test.tsx tests/ui/InputPanel.test.tsx tests/ui/Toolbar.test.tsx tests/ui/InfoPanel.test.tsx tests/ui/BomPanel.test.tsx
+  Rstest v0.11.12
+
+ ✓ tests/ui/BomPanel.test.tsx (2)
+ ✓ tests/ui/Toolbar.test.tsx (3)
+ ✓ tests/ui/InfoPanel.test.tsx (3)
+ ✓ tests/ui/InputPanel.test.tsx (11)
+
+error | tests/ui/TracePanel.test.tsx > polls the trace endpoint and loads the newest incumbent as a labeled snapshot
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > polls the trace endpoint and loads the newest incumbent as a labeled snapshot
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > polls the trace endpoint and loads the newest incumbent as a labeled snapshot
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/state/BlueprintProvider.test.tsx > TracePanel's tailing effect feeds the newest polled frame into the real provider's traceFrame
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/state/BlueprintProvider.test.tsx > TracePanel's tailing effect feeds the newest polled frame into the real provider's traceFrame
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/state/BlueprintProvider.test.tsx > TracePanel's tailing effect feeds the newest polled frame into the real provider's traceFrame
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/TracePanel.test.tsx > passes the returned cursor straight back as `from`, with no off-by-one
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > passes the returned cursor straight back as `from`, with no off-by-one
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > passes the returned cursor straight back as `from`, with no off-by-one
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/state/BlueprintProvider.test.tsx > explicit trace selection atomically clears prior parse error and entity selection without checksum warning
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/state/BlueprintProvider.test.tsx > explicit trace selection atomically clears prior parse error and entity selection without checksum warning
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/state/BlueprintProvider.test.tsx > explicit trace selection atomically clears prior parse error and entity selection without checksum warning
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/BuildPanel.test.tsx > the trace panel keeps polling past job settlement until it observes complete, so late frames are not lost
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/BuildPanel.test.tsx > the trace panel keeps polling past job settlement until it observes complete, so late frames are not lost
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/BuildPanel.test.tsx > the trace panel keeps polling past job settlement until it observes complete, so late frames are not lost
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/TracePanel.test.tsx > an empty open page does not hide the delayed final frame from the scrubber
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > an empty open page does not hide the delayed final frame from the scrubber
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > an empty open page does not hide the delayed final frame from the scrubber
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+ ✗ tests/state/BlueprintProvider.test.tsx (10)
+  ✗ TracePanel's tailing effect feeds the newest polled frame into the real provider's traceFrame (1.03s)
+    expected null not to be null
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div />[39m
+  [36m</body>[39m
+[36m</html>[39m
+  ✗ explicit trace selection atomically clears prior parse error and entity selection without checksum warning (1.02s)
+    Unable to find a label with the text of: Snapshot
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+ ✗ tests/ui/BuildPanel.test.tsx (43)
+  ✗ final artifact resists a late trace page until deliberate scrubbing (284ms)
+    traceFrameLabel is not defined
+  ✓ progress says where the job is while it is still running (333ms)
+  ✗ the trace panel keeps polling past job settlement until it observes complete, so late frames are not lost (1.06s)
+    expected 0 to be greater than or equal to 1
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div />[39m
+  [36m</body>[39m
+[36m</html>[39m
+
+error | tests/ui/TracePanel.test.tsx > unmounting mid-poll stops the loop and makes no further requests
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > unmounting mid-poll stops the loop and makes no further requests
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > unmounting mid-poll stops the loop and makes no further requests
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/TracePanel.test.tsx > a transient poll failure is retried, not treated as the permanent end of the live tail
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > a transient poll failure is retried, not treated as the permanent end of the live tail
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > a transient poll failure is retried, not treated as the permanent end of the live tail
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/TracePanel.test.tsx > scrubbing turns the live tail off and loads the scrubbed frame
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > scrubbing turns the live tail off and loads the scrubbed frame
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > scrubbing turns the live tail off and loads the scrubbed frame
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/TracePanel.test.tsx > arrow keys step one frame at a time
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > arrow keys step one frame at a time
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > arrow keys step one frame at a time
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/TracePanel.test.tsx > Home and End jump to the first and last buffered frame
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > Home and End jump to the first and last buffered frame
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > Home and End jump to the first and last buffered frame
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/TracePanel.test.tsx > re-checking live tail jumps back to the newest frame
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > re-checking live tail jumps back to the newest frame
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > re-checking live tail jumps back to the newest frame
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/TracePanel.test.tsx > a pinned snapshot that ages out of the buffered window says so, rather than silently tracking newest
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > a pinned snapshot that ages out of the buffered window says so, rather than silently tracking newest
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > a pinned snapshot that ages out of the buffered window says so, rather than silently tracking newest
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/TracePanel.test.tsx > the ring's own eviction is informational, not a warning -- a healthy build is not told it lost data
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > the ring's own eviction is informational, not a warning -- a healthy build is not told it lost data
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > the ring's own eviction is informational, not a warning -- a healthy build is not told it lost data
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/TracePanel.test.tsx > dropped frames are stated rather than hidden
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > dropped frames are stated rather than hidden
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > dropped frames are stated rather than hidden
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/TracePanel.test.tsx > the dropped count neither claims finality nor implies every drop is congestion
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > the dropped count neither claims finality nor implies every drop is congestion
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > the dropped count neither claims finality nor implies every drop is congestion
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/TracePanel.test.tsx > the metadata table names every field the frame carries
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > the metadata table names every field the frame carries
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > the metadata table names every field the frame carries
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/TracePanel.test.tsx > the metadata table reports a stranded-net count
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > the metadata table reports a stranded-net count
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > the metadata table reports a stranded-net count
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/TracePanel.test.tsx > a truncated frame says so
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > a truncated frame says so
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > a truncated frame says so
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/TracePanel.test.tsx > racing strategies each get their own lane (spec G5)
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > racing strategies each get their own lane (spec G5)
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > racing strategies each get their own lane (spec G5)
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+
+error | tests/ui/TracePanel.test.tsx > lane ticks are ordered and positioned by frame.t, never by seq or arrival order
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+error | tests/ui/TracePanel.test.tsx > lane ticks are ordered and positioned by frame.t, never by seq or arrival order
+ReferenceError: traceFrameLabel is not defined
+    at TracePanel (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/src/ui/TracePanel.tsx:345:10)
+    at Object.react_stack_bottom_frame (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+    at renderWithHooks (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+    at updateFunctionComponent (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+    at beginWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+    at runWithFiberInDEV (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+    at performUnitOfWork (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+    at workLoopSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+    at renderRootSync (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+    at performWorkOnRoot (/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/web/node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+
+warn | tests/ui/TracePanel.test.tsx > lane ticks are ordered and positioned by frame.t, never by seq or arrival order
+An error occurred in the <TracePanel> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+ ✗ tests/ui/TracePanel.test.tsx (21)
+  ✗ polls the trace endpoint and loads the newest incumbent as a labeled snapshot (1.07s)
+    expected undefined to be 2001 // Object.is equality
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div />[39m
+  [36m</body>[39m
+[36m</html>[39m
+  ✗ passes the returned cursor straight back as `from`, with no off-by-one (1.01s)
+    expected 1 to be greater than or equal to 2
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div />[39m
+  [36m</body>[39m
+[36m</html>[39m
+  ✗ an empty open page does not hide the delayed final frame from the scrubber (3.02s)
+    expected [ { …(2) } ] to have a length of 4 but got 1
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div />[39m
+  [36m</body>[39m
+[36m</html>[39m
+  ✓ unmounting mid-poll stops the loop and makes no further requests (763ms)
+  ✗ a transient poll failure is retried, not treated as the permanent end of the live tail (1.01s)
+    expected 0 to be greater than 0
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div />[39m
+  [36m</body>[39m
+[36m</html>[39m
+  ✓ the poll loop says so once it gives up after repeated consecutive failures (2.52s)
+  ✗ scrubbing turns the live tail off and loads the scrubbed frame (1.01s)
+    expected 0 to be greater than 0
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div />[39m
+  [36m</body>[39m
+[36m</html>[39m
+  ✗ arrow keys step one frame at a time (1.01s)
+    Unable to find role="slider" and name `/snapshot/i`
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+  ✗ Home and End jump to the first and last buffered frame (1.00s)
+    Unable to find role="slider" and name `/snapshot/i`
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+  ✗ re-checking live tail jumps back to the newest frame (1.00s)
+    Unable to find role="slider" and name `/snapshot/i`
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+  ✗ a pinned snapshot that ages out of the buffered window says so, rather than silently tracking newest (1.01s)
+    Unable to find role="slider" and name `/snapshot/i`
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+  ✗ the ring's own eviction is informational, not a warning -- a healthy build is not told it lost data (1.01s)
+    Unable to find an element by: [data-testid="trace-evicted"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+  ✗ dropped frames are stated rather than hidden (1.00s)
+    Unable to find an element with the text: /7 snapshot\(s\) dropped/i. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+  ✗ the dropped count neither claims finality nor implies every drop is congestion (1.01s)
+    Unable to find an element with the text: /3 snapshot\(s\) dropped/i. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+  ✗ the metadata table names every field the frame carries (1.00s)
+    Unable to find an element by: [data-testid="trace-meta"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+  ✗ the metadata table reports a stranded-net count (1.01s)
+    Unable to find an element by: [data-testid="trace-stranded"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+  ✗ a truncated frame says so (1.01s)
+    Unable to find an element with the text: /sampled/i. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+  ✗ racing strategies each get their own lane (spec G5) (1.01s)
+    Unable to find an element by: [data-testid="trace-lane-freeform"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+  ✗ lane ticks are ordered and positioned by frame.t, never by seq or arrival order (1.00s)
+    Unable to find an element by: [data-testid="trace-lane-freeform"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Summary of all failing tests:
+
+ FAIL  tests/state/BlueprintProvider.test.tsx 
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ FAIL  tests/ui/BuildPanel.test.tsx 
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ FAIL  tests/ui/TracePanel.test.tsx 
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ FAIL  tests/state/BlueprintProvider.test.tsx > TracePanel's tailing effect feeds the newest polled frame into the real provider's traceFrame
+AssertionError: expected null not to be null
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div />[39m
+  [36m</body>[39m
+[36m</html>[39m
+
+  188 |
+  189 |   // Real collection and display: overlay facts belong to the shown document.
+> 190 |   await waitFor(() => expect(api.traceFrame).not.toBeNull());
+      |                                                  ^
+  191 |   expect(api.traceFrame?.no_goods).toEqual([[3, 7]]);
+  192 | });
+
+        at tests/state/BlueprintProvider.test.tsx:190:50
+        at runWithExpensiveErrorDiagnosticsDisabled (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:349:1)
+        at checkCallback (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1097:1)
+        at Timeout.checkRealTimersCallback (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1091:1)
+
+ FAIL  tests/state/BlueprintProvider.test.tsx > explicit trace selection atomically clears prior parse error and entity selection without checksum warning
+TestingLibraryElementError: Unable to find a label with the text of: Snapshot
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+  1134 |   // create the error here so its stack trace is as close to the
+  1135 |   // calling code as possible
+> 1136 |   const stackTraceError = new Error('STACK_TRACE_MESSAGE');
+       | ^
+  1137 |   return getConfig().asyncWrapper(() => waitFor(callback, {
+  1138 |     stackTraceError,
+
+        at waitForWrapper (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1136:1)
+        at screen (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1216:1)
+        at tests/state/BlueprintProvider.test.tsx:203:9
+
+ FAIL  tests/ui/BuildPanel.test.tsx > final artifact resists a late trace page until deliberate scrubbing
+ReferenceError: traceFrameLabel is not defined
+
+  343 |           copyable string here. */}
+  344 |       <p className="trace-caption" data-testid="trace-caption">
+> 345 |         {traceFrameLabel(shown)}
+      |          ^
+  346 |       </p>
+  347 |       <dl className="trace-meta" data-testid="trace-meta">
+
+        at TracePanel (src/ui/TracePanel.tsx:345:10)
+        at Object.react_stack_bottom_frame (node_modules/react-dom/cjs/react-dom-client.development.js:25904:1)
+        at renderWithHooks (node_modules/react-dom/cjs/react-dom-client.development.js:7662:1)
+        at updateFunctionComponent (node_modules/react-dom/cjs/react-dom-client.development.js:10166:1)
+        at beginWork (node_modules/react-dom/cjs/react-dom-client.development.js:11778:1)
+        at runWithFiberInDEV (node_modules/react-dom/cjs/react-dom-client.development.js:874:1)
+        at performUnitOfWork (node_modules/react-dom/cjs/react-dom-client.development.js:17641:1)
+        at workLoopSync (node_modules/react-dom/cjs/react-dom-client.development.js:17469:39)
+        at renderRootSync (node_modules/react-dom/cjs/react-dom-client.development.js:17450:1)
+        at performWorkOnRoot (node_modules/react-dom/cjs/react-dom-client.development.js:16583:1)
+
+ FAIL  tests/ui/BuildPanel.test.tsx > the trace panel keeps polling past job settlement until it observes complete, so late frames are not lost
+AssertionError: expected 0 to be greater than or equal to 1
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div />[39m
+  [36m</body>[39m
+[36m</html>[39m
+
+  1019 |
+  1020 |   // The job poll settles almost immediately...
+> 1021 |   await waitFor(() => expect(counts.pollCount).toBeGreaterThanOrEqual(1));
+       |                                                ^
+  1022 |   // ...yet the trace panel must keep polling past that settlement, all the
+  1023 |   // way to the page that finally says `complete`, and deliver every frame
+
+        at tests/ui/BuildPanel.test.tsx:1021:48
+        at runWithExpensiveErrorDiagnosticsDisabled (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:349:1)
+        at checkCallback (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1097:1)
+        at Timeout.checkRealTimersCallback (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1091:1)
+
+ FAIL  tests/ui/TracePanel.test.tsx > polls the trace endpoint and loads the newest incumbent as a labeled snapshot
+AssertionError: expected undefined to be 2001 // Object.is equality
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div />[39m
+  [36m</body>[39m
+[36m</html>[39m
+
+[32m- Expected:[39m
+2001
+
+[31m+ Received:[39m
+undefined
+
+  103 |   render(<TracePanel jobId="abc123" generation={0} active={true} />);
+  104 |
+> 105 |   await waitFor(() => expect(displayedSnapshots.at(-1)?.bp.buildings[0]?.itemId).toBe(2001));
+      |                                                                                  ^
+  106 |
+  107 |   expect(calls[0]?.url).toContain('/api/build/abc123/trace?from=-1');
+
+        at tests/ui/TracePanel.test.tsx:105:82
+        at runWithExpensiveErrorDiagnosticsDisabled (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:349:1)
+        at checkCallback (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1097:1)
+        at Timeout.checkRealTimersCallback (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1091:1)
+
+ FAIL  tests/ui/TracePanel.test.tsx > passes the returned cursor straight back as `from`, with no off-by-one
+AssertionError: expected 1 to be greater than or equal to 2
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div />[39m
+  [36m</body>[39m
+[36m</html>[39m
+
+  123 |   render(<TracePanel jobId="abc123" generation={0} active={true} />);
+  124 |
+> 125 |   await waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(2));
+      |                                            ^
+  126 |
+  127 |   expect(calls[0]?.url).toContain('from=-1');
+
+        at tests/ui/TracePanel.test.tsx:125:44
+        at runWithExpensiveErrorDiagnosticsDisabled (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:349:1)
+        at checkCallback (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1097:1)
+        at Timeout.checkRealTimersCallback (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1091:1)
+
+ FAIL  tests/ui/TracePanel.test.tsx > an empty open page does not hide the delayed final frame from the scrubber
+AssertionError: expected [ { …(2) } ] to have a length of 4 but got 1
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div />[39m
+  [36m</body>[39m
+[36m</html>[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 4[39m
+[31m+ 1[39m
+
+  145 |   render(<TracePanel jobId="terminal-job" generation={0} active={true} />);
+  146 |
+> 147 |   await waitFor(() => expect(calls).toHaveLength(4), { timeout: 3000 });
+      |                                     ^
+  148 |   const scrubber = screen.getByRole('slider');
+  149 |   fireEvent.keyDown(scrubber, { key: 'Home' });
+
+        at timeout (tests/ui/TracePanel.test.tsx:147:37)
+        at runWithExpensiveErrorDiagnosticsDisabled (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:349:1)
+        at checkCallback (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1097:1)
+        at Timeout.checkRealTimersCallback (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1091:1)
+
+ FAIL  tests/ui/TracePanel.test.tsx > a transient poll failure is retried, not treated as the permanent end of the live tail
+AssertionError: expected 0 to be greater than 0
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div />[39m
+  [36m</body>[39m
+[36m</html>[39m
+
+  230 |   render(<TracePanel jobId="abc123" generation={0} active={true} />);
+  231 |
+> 232 |   await waitFor(() => expect(displayedSnapshots.length).toBeGreaterThan(before));
+      |                                                         ^
+  233 |   expect(calls).toBeGreaterThanOrEqual(2);
+  234 |   expect(screen.queryByTestId('trace-poll-stopped')).toBeNull();
+
+        at tests/ui/TracePanel.test.tsx:232:57
+        at runWithExpensiveErrorDiagnosticsDisabled (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:349:1)
+        at checkCallback (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1097:1)
+        at Timeout.checkRealTimersCallback (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1091:1)
+
+ FAIL  tests/ui/TracePanel.test.tsx > scrubbing turns the live tail off and loads the scrubbed frame
+AssertionError: expected 0 to be greater than 0
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div />[39m
+  [36m</body>[39m
+[36m</html>[39m
+
+  253 |   render(<Harness frames={threeFrames} onLoadSnapshot={(_bp, label) => loaded.push(label)} />);
+  254 |
+> 255 |   await waitFor(() => expect(loaded.length).toBeGreaterThan(0));
+      |                                             ^
+  256 |   expect(screen.getByRole('checkbox', { name: /live tail/i })).toBeChecked();
+  257 |
+
+        at tests/ui/TracePanel.test.tsx:255:45
+        at runWithExpensiveErrorDiagnosticsDisabled (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:349:1)
+        at checkCallback (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1097:1)
+        at Timeout.checkRealTimersCallback (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1091:1)
+
+ FAIL  tests/ui/TracePanel.test.tsx > arrow keys step one frame at a time
+TestingLibraryElementError: Unable to find role="slider" and name `/snapshot/i`
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+  1134 |   // create the error here so its stack trace is as close to the
+  1135 |   // calling code as possible
+> 1136 |   const stackTraceError = new Error('STACK_TRACE_MESSAGE');
+       | ^
+  1137 |   return getConfig().asyncWrapper(() => waitFor(callback, {
+  1138 |     stackTraceError,
+
+        at waitForWrapper (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1136:1)
+        at screen (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1216:1)
+        at tests/ui/TracePanel.test.tsx:265:24
+
+ FAIL  tests/ui/TracePanel.test.tsx > Home and End jump to the first and last buffered frame
+TestingLibraryElementError: Unable to find role="slider" and name `/snapshot/i`
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+  1134 |   // create the error here so its stack trace is as close to the
+  1135 |   // calling code as possible
+> 1136 |   const stackTraceError = new Error('STACK_TRACE_MESSAGE');
+       | ^
+  1137 |   return getConfig().asyncWrapper(() => waitFor(callback, {
+  1138 |     stackTraceError,
+
+        at waitForWrapper (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1136:1)
+        at screen (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1216:1)
+        at tests/ui/TracePanel.test.tsx:273:24
+
+ FAIL  tests/ui/TracePanel.test.tsx > re-checking live tail jumps back to the newest frame
+TestingLibraryElementError: Unable to find role="slider" and name `/snapshot/i`
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+  1134 |   // create the error here so its stack trace is as close to the
+  1135 |   // calling code as possible
+> 1136 |   const stackTraceError = new Error('STACK_TRACE_MESSAGE');
+       | ^
+  1137 |   return getConfig().asyncWrapper(() => waitFor(callback, {
+  1138 |     stackTraceError,
+
+        at waitForWrapper (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1136:1)
+        at screen (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1216:1)
+        at tests/ui/TracePanel.test.tsx:284:24
+
+ FAIL  tests/ui/TracePanel.test.tsx > a pinned snapshot that ages out of the buffered window says so, rather than silently tracking newest
+TestingLibraryElementError: Unable to find role="slider" and name `/snapshot/i`
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+  1134 |   // create the error here so its stack trace is as close to the
+  1135 |   // calling code as possible
+> 1136 |   const stackTraceError = new Error('STACK_TRACE_MESSAGE');
+       | ^
+  1137 |   return getConfig().asyncWrapper(() => waitFor(callback, {
+  1138 |     stackTraceError,
+
+        at waitForWrapper (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1136:1)
+        at screen (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1216:1)
+        at tests/ui/TracePanel.test.tsx:319:24
+
+ FAIL  tests/ui/TracePanel.test.tsx > the ring's own eviction is informational, not a warning -- a healthy build is not told it lost data
+TestingLibraryElementError: Unable to find an element by: [data-testid="trace-evicted"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+  1134 |   // create the error here so its stack trace is as close to the
+  1135 |   // calling code as possible
+> 1136 |   const stackTraceError = new Error('STACK_TRACE_MESSAGE');
+       | ^
+  1137 |   return getConfig().asyncWrapper(() => waitFor(callback, {
+  1138 |     stackTraceError,
+
+        at waitForWrapper (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1136:1)
+        at screen (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1216:1)
+        at tests/ui/TracePanel.test.tsx:338:29
+
+ FAIL  tests/ui/TracePanel.test.tsx > dropped frames are stated rather than hidden
+TestingLibraryElementError: Unable to find an element with the text: /7 snapshot\(s\) dropped/i. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+  1134 |   // create the error here so its stack trace is as close to the
+  1135 |   // calling code as possible
+> 1136 |   const stackTraceError = new Error('STACK_TRACE_MESSAGE');
+       | ^
+  1137 |   return getConfig().asyncWrapper(() => waitFor(callback, {
+  1138 |     stackTraceError,
+
+        at waitForWrapper (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1136:1)
+        at screen (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1216:1)
+        at tests/ui/TracePanel.test.tsx:349:16
+
+ FAIL  tests/ui/TracePanel.test.tsx > the dropped count neither claims finality nor implies every drop is congestion
+TestingLibraryElementError: Unable to find an element with the text: /3 snapshot\(s\) dropped/i. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+  1134 |   // create the error here so its stack trace is as close to the
+  1135 |   // calling code as possible
+> 1136 |   const stackTraceError = new Error('STACK_TRACE_MESSAGE');
+       | ^
+  1137 |   return getConfig().asyncWrapper(() => waitFor(callback, {
+  1138 |     stackTraceError,
+
+        at waitForWrapper (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1136:1)
+        at screen (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1216:1)
+        at tests/ui/TracePanel.test.tsx:358:25
+
+ FAIL  tests/ui/TracePanel.test.tsx > the metadata table names every field the frame carries
+TestingLibraryElementError: Unable to find an element by: [data-testid="trace-meta"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+  1134 |   // create the error here so its stack trace is as close to the
+  1135 |   // calling code as possible
+> 1136 |   const stackTraceError = new Error('STACK_TRACE_MESSAGE');
+       | ^
+  1137 |   return getConfig().asyncWrapper(() => waitFor(callback, {
+  1138 |     stackTraceError,
+
+        at waitForWrapper (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1136:1)
+        at screen (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1216:1)
+        at tests/ui/TracePanel.test.tsx:365:9
+
+ FAIL  tests/ui/TracePanel.test.tsx > the metadata table reports a stranded-net count
+TestingLibraryElementError: Unable to find an element by: [data-testid="trace-stranded"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+  1134 |   // create the error here so its stack trace is as close to the
+  1135 |   // calling code as possible
+> 1136 |   const stackTraceError = new Error('STACK_TRACE_MESSAGE');
+       | ^
+  1137 |   return getConfig().asyncWrapper(() => waitFor(callback, {
+  1138 |     stackTraceError,
+
+        at waitForWrapper (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1136:1)
+        at screen (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1216:1)
+        at tests/ui/TracePanel.test.tsx:380:16
+
+ FAIL  tests/ui/TracePanel.test.tsx > a truncated frame says so
+TestingLibraryElementError: Unable to find an element with the text: /sampled/i. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+  1134 |   // create the error here so its stack trace is as close to the
+  1135 |   // calling code as possible
+> 1136 |   const stackTraceError = new Error('STACK_TRACE_MESSAGE');
+       | ^
+  1137 |   return getConfig().asyncWrapper(() => waitFor(callback, {
+  1138 |     stackTraceError,
+
+        at waitForWrapper (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1136:1)
+        at screen (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1216:1)
+        at tests/ui/TracePanel.test.tsx:386:16
+
+ FAIL  tests/ui/TracePanel.test.tsx > racing strategies each get their own lane (spec G5)
+TestingLibraryElementError: Unable to find an element by: [data-testid="trace-lane-freeform"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+  1134 |   // create the error here so its stack trace is as close to the
+  1135 |   // calling code as possible
+> 1136 |   const stackTraceError = new Error('STACK_TRACE_MESSAGE');
+       | ^
+  1137 |   return getConfig().asyncWrapper(() => waitFor(callback, {
+  1138 |     stackTraceError,
+
+        at waitForWrapper (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1136:1)
+        at screen (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1216:1)
+        at tests/ui/TracePanel.test.tsx:391:16
+
+ FAIL  tests/ui/TracePanel.test.tsx > lane ticks are ordered and positioned by frame.t, never by seq or arrival order
+TestingLibraryElementError: Unable to find an element by: [data-testid="trace-lane-freeform"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+  1134 |   // create the error here so its stack trace is as close to the
+  1135 |   // calling code as possible
+> 1136 |   const stackTraceError = new Error('STACK_TRACE_MESSAGE');
+       | ^
+  1137 |   return getConfig().asyncWrapper(() => waitFor(callback, {
+  1138 |     stackTraceError,
+
+        at waitForWrapper (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1136:1)
+        at screen (node_modules/@testing-library/dom/dist/@testing-library/dom.esm.js:1216:1)
+        at tests/ui/TracePanel.test.tsx:397:22
+
+
+ Test Files 3 failed | 4 passed (7)
+      Tests 21 failed | 72 passed (93)
+   Duration 23.8s (build 281ms, tests 23.5s)
+
+error: script "test" exited with code 1

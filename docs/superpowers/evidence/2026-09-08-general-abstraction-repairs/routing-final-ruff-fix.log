@@ -1,0 +1,267 @@
+E501 Line too long (105 > 100)
+   --> src/flab2bp/layout/freeform.py:151:101
+    |
+150 | _NO_PITCH_REQUIREMENTS: Mapping[StripPoseId, int] = MappingProxyType({})
+151 | _NO_STAGED_STATIC_CLEARANCE: Mapping[routing_domain.StagedStaticClearanceKey, int] = MappingProxyType({})
+    |                                                                                                     ^^^^^
+152 | _DEFAULT_BAND_POLICY = BandPolicy("portable")
+    |
+
+E501 Line too long (104 > 100)
+    --> src/flab2bp/layout/freeform.py:1006:101
+     |
+1004 |                 port_dock_plan = physical_variant.port_dock_plan
+1005 |                 box_height = physical_variant.box_height
+1006 |             west_channel = _COATER_WEST_CHANNEL if needs_coater_keepout else routing_domain.WEST_CHANNEL
+     |                                                                                                     ^^^^
+1007 |             selected = routing_domain.Strip(
+1008 |                 group_key=family.group_key,
+     |
+
+E501 Line too long (108 > 100)
+    --> src/flab2bp/layout/freeform.py:1597:101
+     |
+1595 |     pairs: dict[_DirectCandidatePairKey, _DirectCandidate | None] = field(default_factory=dict)
+1596 |
+1597 |     def adapt(self, spec: BuildSpec) -> tuple[dict[str, routing_domain._Group], frozenset[tuple[str, str]]]:
+     |                                                                                                     ^^^^^^^^
+1598 |         """The adapted group graph and eligible recipe edges for ``spec``."""
+1599 |         if self.spec is not spec:
+     |
+
+E501 Line too long (109 > 100)
+    --> src/flab2bp/layout/freeform.py:1666:101
+     |
+1664 |             (k, item)
+1665 |             for k, (item, dest, cargo_domain) in enumerate(source.out_lanes)
+1666 |             if cargo_domain is CargoDomain.UNSPRAYED and destination.group_key in routing_domain._dests(dest)
+     |                                                                                                     ^^^^^^^^^
+1667 |         ),
+1668 |         None,
+     |
+
+E501 Line too long (124 > 100)
+    --> src/flab2bp/layout/freeform.py:3240:101
+     |
+3240 | def _decoded_from_pack(pack: routing_domain._Pack, strips: Sequence[routing_domain.Strip], height: int) -> DecodedPlacement:
+     |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^
+3241 |     """View one packed assignment as a decoded placement for the destroy operators.
+     |
+
+E501 Line too long (128 > 100)
+    --> src/flab2bp/layout/freeform.py:3269:101
+     |
+3269 | def _pack_relation_problem(pack: routing_domain._Pack, strips: Sequence[routing_domain.Strip], height: int) -> PlacementProblem:
+     |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3270 |     """A placement problem carrying this pack's sizes and nets, for operator reuse.
+     |
+
+E501 Line too long (121 > 100)
+    --> src/flab2bp/layout/freeform.py:3291:101
+     |
+3291 | def _pack_relation_pair(pack: routing_domain._Pack, strips: Sequence[routing_domain.Strip], height: int) -> SequencePair:
+     |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^
+3292 |     """The sequence pair this pack encodes to, for the sequence-neighbour operator.
+     |
+
+E501 Line too long (110 > 100)
+    --> src/flab2bp/layout/freeform.py:4031:101
+     |
+4029 |     docks = slots.port_docks(probe).values()
+4030 |     capacity = sum(
+4031 |         dock.facing is Facing.EAST and routing_domain._port_approach_offset(probe, dock, strip.pw) is not None
+     |                                                                                                     ^^^^^^^^^^
+4032 |         for dock in docks
+4033 |     )
+     |
+
+E501 Line too long (109 > 100)
+    --> src/flab2bp/layout/freeform.py:4557:101
+     |
+4555 |         # becoming the thing that ends the sweep. See
+4556 |         # `_ROUTING_EXPANSIONS_PER_SECOND`.
+4557 |         budget = {"left": max(routing_domain._ROUTING_BUDGET, int(_ROUTING_EXPANSIONS_PER_SECOND * ceiling))}
+     |                                                                                                     ^^^^^^^^^
+4558 |
+4559 |         def planning_cancelled() -> bool:
+     |
+
+E501 Line too long (104 > 100)
+    --> src/flab2bp/layout/freeform.py:6055:101
+     |
+6053 |                         )
+6054 |
+6055 |                     pending_clearance: tuple[routing_domain.StagedStaticClearanceKey, int] | None = None
+     |                                                                                                     ^^^^
+6056 |
+6057 |                     clearance_exhausted = False
+     |
+
+E501 Line too long (101 > 100)
+    --> src/flab2bp/layout/freeform.py:6526:101
+     |
+6524 |                         None
+6525 |                         if completion_deadline is None
+6526 |                         else lambda completion_deadline=completion_deadline: routing_domain._expired(
+     |                                                                                                     ^
+6527 |                             completion_deadline
+6528 |                         )
+     |
+
+E501 Line too long (103 > 100)
+    --> src/flab2bp/layout/freeform.py:6584:101
+     |
+6582 |                         )
+6583 |
+6584 |                         projection_strips_by_instance: dict[StripInstanceId, routing_domain.Strip] = {}
+     |                                                                                                     ^^^
+6585 |                         for strip in strips:
+6586 |                             if strip.family_id is None:
+     |
+
+E501 Line too long (105 > 100)
+    --> tests/layout/test_freeform.py:2601:101
+     |
+2599 |         routing_domain._STAGED_CLEARANCE_KEY_FIELDS | routing_domain._UNREAD_BY_STAGED_CLEARANCE
+2600 |     )
+2601 |     assert not (routing_domain._STAGED_CLEARANCE_KEY_FIELDS & routing_domain._UNREAD_BY_STAGED_CLEARANCE)
+     |                                                                                                     ^^^^^
+2602 |     # ``cargo_domain`` and ``physical_variant`` are the gate; ``machine_row``,
+2603 |     # ``in_lanes`` and ``row_of_input`` are derived properties/methods, not
+     |
+
+E501 Line too long (103 > 100)
+     --> tests/layout/test_freeform.py:12185:101
+      |
+12184 |     def test_consecutive_ramps_have_no_profile(self) -> None:
+12185 |         assert routing_domain._altitude_profile([(0, 0, 0), (1, 0, 1), (2, 0, 2)], ramped=True) is None
+      |                                                                                                     ^^^
+12186 |
+12187 |     def test_unramped_profile_steps_whole_levels(self) -> None:
+      |
+
+E501 Line too long (101 > 100)
+     --> tests/layout/test_freeform.py:12414:101
+      |
+12412 |         """The bound is measured from the building's ground, not the world's."""
+12413 |         low = routing_domain._crossing_ban_levels(self._at(2011, 0, 0))
+12414 |         high = routing_domain._crossing_ban_levels(dataclasses.replace(self._at(2011, 0, 0), z=F(2)))
+      |                                                                                                     ^
+12415 |         assert len(high) > len(low), (
+12416 |             f"a Sorter lifted to z=2 must deny more of the lattice than one on "
+      |
+
+E501 Line too long (103 > 100)
+     --> tests/layout/test_freeform.py:17139:101
+      |
+17137 |         reachable.
+17138 |         """
+17139 |         assert routing_domain._altitude_profile([(0, 0, 0), (1, 0, 1), (2, 0, 2)], ramped=True) is None
+      |                                                                                                     ^^^
+17140 |
+17141 |     def test_commit_records_a_path_with_no_legal_altitude_profile(
+      |
+
+E501 Line too long (104 > 100)
+     --> tests/layout/test_freeform.py:25415:101
+      |
+25413 |     monkeypatch.setattr(routing_domain, "_make_grid", counting_make_grid)
+25414 |     canvas, demands, boundary, bounds = _boundary_reachable_port_fixture()
+25415 |     reservation = routing_domain._reserve_port_access(canvas, demands, boundary=boundary, bounds=bounds)
+      |                                                                                                     ^^^^
+25416 |     assert reservation.assigned
+25417 |     assert builds["n"] == 1, builds
+      |
+
+E501 Line too long (101 > 100)
+     --> tests/layout/test_freeform.py:25509:101
+      |
+25507 |         model: cp_model.CpModel,
+25508 |     ) -> cp_model.CpSolverStatus:
+25509 |         if solver.parameters.max_deterministic_time == routing_domain._ACCESS_TIE_DETERMINISTIC_WORK:
+      |                                                                                                     ^
+25510 |             return cp_model.UNKNOWN
+25511 |         return original_solve(solver, model)
+      |
+
+E501 Line too long (101 > 100)
+     --> tests/layout/test_freeform.py:25537:101
+      |
+25535 |         model: cp_model.CpModel,
+25536 |     ) -> cp_model.CpSolverStatus:
+25537 |         if solver.parameters.max_deterministic_time == routing_domain._ACCESS_TIE_DETERMINISTIC_WORK:
+      |                                                                                                     ^
+25538 |             return cp_model.UNKNOWN
+25539 |         return original_solve(solver, model)
+      |
+
+E501 Line too long (106 > 100)
+     --> tests/layout/test_freeform.py:25583:101
+      |
+25583 | def _internal_pocket(*, sealed: bool) -> tuple[_Canvas, routing_domain.PortAccessDemand, frozenset[Cell]]:
+      |                                                                                                     ^^^^^^
+25584 |     """A one-cell lane head in a pocket, with a goal two cells past its wall.
+      |
+
+E501 Line too long (101 > 100)
+     --> tests/layout/test_freeform.py:25606:101
+      |
+25606 | def _walled_in_internal_demand() -> tuple[_Canvas, routing_domain.PortAccessDemand, frozenset[Cell]]:
+      |                                                                                                     ^
+25607 |     """The pocket with its mouth bricked up: the goal is unreachable."""
+25608 |     return _internal_pocket(sealed=True)
+      |
+
+E501 Line too long (112 > 100)
+     --> tests/layout/test_freeform.py:25657:101
+      |
+25657 | def _open_access_demand(kind: routing_domain.PortAccessKind) -> tuple[_Canvas, routing_domain.PortAccessDemand]:
+      |                                                                                                     ^^^^^^^^^^^^
+25658 |     """A lane head standing in open ground, with twelve local options.
+      |
+
+E501 Line too long (102 > 100)
+     --> tests/layout/test_freeform.py:26450:101
+      |
+26448 |         return (demands[0], demands[1])
+26449 |
+26450 |     match = routing_domain._match_access_corridors(demands, options, validate=validate, survey=survey)
+      |                                                                                                     ^^
+26451 |
+26452 |     assert match.converged is False
+      |
+
+E501 Line too long (104 > 100)
+     --> tests/layout/test_freeform.py:26473:101
+      |
+26471 |     # demands`; it is now spelled by `converged`, so the empty case has to
+26472 |     # keep saying yes or a demandless composition would degrade for nothing.
+26473 |     match = routing_domain._match_access_corridors([], {}, validate=lambda a: None, survey=lambda a: ())
+      |                                                                                                     ^^^^
+26474 |
+26475 |     assert match.converged is True
+      |
+
+E501 Line too long (104 > 100)
+     --> tests/layout/test_sequence_solver.py:11417:101
+      |
+11415 |     from flab2bp.layout.finalize import band_policy_search_envelope
+11416 |
+11417 |     envelope = band_policy_search_envelope(BandPolicy("portable"), perimeter=routing_domain._ENTRY_RING)
+      |                                                                                                     ^^^^
+11418 |
+11419 |     assert routing_domain._ENTRY_RING == 3
+      |
+
+E501 Line too long (102 > 100)
+   --> tests/rules/probes.py:156:101
+    |
+154 |     steps = [Fraction(n, 2) for n in range(-4, 5)]
+155 |     return [
+156 |         (str(dz), dx, ramped, routing_domain._legal_link(0, 0, Fraction(0), dx, 0, dz, ramped=ramped))
+    |                                                                                                     ^^
+157 |         for ramped in (True, False)
+158 |         for dx in (0, 1, 2)
+    |
+
+Found 55 errors (29 fixed, 26 remaining).

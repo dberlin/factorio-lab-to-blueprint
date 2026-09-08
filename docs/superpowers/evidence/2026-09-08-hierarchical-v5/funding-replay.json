@@ -1,0 +1,151 @@
+{
+  "scope": "fixed captured demand and memo arithmetic; no block solves or new submission outcomes",
+  "candidate_source_sha256": "9f41f04370c0313316f7d351fec55f7223d6a4db8a7735daf9adc3bad44bb515",
+  "source_root": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v5",
+  "records": [
+    {
+      "capture": "diagnostic-mall-all-b60-w32-r1",
+      "round": 0,
+      "input_snapshot": {
+        "bytes": 9493,
+        "path": "001-solve_round-entry.pickle",
+        "retention_s": 0.0007943219970911741,
+        "sha256": "07d87de27130b47a787aec1df3b4c373f206e471ddb7c59f05c3158a53914e33"
+      },
+      "remaining_at_solve_entry_s": 35.1956023699604,
+      "rounds_left": 3,
+      "width": 8,
+      "raw_demands": 19,
+      "unique_work": 16,
+      "old_funding_waves": 3,
+      "old_submitted_unique_jobs": 16,
+      "old_funded_budget_s": 5.0,
+      "candidate_funded_budget_s": 5.865933728326733,
+      "candidate_waves": 2,
+      "candidate_planned_unique_jobs": 16,
+      "candidate_memo_hits": 0,
+      "unattempted_on_entry": 19,
+      "attempted_refused_on_entry": 0
+    },
+    {
+      "capture": "diagnostic-mall-all-b60-w32-r1",
+      "round": 1,
+      "input_snapshot": {
+        "bytes": 257753,
+        "path": "003-solve_round-entry.pickle",
+        "retention_s": 0.027119660982862115,
+        "sha256": "b0d3541dbebbfc2f54d24e059badb3521d9fd8fbae7622e5e586c13728178db8"
+      },
+      "remaining_at_solve_entry_s": 22.491843872936442,
+      "rounds_left": 2,
+      "width": 8,
+      "raw_demands": 26,
+      "unique_work": 20,
+      "old_funding_waves": 4,
+      "old_submitted_unique_jobs": 15,
+      "old_funded_budget_s": 5.0,
+      "candidate_funded_budget_s": 5.0,
+      "candidate_waves": 2,
+      "candidate_planned_unique_jobs": 15,
+      "candidate_memo_hits": 5,
+      "unattempted_on_entry": 0,
+      "attempted_refused_on_entry": 13
+    },
+    {
+      "capture": "diagnostic-mall-all-b60-w32-r2",
+      "round": 0,
+      "input_snapshot": {
+        "bytes": 9493,
+        "path": "001-solve_round-entry.pickle",
+        "retention_s": 0.0005322480574250221,
+        "sha256": "fd74139ad3a37880678e80fb0447be0d227aba7581b9d550d6bb903abe6e3b1b"
+      },
+      "remaining_at_solve_entry_s": 35.34714558091946,
+      "rounds_left": 3,
+      "width": 8,
+      "raw_demands": 19,
+      "unique_work": 16,
+      "old_funding_waves": 3,
+      "old_submitted_unique_jobs": 16,
+      "old_funded_budget_s": 5.0,
+      "candidate_funded_budget_s": 5.891190930153243,
+      "candidate_waves": 2,
+      "candidate_planned_unique_jobs": 16,
+      "candidate_memo_hits": 0,
+      "unattempted_on_entry": 19,
+      "attempted_refused_on_entry": 0
+    },
+    {
+      "capture": "diagnostic-mall-all-b60-w32-r2",
+      "round": 1,
+      "input_snapshot": {
+        "bytes": 307831,
+        "path": "003-solve_round-entry.pickle",
+        "retention_s": 0.035182299092411995,
+        "sha256": "1f031440d1d1019b5d90df180566cb933e4f8d723b6087ba8e267540a1c2dd3a"
+      },
+      "remaining_at_solve_entry_s": 23.726647204952314,
+      "rounds_left": 2,
+      "width": 8,
+      "raw_demands": 26,
+      "unique_work": 20,
+      "old_funding_waves": 4,
+      "old_submitted_unique_jobs": 17,
+      "old_funded_budget_s": 5.0,
+      "candidate_funded_budget_s": 5.0,
+      "candidate_waves": 3,
+      "candidate_planned_unique_jobs": 17,
+      "candidate_memo_hits": 3,
+      "unattempted_on_entry": 0,
+      "attempted_refused_on_entry": 13
+    },
+    {
+      "capture": "diagnostic-mall-none-b60-w32-r1",
+      "round": 0,
+      "input_snapshot": {
+        "bytes": 9097,
+        "path": "001-solve_round-entry.pickle",
+        "retention_s": 0.0006254587788134813,
+        "sha256": "a21805314b56e99e9f314996403f7004f9261ed27b23b39c802b03318e9a0fab"
+      },
+      "remaining_at_solve_entry_s": 35.19807314500213,
+      "rounds_left": 3,
+      "width": 8,
+      "raw_demands": 48,
+      "unique_work": 40,
+      "old_funding_waves": 6,
+      "old_submitted_unique_jobs": 40,
+      "old_funded_budget_s": 5.0,
+      "candidate_funded_budget_s": 5.0,
+      "candidate_waves": 5,
+      "candidate_planned_unique_jobs": 40,
+      "candidate_memo_hits": 0,
+      "unattempted_on_entry": 24,
+      "attempted_refused_on_entry": 0
+    },
+    {
+      "capture": "diagnostic-mall-none-b60-w32-r2",
+      "round": 0,
+      "input_snapshot": {
+        "bytes": 9097,
+        "path": "001-solve_round-entry.pickle",
+        "retention_s": 0.0009010639041662216,
+        "sha256": "5b93115f8090dd7b8eaa8f0f08a83d4a97457e24530e7f2be67a70c25c5a10bb"
+      },
+      "remaining_at_solve_entry_s": 35.03699734690599,
+      "rounds_left": 3,
+      "width": 8,
+      "raw_demands": 48,
+      "unique_work": 40,
+      "old_funding_waves": 6,
+      "old_submitted_unique_jobs": 40,
+      "old_funded_budget_s": 5.0,
+      "candidate_funded_budget_s": 5.0,
+      "candidate_waves": 5,
+      "candidate_planned_unique_jobs": 40,
+      "candidate_memo_hits": 0,
+      "unattempted_on_entry": 24,
+      "attempted_refused_on_entry": 0
+    }
+  ]
+}

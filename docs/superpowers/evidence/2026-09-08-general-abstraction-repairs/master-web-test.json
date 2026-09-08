@@ -1,0 +1,11 @@
+{
+  "name": "master-web-test",
+  "command": [
+    "bun",
+    "run",
+    "test"
+  ],
+  "cwd": "/home/dannyb/sources/factorio-lab-to-blueprint/web",
+  "exit": 0,
+  "wall_s": 9.951944824075326
+}

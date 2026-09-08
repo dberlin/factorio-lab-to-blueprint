@@ -1,0 +1,427 @@
+E501 Line too long (102 > 100)
+   --> scripts/route_profile.py:580:101
+    |
+578 |             if prof is not None:
+579 |                 prof.enable()
+580 |             placement = _strategy(args.strategy, belt_rules=belt_rules)(workers=args.workers).lay_out(
+    |                                                                                                     ^^
+581 |                 spec, time_budget_s=args.budget
+582 |             )
+    |
+
+E501 Line too long (124 > 100)
+   --> tests/layout/hierarchy/test_compose.py:434:101
+    |
+433 |     monkeypatch.setattr(compose, "_reserve_port_access", spy)
+434 |     compose.pack_with_access([left, right], flows, spec, envelope=_PACKING_ENVELOPE, ramped=ramped, deadline=None, margin=8)
+    |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^
+435 |     assert captured and all(boundary is None for boundary in captured), (
+436 |         "no demand compose builds reaches the boundary, so the rim is pure cost"
+    |
+
+E501 Line too long (124 > 100)
+   --> tests/layout/hierarchy/test_compose.py:452:101
+    |
+450 |     limits.clear()
+451 |     monkeypatch.setattr(compose, "_port_access_inventory", with_a_boundary_demand)
+452 |     compose.pack_with_access([left, right], flows, spec, envelope=_PACKING_ENVELOPE, ramped=ramped, deadline=None, margin=8)
+    |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^
+453 |
+454 |     boundary = captured[0]
+    |
+
+E501 Line too long (118 > 100)
+   --> tests/layout/hierarchy/test_compose.py:584:101
+    |
+582 |     """
+583 |     left, right, flows, spec, ramped = two_solved_blocks
+584 |     packing = compose._pack_at([left, right], flows, spec, envelope=_PACKING_ENVELOPE, gap=2, ramped=ramped, margin=8)
+    |                                                                                                     ^^^^^^^^^^^^^^^^^^
+585 |     demands = compose._port_access_inventory(packing.nets).demands
+586 |     goals = compose._trunk_goals(packing, demands)
+    |
+
+E501 Line too long (118 > 100)
+   --> tests/layout/hierarchy/test_compose.py:644:101
+    |
+642 |     """
+643 |     left, right, flows, spec, ramped = two_solved_blocks
+644 |     packing = compose._pack_at([left, right], flows, spec, envelope=_PACKING_ENVELOPE, gap=2, ramped=ramped, margin=8)
+    |                                                                                                     ^^^^^^^^^^^^^^^^^^
+645 |     demands = compose._port_access_inventory(packing.nets).demands
+646 |     head = (packing.nets[0].src.x, packing.nets[0].src.y, packing.nets[0].src.z)
+    |
+
+E501 Line too long (124 > 100)
+   --> tests/layout/hierarchy/test_compose.py:744:101
+    |
+743 |     monkeypatch.setattr(compose, "_reserve_port_access", spy)
+744 |     compose.pack_with_access([left, right], flows, spec, envelope=_PACKING_ENVELOPE, ramped=ramped, deadline=None, margin=8)
+    |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^
+745 |     assert captured["goals"], "the reservation was still asked the local-only question"
+    |
+
+E501 Line too long (118 > 100)
+    --> tests/layout/hierarchy/test_compose.py:1133:101
+     |
+1131 |     """
+1132 |     left, right, flows, spec, ramped = two_solved_blocks
+1133 |     packing = compose._pack_at([left, right], flows, spec, envelope=_PACKING_ENVELOPE, gap=8, ramped=ramped, margin=8)
+     |                                                                                                     ^^^^^^^^^^^^^^^^^^
+1134 |     canvas = packing.canvas
+1135 |     bounds = canvas.limit
+     |
+
+E501 Line too long (118 > 100)
+    --> tests/layout/hierarchy/test_compose.py:1187:101
+     |
+1185 |     """
+1186 |     left, right, flows, spec, ramped = two_solved_blocks
+1187 |     packing = compose._pack_at([left, right], flows, spec, envelope=_PACKING_ENVELOPE, gap=8, ramped=ramped, margin=8)
+     |                                                                                                     ^^^^^^^^^^^^^^^^^^
+1188 |     canvas = packing.canvas
+1189 |     bounds = canvas.limit
+     |
+
+E501 Line too long (102 > 100)
+    --> tests/layout/hierarchy/test_strategy.py:1104:101
+     |
+1102 |     """
+1103 |     assert isinstance(
+1104 |         strategy._block_layout("freeform", belt_rules=_BELT_RULES, workers=2), strategy.FreeformLayout
+     |                                                                                                     ^^
+1105 |     )
+1106 |     assert isinstance(
+     |
+
+E501 Line too long (103 > 100)
+    --> tests/layout/test_finalize.py:3873:101
+     |
+3872 | def _two_stage_placement() -> Placement:
+3873 |     return freeform.FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
+     |                                                                                                     ^^^
+3874 |         two_stage_spec(),
+3875 |         time_budget_s=0.5,
+     |
+
+E501 Line too long (103 > 100)
+    --> tests/layout/test_freeform.py:1292:101
+     |
+1290 |         placement = result.placement
+1291 |         assert placement is not None
+1292 |         assert not validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=False).errors
+     |                                                                                                     ^^^
+1293 |     else:
+1294 |         assert result.routing.failures
+     |
+
+E501 Line too long (123 > 100)
+     --> tests/layout/test_freeform.py:11713:101
+      |
+11711 |     """
+11712 |     spec = mode_driven_spec()
+11713 |     placement = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(spec, time_budget_s=4.0)
+      |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^^^
+11714 |     ctx = validate._context(placement, spec, None, 0, Fraction(4), True)
+11715 |     assert colliders.stable_belt_collisions(validate._paste_previews(ctx)) == []
+      |
+
+E501 Line too long (123 > 100)
+     --> tests/layout/test_freeform.py:11797:101
+      |
+11795 |     """
+11796 |     spec = _ray_receiver_spec()
+11797 |     placement = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(spec, time_budget_s=4.0)
+      |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^^^
+11798 |     shape = [
+11799 |         (b.item_id, b.x, b.y, b.z, b.yaw, b.output_obj, b.input_obj) for b in placement.buildings
+      |
+
+E501 Line too long (105 > 100)
+     --> tests/layout/test_freeform.py:11846:101
+      |
+11844 |     """
+11845 |     spec = _two_sink_exchanger_spec(count=3)  # count=1 does not route; see the fixture
+11846 |     placement = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy.parse("portable")).lay_out(
+      |                                                                                                     ^^^^^
+11847 |         spec, time_budget_s=4.0
+11848 |     )
+      |
+
+E501 Line too long (105 > 100)
+     --> tests/layout/test_freeform.py:11864:101
+      |
+11862 |     """2208 is capped too: one drain port, one product, so nothing may move."""
+11863 |     spec = _ray_receiver_spec()  # from Task 2 step 10
+11864 |     placement = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy.parse("portable")).lay_out(
+      |                                                                                                     ^^^^^
+11865 |         spec, time_budget_s=4.0
+11866 |     )
+      |
+
+E501 Line too long (114 > 100)
+     --> tests/layout/test_freeform.py:17295:101
+      |
+17293 |     def test_the_default_save_has_the_tech_so_is_not_ramped(self) -> None:
+17294 |         """An absent technology set means every technology researched."""
+17295 |         assert freeform.FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).ramped is False
+      |                                                                                                     ^^^^^^^^^^^^^^
+17296 |         assert (
+17297 |             freeform.FreeformLayout(
+      |
+
+E501 Line too long (110 > 100)
+     --> tests/layout/test_freeform.py:20597:101
+      |
+20595 |     from flab2bp.layout import route_kernel
+20596 |
+20597 |     placement = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=1).lay_out(
+      |                                                                                                     ^^^^^^^^^^
+20598 |         two_stage_spec(), time_budget_s=4.0
+20599 |     )
+      |
+
+E501 Line too long (110 > 100)
+     --> tests/layout/test_freeform.py:21392:101
+      |
+21391 |     monkeypatch.setattr(last_mile_module, "solve_cluster", counting)
+21392 |     placement = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=1).lay_out(
+      |                                                                                                     ^^^^^^^^^^
+21393 |         plastic_spec(), time_budget_s=8.0
+21394 |     )
+      |
+
+E501 Line too long (101 > 100)
+     --> tests/layout/test_freeform.py:23156:101
+      |
+23154 |         # inside `_sweep`; the harness planned its own strips before this.
+23155 |         monkeypatch.setattr(freeform, "plan_strips", lambda *_args, **_kwargs: replanned_strips)
+23156 |     monkeypatch.setattr(finalize, "_certify", lambda *_args, **_kwargs: validate.Report(findings=()))
+      |                                                                                                     ^
+23157 |     monkeypatch.setattr(
+23158 |         finalize,
+      |
+
+E501 Line too long (108 > 100)
+     --> tests/layout/test_freeform.py:24386:101
+      |
+24384 |     monkeypatch.setattr(freeform_module, "_room_for_another", spying)
+24385 |
+24386 |     placement = freeform.FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
+      |                                                                                                     ^^^^^^^^
+24387 |         two_stage_spec(), time_budget_s=20.0
+24388 |     )
+      |
+
+E501 Line too long (111 > 100)
+     --> tests/layout/test_freeform.py:24440:101
+      |
+24438 |     rejected: list[freeform._RefusalFinding] = []
+24439 |
+24440 |     result = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), arrangements=1)._sweep(
+      |                                                                                                     ^^^^^^^^^^^
+24441 |         spec,
+24442 |         strips,
+      |
+
+E501 Line too long (115 > 100)
+     --> tests/layout/test_freeform.py:24712:101
+      |
+24711 |     with pytest.raises(NoValidLayout) as caught:
+24712 |         FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(spec, time_budget_s=1.0)
+      |                                                                                                     ^^^^^^^^^^^^^^^
+24713 |
+24714 |     message = str(caught.value)
+      |
+
+E501 Line too long (102 > 100)
+     --> tests/layout/test_freeform.py:24848:101
+      |
+24846 |     telemetry: dict[str, float | str] = {}
+24847 |
+24848 |     FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), arrangements=1)._sweep(
+      |                                                                                                     ^^
+24849 |         spec,
+24850 |         strips,
+      |
+
+E501 Line too long (136 > 100)
+     --> tests/layout/test_freeform.py:26006:101
+      |
+26004 | …)
+26005 | …
+26006 | …ertical_construction=vertical), band_policy=BandPolicy.parse("portable"), workers=8
+      |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+26007 | …
+26008 | …0)
+      |
+
+E501 Line too long (112 > 100)
+     --> tests/layout/test_freeform.py:26033:101
+      |
+26031 | def test_freeform_reports_an_incumbent_to_its_observer(small_spec: BuildSpec) -> None:
+26032 |     observer = _RecordingObserver()
+26033 |     layout = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy.parse("portable"), observer=observer)
+      |                                                                                                     ^^^^^^^^^^^^
+26034 |     placement = layout.lay_out(small_spec, time_budget_s=0.5)
+      |
+
+E501 Line too long (119 > 100)
+     --> tests/layout/test_freeform.py:26061:101
+      |
+26059 |     """
+26060 |     band = BandPolicy.parse("portable")
+26061 |     a = FreeformLayout(belt_rules=_BELT_RULES, band_policy=band, workers=DETERMINISTIC_WORKERS, observer=None).lay_out(
+      |                                                                                                     ^^^^^^^^^^^^^^^^^^^
+26062 |         small_spec, time_budget_s=0.5
+26063 |     )
+      |
+
+E501 Line too long (123 > 100)
+     --> tests/layout/test_freeform.py:26065:101
+      |
+26063 |     )
+26064 |     observer = _RecordingObserver()
+26065 |     b = FreeformLayout(belt_rules=_BELT_RULES, band_policy=band, workers=DETERMINISTIC_WORKERS, observer=observer).lay_out(
+      |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^^^
+26066 |         small_spec, time_budget_s=0.5
+26067 |     )
+      |
+
+E501 Line too long (102 > 100)
+  --> tests/layout/test_route_kernel.py:83:101
+   |
+81 |     routing_domain._astar = spy
+82 |     try:
+83 |         FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=1).lay_out(
+   |                                                                                                     ^^
+84 |             spec, time_budget_s=budget_s
+85 |         )
+   |
+
+E501 Line too long (107 > 100)
+  --> tests/layout/test_sequence_islands.py:63:101
+   |
+61 |     for islands in (0, 17, True):
+62 |         with pytest.raises(ValueError, match="islands must be an integer from 1 to 16"):
+63 |             SequencePairLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), islands=islands)
+   |                                                                                                     ^^^^^^^
+64 |
+65 |     def factory(
+   |
+
+E501 Line too long (121 > 100)
+  --> tests/layout/test_sequence_islands.py:77:101
+   |
+76 |     with pytest.raises(ValueError, match="solver factory requires exactly one island"):
+77 |         SequencePairLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), islands=2, solver_factory=factory)
+   |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^
+
+E501 Line too long (117 > 100)
+   --> tests/layout/test_sequence_islands.py:236:101
+    |
+234 |     monkeypatch.setattr(islands_module, "ProcessPoolExecutor", _ImmediateExecutor)
+235 |
+236 |     SequencePairLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), islands=8, config=config).lay_out(
+    |                                                                                                     ^^^^^^^^^^^^^^^^^
+237 |         two_stage_spec(),
+238 |         time_budget_s=2.0,
+    |
+
+E501 Line too long (106 > 100)
+   --> tests/layout/test_sequence_islands.py:288:101
+    |
+287 |     with pytest.raises(type(raised), match=str(raised) or None):
+288 |         SequencePairLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), islands=2).lay_out(
+    |                                                                                                     ^^^^^^
+289 |             two_stage_spec(), time_budget_s=2.0
+290 |         )
+    |
+
+E501 Line too long (106 > 100)
+   --> tests/layout/test_sequence_islands.py:310:101
+    |
+309 |     with pytest.raises(NoValidLayout, match="deadline exhausted"):
+310 |         SequencePairLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), islands=2).lay_out(
+    |                                                                                                     ^^^^^^
+311 |             two_stage_spec(), time_budget_s=2.0
+312 |         )
+    |
+
+E501 Line too long (124 > 100)
+    --> tests/layout/test_sequence_pair.py:2841:101
+     |
+2839 |     sub = one_recipe_spec(spec, "copper-ingot", count)
+2840 |     layout = SequencePairLayout(
+2841 |         belt_rules=replace(_BELT_RULES, vertical_construction=vertical), islands=1, band_policy=BandPolicy.parse("portable")
+     |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^
+2842 |     )
+2843 |     placement = layout.lay_out(sub, time_budget_s=20.0)
+     |
+
+E501 Line too long (109 > 100)
+    --> tests/layout/test_sequence_solver.py:9405:101
+     |
+9403 | def test_production_stats_carry_the_operator_telemetry() -> None:
+9404 |     spec = plastic_spec()
+9405 |     placement = SequencePairLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy.parse("portable")).lay_out(
+     |                                                                                                     ^^^^^^^^^
+9406 |         spec, time_budget_s=15.0
+9407 |     )
+     |
+
+E501 Line too long (109 > 100)
+    --> tests/layout/test_sequence_solver.py:9438:101
+     |
+9436 |     here means the counter was never wired into the adapter closure.
+9437 |     """
+9438 |     placement = SequencePairLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy.parse("portable")).lay_out(
+     |                                                                                                     ^^^^^^^^^
+9439 |         plastic_spec(), time_budget_s=15.0
+9440 |     )
+     |
+
+E501 Line too long (124 > 100)
+     --> tests/layout/test_sequence_solver.py:11518:101
+      |
+11517 |     layout = SequencePairLayout(
+11518 |         belt_rules=replace(_BELT_RULES, vertical_construction=vertical), islands=1, band_policy=BandPolicy.parse("portable")
+      |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^
+11519 |     )
+11520 |     try:
+      |
+
+E501 Line too long (103 > 100)
+   --> tests/test_pipeline.py:640:101
+    |
+638 |     )
+639 |     spec = next(candidate for candidate in built.candidates if candidate.label == "output-products")
+640 |     placement = SequencePairLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
+    |                                                                                                     ^^^
+641 |         spec, time_budget_s=30.0
+642 |     )
+    |
+
+E501 Line too long (106 > 100)
+    --> tests/test_pipeline.py:1429:101
+     |
+1427 | ) -> Placement:
+1428 |     layout = (
+1429 |         FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), strip_len=1, workers=1)
+     |                                                                                                     ^^^^^^
+1430 |         if strategy == "freeform"
+1431 |         else SequencePairLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), strip_len=1)
+     |
+
+E501 Line too long (104 > 100)
+    --> tests/test_pipeline.py:1431:101
+     |
+1429 |         FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), strip_len=1, workers=1)
+1430 |         if strategy == "freeform"
+1431 |         else SequencePairLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), strip_len=1)
+     |                                                                                                     ^^^^
+1432 |     )
+1433 |     return layout.lay_out(spec, time_budget_s=15.0)
+     |
+
+Found 57 errors (17 fixed, 40 remaining).

@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-13-probe.py", line 266, in <module>
+    main()
+    ~~~~^^
+  File "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-13-probe.py", line 258, in main
+    freeze(args.fixtures)
+    ~~~~~~^^^^^^^^^^^^^^^
+  File "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-13-probe.py", line 148, in freeze
+    frozen.append({"name": name, "spec": encode(spec), "strips": encode(strips),
+                                         ~~~~~~^^^^^^
+  File "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general/.superpowers/sdd/2026-09-08-general-abstraction-repairs/task-13-probe.py", line 65, in encode
+    raise TypeError(f"unhandled frozen value: {type(value)}")
+TypeError: unhandled frozen value: <class 'flab2bp.spec.BuildSpec'>

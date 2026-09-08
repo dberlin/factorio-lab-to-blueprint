@@ -1,0 +1,17 @@
+2 cells, 2 at a time, 4 CP-SAT workers each, cap 3s
+  X [  1/2]     0s sequence-pair trivial  iron-ingot/#0 power=1 budget=1s                      CRASH      0.0s
+  X [  1/2]     4s freeform  trivial  iron-ingot/#0 power=1 budget=1s                      TERMINATED   0.0s
+
+!! WALL-CLOCK CAP HIT at 3s with 1 cells terminated and 0 unreached.
+
+=== freeform: 0/1 clean -- NOT CLEAN   (refused 0, invalid 0, crashed 0, not run 1)
+    by check: {}
+    TERMINATED iron-ingot/#0 power=1 budget=1s  whole-audit cap exhausted
+
+=== sequence-pair: 0/1 clean -- NOT CLEAN   (refused 0, invalid 0, crashed 1, not run 0)
+    by check: {'<crash>': 1}
+    CRASH    iron-ingot/#0 power=1 budget=1s  ValueError: partial transport completed peer error
+
+4s wall, 1/2 cells
+
+NOT CLEAN. An INVALID cell is worse than a REFUSED one: refusing emits nothing, while an invalid blueprint pastes and then does not run. Fix the invalid ones first.

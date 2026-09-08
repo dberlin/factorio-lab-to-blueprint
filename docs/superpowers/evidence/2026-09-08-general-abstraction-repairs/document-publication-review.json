@@ -1,0 +1,6 @@
+{
+  "overall_correctness": "correct",
+  "explanation": "Scoped spec re-review passes: Show completed blueprint deliberately republishes the selected attempt through the existing generation-aware selectAttempt path, restoring single- and multi-attempt artifacts without making trace documents copyable. Quality re-review passes: the expanded real-provider, single-attempt regression covers trace→artifact restoration and newer import→artifact restoration, asserting the displayed title, exact encoded string, and enabled copy control; the prior P2 is resolved with no new findings. Main reports all 93 consumer cases and typecheck/lint/build passing; this review ran no validation and does not claim the pending rebuilt-browser restoration or non-square framing proof.",
+  "confidence": 0.98,
+  "findings": []
+}

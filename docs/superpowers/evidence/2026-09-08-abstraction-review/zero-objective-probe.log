@@ -1,0 +1,4 @@
+url https://factoriolab.github.io/dsp/?o=iron-ore*0*0*3&v=11
+type Limit parsed_value 1
+
+EXIT=0

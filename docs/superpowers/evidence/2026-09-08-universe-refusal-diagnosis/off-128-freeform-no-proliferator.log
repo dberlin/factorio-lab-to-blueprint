@@ -1,0 +1,3 @@
+off 128 freeform no-proliferator REFUSED 0.0 the 30s deadline passed with no completed packing of 57 strips; 3 packs were routed in that time and the best of them still left 1 nets unrouted (worst 3), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec
+
+EXIT=0

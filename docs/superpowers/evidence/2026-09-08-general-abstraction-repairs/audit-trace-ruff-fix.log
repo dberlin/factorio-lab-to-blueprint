@@ -1,0 +1,72 @@
+E501 Line too long (109 > 100)
+  --> scripts/audit_compare.py:8:101
+   |
+ 6 | The verdict passes only when the candidate covers every baseline cell and
+ 7 | holds the expected number of rows, has zero REFUSED / INVALID / CRASH rows,
+ 8 | its p95 wall per cell is at or under ``--p95-seconds``, and the geometric mean area ratio over cells clean in
+   |                                                                                                     ^^^^^^^^^
+ 9 | BOTH files is at most ``1 + noise_area``.  ``--noise-area`` defaults to the
+10 | 1.3% same-arm median measured in ``docs/BACKLOG.md``.
+   |
+
+E501 Line too long (105 > 100)
+   --> src/flab2bp/bench/ab.py:872:101
+    |
+870 |     selected_urls = set(url_ids)
+871 |     for t in trials:
+872 |         if t.budget_s != budget_s or t.url_id not in selected_urls or t.strategy not in (a_name, b_name):
+    |                                                                                                     ^^^^^
+873 |             continue
+874 |         powers.add(t.power)
+    |
+
+E501 Line too long (108 > 100)
+   --> src/flab2bp/bench/ab.py:876:101
+    |
+874 |         powers.add(t.power)
+875 |         if len(powers) > 1:
+876 |             raise ValueError("A/B comparison requires one power scope; mixed power trials are incompatible")
+    |                                                                                                     ^^^^^^^^
+877 |         buckets.setdefault((t.url_id, t.strategy), []).append(t)
+    |
+
+E501 Line too long (102 > 100)
+   --> tests/web/test_jobs.py:439:101
+    |
+439 | @pytest.mark.parametrize("collector_failed", [False, True], ids=["partial-write", "failed-collector"])
+    |                                                                                                     ^^
+440 | def test_normal_trace_producer_exit_keeps_result_and_advances_next_build(
+441 |     monkeypatch: pytest.MonkeyPatch, small_build: pipeline.Build, collector_failed: bool
+    |
+
+E501 Line too long (101 > 100)
+   --> tests/web/test_jobs.py:469:101
+    |
+467 |     monkeypatch: pytest.MonkeyPatch, small_build: pipeline.Build
+468 | ) -> None:
+469 |     _terminated_trace_scenario(monkeypatch, small_build, None, normal_return=True, delay_reader=True)
+    |                                                                                                     ^
+
+E501 Line too long (101 > 100)
+   --> tests/web/test_jobs.py:531:101
+    |
+529 |         )
+530 |         pools.append(pool)
+531 |         blocked = pool.submit(_return_normal_trace_outcome) if normal_return else pool.submit(int, 0)
+    |                                                                                                     ^
+532 |         workers.extend(pool._processes.values())
+533 |         managers.append(pool._executor_manager_thread)
+    |
+
+E501 Line too long (101 > 100)
+   --> tests/web/test_jobs.py:814:101
+    |
+812 |     try:
+813 |         transport.put_nowait(
+814 |             SearchEvent(strategy="freeform", candidate="queue-complete", phase=SearchPhase.INCUMBENT)
+    |                                                                                                     ^
+815 |         )
+816 |         transport.put_nowait("malformed second message")
+    |
+
+Found 12 errors (5 fixed, 7 remaining).

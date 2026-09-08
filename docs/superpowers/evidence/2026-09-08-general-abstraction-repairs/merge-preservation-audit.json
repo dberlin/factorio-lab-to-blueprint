@@ -1,0 +1,1054 @@
+{
+  "merge": "2523c92d",
+  "first_parent": "95dcc843",
+  "incoming": "9d32ec99",
+  "incoming_prerequisite": "f1b22604",
+  "whole_file_resolutions": [
+    {
+      "path": "src/flab2bp/layout/freeform.py",
+      "master_before": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "b68bfeab7404766d781376de5611631d328984f4"
+      },
+      "general_prerequisite": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "b68bfeab7404766d781376de5611631d328984f4"
+      },
+      "reviewed_general": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "65c1ef7b0b0f72ac0155c312eb77e188aaff6fd1"
+      },
+      "merged": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "65c1ef7b0b0f72ac0155c312eb77e188aaff6fd1"
+      },
+      "no_master_only_delta": true,
+      "matches_reviewed_result": true
+    },
+    {
+      "path": "src/flab2bp/layout/hierarchy/compose.py",
+      "master_before": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "eb17f09a3ba9641c8e32c3ed70c13ce0ca33f0f4"
+      },
+      "general_prerequisite": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "eb17f09a3ba9641c8e32c3ed70c13ce0ca33f0f4"
+      },
+      "reviewed_general": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "5c4cfe74a3d71251a2557a28dc362dfd2ebe92ac"
+      },
+      "merged": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "5c4cfe74a3d71251a2557a28dc362dfd2ebe92ac"
+      },
+      "no_master_only_delta": true,
+      "matches_reviewed_result": true
+    },
+    {
+      "path": "tests/indexed/test_nets.py",
+      "master_before": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "7fef5820ef9c06f5dff08be1a5bde0fd61bd56be"
+      },
+      "general_prerequisite": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "7fef5820ef9c06f5dff08be1a5bde0fd61bd56be"
+      },
+      "reviewed_general": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "d7bf93c8aaa39c75c5a51ae7099f6caf1e9f1969"
+      },
+      "merged": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "d7bf93c8aaa39c75c5a51ae7099f6caf1e9f1969"
+      },
+      "no_master_only_delta": true,
+      "matches_reviewed_result": true
+    },
+    {
+      "path": "tests/layout/hierarchy/test_compose.py",
+      "master_before": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "080be2637564d23bca164d83a20ecf23d2f36c5f"
+      },
+      "general_prerequisite": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "080be2637564d23bca164d83a20ecf23d2f36c5f"
+      },
+      "reviewed_general": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "217c8324388e0f52cb49495f474e4aa925ed9b80"
+      },
+      "merged": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "217c8324388e0f52cb49495f474e4aa925ed9b80"
+      },
+      "no_master_only_delta": true,
+      "matches_reviewed_result": true
+    },
+    {
+      "path": "tests/layout/hierarchy/test_strategy.py",
+      "master_before": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "3050e567b6c8314bf65f6b8111ea7f24b8d01bbe"
+      },
+      "general_prerequisite": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "3050e567b6c8314bf65f6b8111ea7f24b8d01bbe"
+      },
+      "reviewed_general": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "7703426a931e3d90a2eaea21eeee83d0b0df48c7"
+      },
+      "merged": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "7703426a931e3d90a2eaea21eeee83d0b0df48c7"
+      },
+      "no_master_only_delta": true,
+      "matches_reviewed_result": true
+    },
+    {
+      "path": "tests/layout/test_coater_node.py",
+      "master_before": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "cb0d972af4d088eb0296089bd3b774fada61a3e5"
+      },
+      "general_prerequisite": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "cb0d972af4d088eb0296089bd3b774fada61a3e5"
+      },
+      "reviewed_general": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "92946a6e3a932fc0e20cede7e8bb159b2398bc36"
+      },
+      "merged": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "92946a6e3a932fc0e20cede7e8bb159b2398bc36"
+      },
+      "no_master_only_delta": true,
+      "matches_reviewed_result": true
+    },
+    {
+      "path": "tests/layout/test_freeform.py",
+      "master_before": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "5983e37a2c46cba7277240d9d8626a564768a268"
+      },
+      "general_prerequisite": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "5983e37a2c46cba7277240d9d8626a564768a268"
+      },
+      "reviewed_general": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "fd5a91752f566d32240be38e93ad9b54a4b59e25"
+      },
+      "merged": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "fd5a91752f566d32240be38e93ad9b54a4b59e25"
+      },
+      "no_master_only_delta": true,
+      "matches_reviewed_result": true
+    }
+  ],
+  "master_different_from_both_incoming_and_prerequisite": [
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/corridor-owner-final-smoke.log",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "5c8e6c8ad4c088f9e8cb050e99922c7e35e164d0"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "5c8e6c8ad4c088f9e8cb050e99922c7e35e164d0"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/corridor-release-red-r2.log",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "500cbc9e6612af9b35d056d8d1431d02d862714b"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "500cbc9e6612af9b35d056d8d1431d02d862714b"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/corridor-release-red.log",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "e8e4198dd9233408bf86a7922369603ba462cb3b"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "e8e4198dd9233408bf86a7922369603ba462cb3b"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/final-review.json",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "09ce8777acb90f39927a6b69d1a157520f9777aa"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "09ce8777acb90f39927a6b69d1a157520f9777aa"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/key-anchor-green.log",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "8b2b27e501a828adf80db31b81f68bef6f0a9aba"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "8b2b27e501a828adf80db31b81f68bef6f0a9aba"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/ordered-rollback-red.log",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "587f7dccc757fedd555e42a54723bc6dc92c4982"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "587f7dccc757fedd555e42a54723bc6dc92c4982"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/original-cold-factory-baseline-command.json",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "ba40eca566afea1b68656692ead82ac2107e5a1f"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "ba40eca566afea1b68656692ead82ac2107e5a1f"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/original-cold-factory-baseline.json",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "bce1c97865d9ba9b86df89c94a5b0f5c67ec13db"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "bce1c97865d9ba9b86df89c94a5b0f5c67ec13db"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/original-composition-fixture-green-command.json",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "5d91d6c4f8fb26e8acbeec6b6e53f2c714be1df9"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "5d91d6c4f8fb26e8acbeec6b6e53f2c714be1df9"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/original-composition-fixture-green.json",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "645e63f44a7219ab716a9046f52fbba126dd2f3c"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "645e63f44a7219ab716a9046f52fbba126dd2f3c"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/original-ownership-final-tests-command.json",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "4b969148e671d8f3b07765a060f3fa831f46cdb2"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "4b969148e671d8f3b07765a060f3fa831f46cdb2"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/original-ownership-final-tests.json",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "fe99de5875b516c619f0eb4218d75dd6cf63ab7d"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "fe99de5875b516c619f0eb4218d75dd6cf63ab7d"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/paths-corridors-green.log",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "67eb405c421f8f00c33d6c925957f50bfa8d0232"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "67eb405c421f8f00c33d6c925957f50bfa8d0232"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/phase-contract-red.log",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "f7da1e3656e3d19c8161b7e2ee64fe6ab01b2b05"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "f7da1e3656e3d19c8161b7e2ee64fe6ab01b2b05"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/piler-transfer-final-smoke.log",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "2420a5640d24c63394b8a27c40bf54994a8f4a6e"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "2420a5640d24c63394b8a27c40bf54994a8f4a6e"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/piler-transfer-smoke.log",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "dcf31f99206dbe18bb971c28903de5a67c3933e6"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "dcf31f99206dbe18bb971c28903de5a67c3933e6"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/piler-transfer/blueprint.txt",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "5086eea2f43e77e40fd60043af63c4074a780175"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "5086eea2f43e77e40fd60043af63c4074a780175"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/piler-transfer/findings.json",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "0637a088a01e8ddab3bf3fa98dbe804cbde1a0dc"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "0637a088a01e8ddab3bf3fa98dbe804cbde1a0dc"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/piler-transfer/raw-placement.json",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "a52375b2104f9e22557a0d78749f992c1332dc28"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "a52375b2104f9e22557a0d78749f992c1332dc28"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/piler-transfer/spec.json",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "bf0b8229e8bd9956513659bb00989df40712edb2"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "bf0b8229e8bd9956513659bb00989df40712edb2"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/piler-transfer/summary.json",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "e19a506480186737737888993ee3c309ba27db04"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "e19a506480186737737888993ee3c309ba27db04"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/piler-transfer/wired-placement.json",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "878664ecd479ce08a999392987d79fb3bd2f064c"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "878664ecd479ce08a999392987d79fb3bd2f064c"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/report.md",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "235f91f93457ac4f7bcfad71f6866ff1a9bd848b"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "235f91f93457ac4f7bcfad71f6866ff1a9bd848b"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/routing-mypy.log",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "1518a8385969f77d06522ee37d8b723317a2da5f"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "1518a8385969f77d06522ee37d8b723317a2da5f"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/routing-ruff.log",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "1f5f344d054fae10f39140fb7199c99321d9190a"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "1f5f344d054fae10f39140fb7199c99321d9190a"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/snapshot-green.log",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "da5a0810f704cf3648f09ffb37ff8fb382147ffd"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "da5a0810f704cf3648f09ffb37ff8fb382147ffd"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/snapshot-red.log",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "734a760ee76ea2b11e4f5b19700aed9c8afe96a2"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "734a760ee76ea2b11e4f5b19700aed9c8afe96a2"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/tail-green-r2.log",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "2119cca71fef3320cc2ce473afd928987b5d1775"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "2119cca71fef3320cc2ce473afd928987b5d1775"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/tail-red-r2.log",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "a8676cfef41978f49215b6350c714634db1a29d7"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "a8676cfef41978f49215b6350c714634db1a29d7"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/tail-red.log",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/task-1-report.md",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "b061fe47704b2592530fbca5e1e0b2e1db52b46b"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "b061fe47704b2592530fbca5e1e0b2e1db52b46b"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/task-1-review.md",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "f0427fbdf026ca27e7e6eb13b0dfd359ec0ad0e0"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "f0427fbdf026ca27e7e6eb13b0dfd359ec0ad0e0"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/task-2-report.md",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "0537c0bc1afc021a94cbac33677da6b7932f465f"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "0537c0bc1afc021a94cbac33677da6b7932f465f"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/task-2-review.md",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "8f97865cd6e176444defcf755badf3222d1a9039"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "8f97865cd6e176444defcf755badf3222d1a9039"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/task-3-report.md",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "d394ca1bc2f841af2d262de928e837b2ff561ad4"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "d394ca1bc2f841af2d262de928e837b2ff561ad4"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/task-4-report.md",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "2c5627c233dd63874d47077574a59b5c9a6792d0"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "2c5627c233dd63874d47077574a59b5c9a6792d0"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/task-5-report.md",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "e3ca34d5666877af2bea4e6c69af6d831a7e12fa"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "e3ca34d5666877af2bea4e6c69af6d831a7e12fa"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/task-6-report.md",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "eae5717977eee32184f276c0538597b1346ec5d2"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "eae5717977eee32184f276c0538597b1346ec5d2"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/task-6-review.md",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "25521f4c61562c27839eac53b88ba36b8778d7e5"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "25521f4c61562c27839eac53b88ba36b8778d7e5"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-repairs/tasks-3-5-review.json",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "e9640b646d21485bc272b8622d4ee7fbf190064a"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "e9640b646d21485bc272b8622d4ee7fbf190064a"
+      }
+    },
+    {
+      "path": "docs/superpowers/evidence/2026-09-08-abstraction-review/findings.json",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "a6bbd67d36f4327a8c3bf6e42dfc7530ce930d80"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "a6bbd67d36f4327a8c3bf6e42dfc7530ce930d80"
+      }
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-08-abstraction-repairs.md",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "9f9370572c1eb4810f8d0643089b60beee113454"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "9f9370572c1eb4810f8d0643089b60beee113454"
+      }
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-08-general-abstraction-repairs.md",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "3dbcf91a81ed25d87f0cd437d2335f9e48877f9e"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "3dbcf91a81ed25d87f0cd437d2335f9e48877f9e"
+      }
+    },
+    {
+      "path": "docs/superpowers/specs/2026-09-08-abstraction-repairs-design.md",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "deb099b87e9f13bacc79dd7940617c23f50c8ff8"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "deb099b87e9f13bacc79dd7940617c23f50c8ff8"
+      }
+    },
+    {
+      "path": "docs/superpowers/specs/2026-09-08-general-abstraction-repairs-design.md",
+      "preserved": true,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "8d5fc46934bc7aa5e1eadced012df62719a0b5a9"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "8d5fc46934bc7aa5e1eadced012df62719a0b5a9"
+      }
+    },
+    {
+      "path": "src/flab2bp/dsp/catalog.py",
+      "preserved": false,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "81976e4ecd36e0887c13a19a6b776ea187428329"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "1d515d43ed14babcfe75df5fbc7a35e47ccb7485"
+      }
+    },
+    {
+      "path": "src/flab2bp/lab/flow.py",
+      "preserved": false,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "3c2b7089cb94782b822f5f0bf03e7df474b8dc51"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "28bfa69afa35d4f15e3d549b5586928a4c3b20c1"
+      }
+    },
+    {
+      "path": "src/flab2bp/lab/url.py",
+      "preserved": false,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "fd4a53e27c8bf5246da5429a5c5f9ce842465bda"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "134ade9ce042c280a8b5329480cfd3b5bbaa65e7"
+      }
+    },
+    {
+      "path": "src/flab2bp/layout/validate.py",
+      "preserved": false,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "eaf8ec9973e60b6e825b2bb94ce4d941024f7fec"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "20acb1edf53ac955c5c866927a19dedf631b67df"
+      }
+    },
+    {
+      "path": "src/flab2bp/pipeline.py",
+      "preserved": false,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "64335a069a7b81e395fbf13319b5b59ef9f0ed32"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "9cf88b26dfaaaaaf68370edd2d9c5360425ac59f"
+      }
+    },
+    {
+      "path": "src/flab2bp/rates/adjust.py",
+      "preserved": false,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "7f24fb7cce3af2d3675155f762184ea3350d59e7"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "26a14513c0b50a534f431d400155a8bc526a0089"
+      }
+    },
+    {
+      "path": "src/flab2bp/rates/solve.py",
+      "preserved": false,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "85f8ea062bf3361ef728169cd87b347cca44dc9a"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "35b39a94329a60593a54288710b46becbce13007"
+      }
+    },
+    {
+      "path": "tests/dsp/test_catalog.py",
+      "preserved": false,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "666124d18513d7b0baa9d75b6aff37fa41211ddb"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "c2124eed3f24c0489290bb3ee02527ce9fdbf3e6"
+      }
+    },
+    {
+      "path": "tests/lab/test_flow.py",
+      "preserved": false,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "73fb27a121b3709fbe9af76fbabef51eda9c044c"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "36c051215aff13cff1ea9ecae79be52ad45d92ef"
+      }
+    },
+    {
+      "path": "tests/lab/test_url.py",
+      "preserved": false,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "07ed8d94d4ba95d7003dbfd438a64b5fc340b71e"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "ef41b846d583c094fd654d34a00d657ebadb268b"
+      }
+    },
+    {
+      "path": "tests/rates/test_adjust.py",
+      "preserved": false,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "cc8b940a974563c865f6d6fd2545991d2f547f44"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "3ef9a5d3f642b337b29f440a8c916e3346b8603c"
+      }
+    },
+    {
+      "path": "tests/rates/test_candidates.py",
+      "preserved": false,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "f6ff185776af7e980827595b7871aa688f07974b"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "a9b0eb2c5c18672eca3f0e80fd02b54c8fdfdbd1"
+      }
+    },
+    {
+      "path": "tests/rates/test_solve.py",
+      "preserved": false,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "315bdaaea4665479d4b005e47fe139d8b0757459"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "48151e03272a7dd1cd9b981b7a7ef6583b6d3a49"
+      }
+    },
+    {
+      "path": "tests/test_pipeline.py",
+      "preserved": false,
+      "master_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "2bd4e4def6f9b9333f74962266e47bc42ae36bb2"
+      },
+      "merged_oid": {
+        "mode": "100644",
+        "kind": "blob",
+        "oid": "f105ab0bf6abde4e39bccda8cdf4142f2337bd27"
+      }
+    }
+  ],
+  "source_matches_reviewed_general": true,
+  "all_premerge_master_docs_preserved": true,
+  "independent_index_reconstruction": {
+    "base": "95dcc843",
+    "applied_commits": [
+      {
+        "commit": "5accc4c9a0e01ad6383b91b8fdcba69edf1426a5",
+        "result": "Applied patch to 'src/flab2bp/dsp/catalog.py' cleanly.\nApplied patch to 'src/flab2bp/lab/flow.py' cleanly.\nApplied patch to 'src/flab2bp/rates/adjust.py' cleanly.\nApplied patch to 'tests/dsp/test_catalog.py' cleanly.\nApplied patch to 'tests/lab/test_flow.py' cleanly.\nApplied patch to 'tests/rates/test_adjust.py' cleanly.\n"
+      },
+      {
+        "commit": "2451e7eb8c58ea66a5da3f6acebff6b5b33f6c53",
+        "result": "Applied patch to 'src/flab2bp/lab/url.py' cleanly.\nApplied patch to 'src/flab2bp/rates/solve.py' cleanly.\nApplied patch to 'tests/lab/test_url.py' cleanly.\nApplied patch to 'tests/rates/test_candidates.py' cleanly.\nApplied patch to 'tests/rates/test_solve.py' cleanly.\n"
+      },
+      {
+        "commit": "fe46f5bfcc3c64e13fb6c8fea3818c53d7fe2ba6",
+        "result": "Applied patch to 'src/flab2bp/pipeline.py' cleanly.\nApplied patch to 'tests/test_pipeline.py' cleanly.\n"
+      },
+      {
+        "commit": "a69614504f59db95b8e8b79511b18dd566501eea",
+        "result": "Applied patch to 'src/flab2bp/layout/validate.py' cleanly.\n"
+      }
+    ],
+    "tree": "c7d0e67e1b6403c8884ff576ad7579e6c89cbbe6",
+    "source_difference_from_general_prerequisite": [],
+    "interpretation": "The14 differing premerge master source/test files are exactly the reviewed early general changes, not unresolved master-only edits; original and v5 content is retained."
+  },
+  "master_versions_intentionally_superseded_by_early_general": [
+    "src/flab2bp/dsp/catalog.py",
+    "src/flab2bp/lab/flow.py",
+    "src/flab2bp/lab/url.py",
+    "src/flab2bp/layout/validate.py",
+    "src/flab2bp/pipeline.py",
+    "src/flab2bp/rates/adjust.py",
+    "src/flab2bp/rates/solve.py",
+    "tests/dsp/test_catalog.py",
+    "tests/lab/test_flow.py",
+    "tests/lab/test_url.py",
+    "tests/rates/test_adjust.py",
+    "tests/rates/test_candidates.py",
+    "tests/rates/test_solve.py",
+    "tests/test_pipeline.py"
+  ],
+  "no_unaccounted_master_side_change": true
+}

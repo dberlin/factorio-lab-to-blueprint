@@ -1,0 +1,15 @@
+$ rsbuild build
+Rsbuild v2.2.3
+
+info    build started...
+ready   built in 1.55s
+
+File (web)                               Size        Gzip   
+dist/index.html                          0.51 kB     0.32 kB
+dist/static/css/index.0a9b4c3428.css     5.3 kB      1.6 kB
+dist/static/js/index.59e0def58f.js       110.2 kB    38.2 kB
+dist/static/js/lib-react.fedac54d5b.js   189.2 kB    59.7 kB
+dist/static/js/152.4f9f5d5480.js         998.2 kB    266.4 kB
+
+                                Total:   1303.4 kB   366.3 kB
+

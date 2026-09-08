@@ -1,0 +1,11 @@
+{
+  "name": "master-web-typecheck",
+  "command": [
+    "bun",
+    "run",
+    "typecheck"
+  ],
+  "cwd": "/home/dannyb/sources/factorio-lab-to-blueprint/web",
+  "exit": 0,
+  "wall_s": 1.578136808006093
+}

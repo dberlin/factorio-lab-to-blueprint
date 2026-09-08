@@ -1,0 +1,3 @@
+placed 128 freeform output-products REFUSED 0.0 no pack was ever routed: 5 lane heads could not obtain the belt approaches they need (information-matrix into universe-matrix#37 at (211, 35, 0) (wants 1, held 0, 2 free side(s)), information-matrix into universe-matrix#37 at (211, 61, 0) (wants 1, held 0, 2 free side(s)), information-matrix into universe-matrix#37 at (181, 9, 0) (wants 1, held 0, 2 free side(s))); this is a PORT-SEATING defect independent of the packing -- the failure count varied by candidate height
+
+EXIT=0

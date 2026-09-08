@@ -1,0 +1,17 @@
+2 cells, 2 at a time, 64 CP-SAT workers each, cap 3s
+  X [  0/2]     3s freeform  trivial  iron-ingot/#0 power=1 budget=1s                      NOT_RUN    0.0s
+  X [  0/2]     3s sequence-pair trivial  iron-ingot/#0 power=1 budget=1s                      NOT_RUN    0.0s
+
+!! WALL-CLOCK CAP HIT at 3s with 0 cells terminated and 2 unreached.
+
+=== freeform: 0/1 clean -- NOT CLEAN   (refused 0, invalid 0, crashed 0, not run 1)
+    by check: {}
+    NOT_RUN  iron-ingot/#0 power=1 budget=1s  whole-audit cap exhausted
+
+=== sequence-pair: 0/1 clean -- NOT CLEAN   (refused 0, invalid 0, crashed 0, not run 1)
+    by check: {}
+    NOT_RUN  iron-ingot/#0 power=1 budget=1s  whole-audit cap exhausted
+
+3s wall, 0/2 cells
+
+NOT CLEAN. An INVALID cell is worse than a REFUSED one: refusing emits nothing, while an invalid blueprint pastes and then does not run. Fix the invalid ones first.

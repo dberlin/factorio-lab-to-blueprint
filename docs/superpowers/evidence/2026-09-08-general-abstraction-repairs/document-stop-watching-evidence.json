@@ -1,0 +1,54 @@
+{
+  "submitted": {
+    "id": "aaf6f60280bd",
+    "state": "running",
+    "elapsed_s": 0,
+    "solver_ceiling_s": 90,
+    "warning": null,
+    "options": {
+      "url": "https://factoriolab.github.io/dsp/flow?o=electromagnetic-matrix*600&v=11",
+      "strategy": "best",
+      "band": "portable",
+      "candidate_policies": [
+        "no-proliferator",
+        "all-products",
+        "output-products"
+      ],
+      "budget_s": 15,
+      "power_tower": "auto",
+      "proliferator_tier": "auto",
+      "machine_rank": "exact",
+      "allow_invalid": false,
+      "name": "",
+      "flow_supplied": false,
+      "trace": true
+    },
+    "result": null,
+    "refusal": null,
+    "error": null,
+    "progress": null,
+    "settled": []
+  },
+  "afterDetach": {
+    "state": "done",
+    "elapsed_s": 17.55,
+    "progress": {
+      "index": 6,
+      "total": 6,
+      "candidate": "output-products",
+      "strategy": "sequence-pair",
+      "phase": "laid-out",
+      "area": 3502,
+      "ok": true,
+      "reason": null,
+      "projection_failures": []
+    }
+  },
+  "displayedAfterSettlement": {
+    "title": "QuickStart-Step3-Oil-RedCube",
+    "hasBuildReport": false,
+    "hasCopy": false,
+    "hasTrace": false,
+    "inputLength": 8278
+  }
+}
