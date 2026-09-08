@@ -1,0 +1,49 @@
+{
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?o=conveyor-belt-3*1080&ibe=conveyor-belt-3&rex=P*Y*d*k*u*BN*BU*BX*Bk~Bl*Bs*CF~CG*CQ~CR&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "60",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "all-products",
+  "-o",
+  "docs/superpowers/evidence/2026-09-07-hierarchical-v4/large-belt3-all-products-b60-r1.blueprint.txt"
+ ],
+ "blueprint": {
+  "bytes": 0,
+  "exists": false,
+  "path": "docs/superpowers/evidence/2026-09-07-hierarchical-v4/large-belt3-all-products-b60-r1.blueprint.txt"
+ },
+ "built": {},
+ "exit": 3,
+ "refusals": [
+  "no valid layout for all-products after 60s: hierarchical/all-products: unrouted cut(s): magnet: block 7 lane head 5251: no port access corridor (held=0 wants=1 options=0); magnetic-coil: block 8 lane head 7353: no port access corridor (held=0 wants=1 options=0); gear: block 8 lane head 7304: no port access corridor (held=0 wants=1 options=0); magnetic-coil: block 9 lane head 8324: no port access corridor (held=0 wants=1 options=0); gear: block 9 lane head 8275: no po. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise."
+ ],
+ "stats": {
+  "hierarchical/all-products": {
+   "arm_dispatch_both": "3",
+   "arm_dispatch_freeform": "7",
+   "arm_dispatch_sequence_pair": "4",
+   "blocks": "11",
+   "blocks_unattempted": "0",
+   "compose_gap": "2",
+   "cut_lanes": "89",
+   "nogood_skips": "2",
+   "player_fed": "0",
+   "port_demands": "102",
+   "power_infill_towers": "0",
+   "power_uncovered_tiles": "0",
+   "recut_rounds": "2",
+   "reservation_degraded": "4",
+   "reservation_missing": "5",
+   "reservation_partial": "4",
+   "resplits": "2",
+   "unrouted_cuts": "18"
+  }
+ },
+ "validation_errors": {},
+ "wall_s": 60.48
+}

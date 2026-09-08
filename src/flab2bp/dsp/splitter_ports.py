@@ -103,14 +103,18 @@ class _NodeIndex:
     by_id: Mapping[int, _Node]
     unique_belt_predecessor: Mapping[int, _Node | None]
     attachments_by_splitter: Mapping[int, tuple[_Attachment, ...]]
+    splitters: tuple[_Node, ...]
 
     @classmethod
     def build(cls, nodes: tuple[_Node, ...]) -> _NodeIndex:
         by_id: dict[int, _Node] = {}
         unique_belt_predecessor: dict[int, _Node | None] = {}
         attachments: dict[int, list[_Attachment]] = defaultdict(list)
+        splitters: list[_Node] = []
         for node in nodes:
             by_id[node.id] = node
+            if node.item_id == catalog.SPLITTER_ID:
+                splitters.append(node)
             if not catalog.is_belt(node.item_id):
                 continue
             if node.output_obj is not None:
@@ -127,6 +131,7 @@ class _NodeIndex:
             attachments_by_splitter=MappingProxyType(
                 {splitter: tuple(linked) for splitter, linked in attachments.items()}
             ),
+            splitters=tuple(splitters),
         )
 
 
@@ -457,9 +462,7 @@ def _issues(
 ) -> tuple[SplitterPortIssue, ...]:
     index = _NodeIndex.build(nodes)
     out: list[SplitterPortIssue] = []
-    for splitter in nodes:
-        if splitter.item_id != catalog.SPLITTER_ID:
-            continue
+    for splitter in index.splitters:
         if splitter.model_index not in catalog.SPLITTER_MODEL_INDICES:
             out.append(_unsupported_model_issue(splitter))
             continue

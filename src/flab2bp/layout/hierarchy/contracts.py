@@ -22,9 +22,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from fractions import Fraction
 
-from flab2bp.dsp import catalog
 from flab2bp.layout import markers
-from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.base import Placement
+from flab2bp.layout.buildings import Buildings
 from flab2bp.layout.hierarchy.partition import Cut
 from flab2bp.spec import BuildSpec
 
@@ -53,81 +53,41 @@ class ContractError(ValueError):
     """A consuming block's entry lane cannot be filled from what is offered."""
 
 
-def _machines_behind(buildings: tuple[PlacedBuilding, ...], strip: int) -> int:
+def _machines_behind(buildings: Buildings, strip: int) -> int:
     """Production machines (not belts, sorters, or splitters) in one strip.
 
     A machine building is the only kind that carries a real recipe, so
-    ``recipe_id != 0`` picks it out: every ``PlacedBuilding`` constructor that
-    sets a nonzero ``recipe_id`` does so from a ``MachineGroup``, and every
-    belt/sorter/splitter/piler constructor leaves it at the default 0.
+    ``recipe_id != 0`` picks it out.  Reapply that exact predicate over the
+    indexed owner-strip bucket: the Buildings kind bucket is deliberately
+    coarser and also contains power nodes and belt addons.
     """
-    return sum(1 for b in buildings if b.owner_strip == strip and b.recipe_id != 0)
+    records = buildings.all()
+    return sum(1 for i in buildings.by_owner_strip(strip) if records[i].recipe_id != 0)
 
 
-def _belt_run(buildings: tuple[PlacedBuilding, ...], index: int, *, forward: bool) -> set[int]:
-    """Every belt of the run through ``index``, in one direction.
-
-    Belt chains are forward-linked, so a tail's run is everything that flows
-    INTO it (``forward=False``) and a head's run is everything it flows into
-    (``forward=True``).  Splitters and pilers are crossed rather than stopped
-    at: the belts around one name it as their ``output_obj``/``input_obj``, and
-    the cargo does pass through.
-    """
-    onward: dict[int, list[int]] = defaultdict(list)
-    for i, b in enumerate(buildings):
-        link = b.output_obj
-        if link is None or not 0 <= link < len(buildings):
-            continue
-        if catalog.is_belt(b.item_id) and catalog.is_belt(buildings[link].item_id):
-            onward[i].append(link)
-        elif catalog.is_belt(b.item_id):
-            # ``i`` feeds a splitter/piler; every belt drawing from that
-            # junction continues the run.
-            for j, other in enumerate(buildings):
-                if catalog.is_belt(other.item_id) and other.input_obj == link:
-                    onward[i].append(j)
-    if not forward:
-        backward: dict[int, list[int]] = defaultdict(list)
-        for src, dsts in onward.items():
-            for dst in dsts:
-                backward[dst].append(src)
-        onward = backward
-    seen = {index}
-    pending = [index]
-    while pending:
-        node = pending.pop()
-        for nxt in onward.get(node, ()):
-            if nxt not in seen:
-                seen.add(nxt)
-                pending.append(nxt)
-    return seen
-
-
-def _machines_on_lane(buildings: tuple[PlacedBuilding, ...], index: int, *, puts_on: bool) -> int:
+def _machines_on_lane(buildings: Buildings, index: int, *, puts_on: bool) -> int:
     """Machines docked on the run through lane ``index``.
 
-    ``puts_on`` selects the direction of the dock: a producing machine's sorter
-    names the machine as its ``input_obj`` and a belt as its ``output_obj``, a
-    consuming machine's the other way round.  This is the provenance that
-    survives when ``owner_strip`` does not, which on a freeform block's routed
-    boundary belts is always.
+    Drive from the run's belts into their incident sorter buckets rather than
+    scanning every building once per boundary lane.
     """
-    run = _belt_run(buildings, index, forward=not puts_on)
+    run = buildings.belt_run(index, forward=not puts_on, through_any_host=True)
+    records = buildings.all()
     machines: set[int] = set()
-    for b in buildings:
-        if not catalog.is_sorter(b.item_id):
-            continue
-        machine, belt = (b.input_obj, b.output_obj) if puts_on else (b.output_obj, b.input_obj)
-        if machine is None or belt is None or belt not in run:
-            continue
-        if 0 <= machine < len(buildings) and buildings[machine].recipe_id != 0:
-            machines.add(machine)
+    for belt in run:
+        sorters = buildings.sorters_into(belt) if puts_on else buildings.sorters_out_of(belt)
+        for sorter_index in sorters:
+            sorter = records[sorter_index]
+            machine = sorter.input_obj if puts_on else sorter.output_obj
+            candidate = buildings.by_index(machine)
+            if machine is not None and candidate is not None and candidate.recipe_id != 0:
+                machines.add(machine)
     return len(machines)
 
 
 def _apportion(
     total: Fraction,
-    buildings: tuple[PlacedBuilding, ...],
+    buildings: Buildings,
     indices: list[int],
     *,
     puts_on: bool = True,
@@ -153,13 +113,14 @@ def _apportion(
     arithmetic, so the parts always sum back to ``total``.
     """
     n = len(indices)
+    records = buildings.all()
     weights: list[int]
-    if any(buildings[i].owner_strip is None for i in indices):
+    if any(records[i].owner_strip is None for i in indices):
         weights = [_machines_on_lane(buildings, i, puts_on=puts_on) for i in indices]
     else:
         weights = []
         for i in indices:
-            strip = buildings[i].owner_strip
+            strip = records[i].owner_strip
             assert strip is not None  # every lane checked above
             weights.append(_machines_behind(buildings, strip))
     total_weight = sum(weights)
@@ -201,11 +162,16 @@ def boundary_lanes(
     promises the item from outside.
     """
     buildings = placement.buildings
+    building_index = Buildings.of(placement)
     sorter_fed = {
-        b.output_obj for b in buildings if catalog.is_sorter(b.item_id) and b.output_obj is not None
+        buildings[i].output_obj
+        for i in building_index.sorters()
+        if buildings[i].output_obj is not None
     }
     sorter_drawn = {
-        b.input_obj for b in buildings if catalog.is_sorter(b.item_id) and b.input_obj is not None
+        buildings[i].input_obj
+        for i in building_index.sorters()
+        if buildings[i].input_obj is not None
     }
 
     tail_indices: dict[str, list[int]] = defaultdict(list)
@@ -225,7 +191,12 @@ def boundary_lanes(
         for item, indices in sorted(tail_indices.items())
         for i, rate in zip(
             indices,
-            _apportion(sub.outputs.get(item, Fraction(0)), buildings, indices, puts_on=True),
+            _apportion(
+                sub.outputs.get(item, Fraction(0)),
+                building_index,
+                indices,
+                puts_on=True,
+            ),
             strict=True,
         )
     ]
@@ -236,7 +207,7 @@ def boundary_lanes(
             indices,
             _apportion(
                 sub.external_inputs.get(item, Fraction(0)),
-                buildings,
+                building_index,
                 indices,
                 puts_on=False,
             ),

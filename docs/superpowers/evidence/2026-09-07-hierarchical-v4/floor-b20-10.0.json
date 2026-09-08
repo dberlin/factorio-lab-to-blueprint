@@ -1,0 +1,10 @@
+{
+  "block": 20,
+  "budget_s": 10.0,
+  "ok": false,
+  "recipes": [
+    "super-magnetic-ring"
+  ],
+  "verdict": "no valid layout for no-proliferator#block20 after 10s: deadline exhausted before finding an exact layout. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.",
+  "wall_s": 8.711
+}

@@ -1,0 +1,1459 @@
+{
+  "budget_s": 60.0,
+  "reason": "9 block(s) never placed, out of re-cut round(s) after 2 of 2 the 36.0s round wall allows: block 20 (steel, titanium-alloy): REFUSED: route evidence from 15 packs at candidate heights 12, 16, 21, 26, 33: failure kinds dynamic-access=6, static-access=9; no logical net failed in every retained pack; investigate the DENSITY/SEARCH-SPACE explored, not a proved impossibility; block 26 (copper-ingot): REFUSED: route evidence from 15 packs at candidate heights 9, 12, 16, 20, 25: failure kinds dynamic-access=15; the same logical net copper-ore/internal failed in every retained pack; investigate that NET-LEVEL routing constraint, not a wholesale packing impossibility; block 27 (copper-ingot): REFUSED: route evidence from 15 packs at candidate heights 9, 12, 16, 20, 25: failure kinds dynamic-access=15; the same logical net copper-ore/internal failed in every retained pack; investigate that NET-LEVEL routing constraint, not a wholesale packing impossibility; block 28 (magnetic-coil): REFUSED: route evidence from 15 packs at candidate heights 16, 22, 28, 35, 44: failure kinds dynamic-access=22, sealed-pocket=4, static-access=15; no logical net failed in every retained pack; investigate the DENSITY/SEARCH-SPACE explored, not a proved impossibility; block 29 (electric-motor): REFUSED: route evidence from 15 packs at candidate heights 15, 20, 26, 32, 41: failure kinds dynamic-access=6, static-access=12; no logical net failed in every retained pack; investigate the DENSITY/SEARCH-SPACE explored, not a proved impossibility; block 30 (electric-motor): REFUSED: route evidence from 15 packs at candidate heights 15, 20, 26, 32, 41: failure kinds dynamic-access=6, static-access=12; no logical net failed in every retained pack; investigate the DENSITY/SEARCH-SPACE explored, not a proved impossibility; block 31 (electric-motor): REFUSED: no pack was ever routed: 1 lane head could not obtain the belt approaches they need (proliferator-3 into ? at (26, 2, 0) (wants 1, held 0, 0 free side(s))); this is a PORT-SEATING defect independent of the packing -- every candidate height produced the same 1 failures; block 32 (conveyor-belt-1, conveyor-belt-2, electromagnetic-turbine): REFUSED: route evidence from 13 packs at candidate heights 16, 22, 28, 35, 44: failure kinds dynamic-access=21, sealed-pocket=2, static-access=10; no logical net failed in every retained pack; investigate the DENSITY/SEARCH-SPACE explored, not a proved impossibility; block 33 (electromagnetic-turbine): REFUSED: route evidence from 15 packs at candidate heights 13, 18, 23, 28, 36: failure kinds dynamic-access=13, static-access=9; no logical net failed in every retained pack; investigate the DENSITY/SEARCH-SPACE explored, not a proved impossibility",
+  "rounds": [
+    {
+      "block_budget_s": 11.72533627731415,
+      "blocks": [
+        {
+          "index": 0,
+          "recipes": [
+            "titanium-ingot"
+          ],
+          "units": [
+            {
+              "count": 6,
+              "group_index": 32,
+              "recipe": "titanium-ingot",
+              "uid": 2000025
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "recipes": [
+            "magnet"
+          ],
+          "units": [
+            {
+              "count": 37,
+              "group_index": 16,
+              "recipe": "magnet",
+              "uid": 2000026
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "recipes": [
+            "magnet"
+          ],
+          "units": [
+            {
+              "count": 37,
+              "group_index": 16,
+              "recipe": "magnet",
+              "uid": 2000027
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "recipes": [
+            "iron-ingot"
+          ],
+          "units": [
+            {
+              "count": 25,
+              "group_index": 14,
+              "recipe": "iron-ingot",
+              "uid": 2000028
+            }
+          ]
+        },
+        {
+          "index": 4,
+          "recipes": [
+            "iron-ingot"
+          ],
+          "units": [
+            {
+              "count": 25,
+              "group_index": 14,
+              "recipe": "iron-ingot",
+              "uid": 2000029
+            }
+          ]
+        },
+        {
+          "index": 5,
+          "recipes": [
+            "iron-ingot"
+          ],
+          "units": [
+            {
+              "count": 25,
+              "group_index": 14,
+              "recipe": "iron-ingot",
+              "uid": 2000030
+            }
+          ]
+        },
+        {
+          "index": 6,
+          "recipes": [
+            "gear"
+          ],
+          "units": [
+            {
+              "count": 21,
+              "group_index": 10,
+              "recipe": "gear",
+              "uid": 2000005
+            }
+          ]
+        },
+        {
+          "index": 7,
+          "recipes": [
+            "high-purity-silicon"
+          ],
+          "units": [
+            {
+              "count": 21,
+              "group_index": 13,
+              "recipe": "high-purity-silicon",
+              "uid": 2000031
+            }
+          ]
+        },
+        {
+          "index": 8,
+          "recipes": [
+            "graphene-advanced"
+          ],
+          "units": [
+            {
+              "count": 10,
+              "group_index": 12,
+              "recipe": "graphene-advanced",
+              "uid": 2000032
+            }
+          ]
+        },
+        {
+          "index": 9,
+          "recipes": [
+            "carbon-nanotube",
+            "frame-material",
+            "steel",
+            "titanium-alloy"
+          ],
+          "units": [
+            {
+              "count": 11,
+              "group_index": 0,
+              "recipe": "carbon-nanotube",
+              "uid": 2000021
+            },
+            {
+              "count": 7,
+              "group_index": 9,
+              "recipe": "frame-material",
+              "uid": 2000022
+            },
+            {
+              "count": 11,
+              "group_index": 29,
+              "recipe": "steel",
+              "uid": 2000023
+            },
+            {
+              "count": 6,
+              "group_index": 31,
+              "recipe": "titanium-alloy",
+              "uid": 2000024
+            }
+          ]
+        },
+        {
+          "index": 10,
+          "recipes": [
+            "glass"
+          ],
+          "units": [
+            {
+              "count": 6,
+              "group_index": 11,
+              "recipe": "glass",
+              "uid": 2000033
+            }
+          ]
+        },
+        {
+          "index": 11,
+          "recipes": [
+            "energetic-graphite"
+          ],
+          "units": [
+            {
+              "count": 11,
+              "group_index": 8,
+              "recipe": "energetic-graphite",
+              "uid": 2000034
+            }
+          ]
+        },
+        {
+          "index": 12,
+          "recipes": [
+            "copper-ingot"
+          ],
+          "units": [
+            {
+              "count": 24,
+              "group_index": 5,
+              "recipe": "copper-ingot",
+              "uid": 2000035
+            }
+          ]
+        },
+        {
+          "index": 13,
+          "recipes": [
+            "conveyor-belt-3",
+            "miniature-particle-collider",
+            "ray-receiver",
+            "sorter-4"
+          ],
+          "units": [
+            {
+              "count": 2,
+              "group_index": 4,
+              "recipe": "conveyor-belt-3",
+              "uid": 2000000
+            },
+            {
+              "count": 1,
+              "group_index": 19,
+              "recipe": "miniature-particle-collider",
+              "uid": 2000001
+            },
+            {
+              "count": 1,
+              "group_index": 24,
+              "recipe": "ray-receiver",
+              "uid": 2000002
+            },
+            {
+              "count": 2,
+              "group_index": 28,
+              "recipe": "sorter-4",
+              "uid": 2000003
+            }
+          ]
+        },
+        {
+          "index": 14,
+          "recipes": [
+            "super-magnetic-ring"
+          ],
+          "units": [
+            {
+              "count": 20,
+              "group_index": 30,
+              "recipe": "super-magnetic-ring",
+              "uid": 2000004
+            }
+          ]
+        },
+        {
+          "index": 15,
+          "recipes": [
+            "sorter-1",
+            "sorter-2",
+            "sorter-3"
+          ],
+          "units": [
+            {
+              "count": 4,
+              "group_index": 25,
+              "recipe": "sorter-1",
+              "uid": 2000006
+            },
+            {
+              "count": 2,
+              "group_index": 26,
+              "recipe": "sorter-2",
+              "uid": 2000007
+            },
+            {
+              "count": 2,
+              "group_index": 27,
+              "recipe": "sorter-3",
+              "uid": 2000008
+            }
+          ]
+        },
+        {
+          "index": 16,
+          "recipes": [
+            "electric-motor"
+          ],
+          "units": [
+            {
+              "count": 47,
+              "group_index": 6,
+              "recipe": "electric-motor",
+              "uid": 2000009
+            }
+          ]
+        },
+        {
+          "index": 17,
+          "recipes": [
+            "conveyor-belt-1",
+            "conveyor-belt-2",
+            "electromagnetic-turbine",
+            "magnetic-coil"
+          ],
+          "units": [
+            {
+              "count": 2,
+              "group_index": 2,
+              "recipe": "conveyor-belt-1",
+              "uid": 2000010
+            },
+            {
+              "count": 2,
+              "group_index": 3,
+              "recipe": "conveyor-belt-2",
+              "uid": 2000011
+            },
+            {
+              "count": 28,
+              "group_index": 7,
+              "recipe": "electromagnetic-turbine",
+              "uid": 2000012
+            },
+            {
+              "count": 21,
+              "group_index": 17,
+              "recipe": "magnetic-coil",
+              "uid": 2000013
+            }
+          ]
+        },
+        {
+          "index": 18,
+          "recipes": [
+            "circuit-board",
+            "logistics-distributor",
+            "microcrystalline-component",
+            "photon-combiner",
+            "plasma-exciter",
+            "prism",
+            "processor"
+          ],
+          "units": [
+            {
+              "count": 5,
+              "group_index": 1,
+              "recipe": "circuit-board",
+              "uid": 2000014
+            },
+            {
+              "count": 1,
+              "group_index": 15,
+              "recipe": "logistics-distributor",
+              "uid": 2000015
+            },
+            {
+              "count": 10,
+              "group_index": 18,
+              "recipe": "microcrystalline-component",
+              "uid": 2000016
+            },
+            {
+              "count": 3,
+              "group_index": 20,
+              "recipe": "photon-combiner",
+              "uid": 2000017
+            },
+            {
+              "count": 1,
+              "group_index": 21,
+              "recipe": "plasma-exciter",
+              "uid": 2000018
+            },
+            {
+              "count": 3,
+              "group_index": 22,
+              "recipe": "prism",
+              "uid": 2000019
+            },
+            {
+              "count": 9,
+              "group_index": 23,
+              "recipe": "processor",
+              "uid": 2000020
+            }
+          ]
+        }
+      ],
+      "round": 0
+    },
+    {
+      "block_budget_s": 11.594954982982017,
+      "blocks": [
+        {
+          "index": 0,
+          "recipes": [
+            "titanium-ingot"
+          ],
+          "units": [
+            {
+              "count": 6,
+              "group_index": 32,
+              "recipe": "titanium-ingot",
+              "uid": 2000025
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "recipes": [
+            "magnet"
+          ],
+          "units": [
+            {
+              "count": 37,
+              "group_index": 16,
+              "recipe": "magnet",
+              "uid": 2000026
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "recipes": [
+            "magnet"
+          ],
+          "units": [
+            {
+              "count": 37,
+              "group_index": 16,
+              "recipe": "magnet",
+              "uid": 2000027
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "recipes": [
+            "iron-ingot"
+          ],
+          "units": [
+            {
+              "count": 25,
+              "group_index": 14,
+              "recipe": "iron-ingot",
+              "uid": 2000028
+            }
+          ]
+        },
+        {
+          "index": 4,
+          "recipes": [
+            "iron-ingot"
+          ],
+          "units": [
+            {
+              "count": 25,
+              "group_index": 14,
+              "recipe": "iron-ingot",
+              "uid": 2000029
+            }
+          ]
+        },
+        {
+          "index": 5,
+          "recipes": [
+            "iron-ingot"
+          ],
+          "units": [
+            {
+              "count": 25,
+              "group_index": 14,
+              "recipe": "iron-ingot",
+              "uid": 2000030
+            }
+          ]
+        },
+        {
+          "index": 6,
+          "recipes": [
+            "gear"
+          ],
+          "units": [
+            {
+              "count": 21,
+              "group_index": 10,
+              "recipe": "gear",
+              "uid": 2000005
+            }
+          ]
+        },
+        {
+          "index": 7,
+          "recipes": [
+            "high-purity-silicon"
+          ],
+          "units": [
+            {
+              "count": 21,
+              "group_index": 13,
+              "recipe": "high-purity-silicon",
+              "uid": 2000031
+            }
+          ]
+        },
+        {
+          "index": 8,
+          "recipes": [
+            "graphene-advanced"
+          ],
+          "units": [
+            {
+              "count": 10,
+              "group_index": 12,
+              "recipe": "graphene-advanced",
+              "uid": 2000032
+            }
+          ]
+        },
+        {
+          "index": 9,
+          "recipes": [
+            "carbon-nanotube",
+            "frame-material",
+            "steel",
+            "titanium-alloy"
+          ],
+          "units": [
+            {
+              "count": 11,
+              "group_index": 0,
+              "recipe": "carbon-nanotube",
+              "uid": 2000021
+            },
+            {
+              "count": 7,
+              "group_index": 9,
+              "recipe": "frame-material",
+              "uid": 2000022
+            },
+            {
+              "count": 11,
+              "group_index": 29,
+              "recipe": "steel",
+              "uid": 2000023
+            },
+            {
+              "count": 6,
+              "group_index": 31,
+              "recipe": "titanium-alloy",
+              "uid": 2000024
+            }
+          ]
+        },
+        {
+          "index": 10,
+          "recipes": [
+            "glass"
+          ],
+          "units": [
+            {
+              "count": 6,
+              "group_index": 11,
+              "recipe": "glass",
+              "uid": 2000033
+            }
+          ]
+        },
+        {
+          "index": 11,
+          "recipes": [
+            "energetic-graphite"
+          ],
+          "units": [
+            {
+              "count": 11,
+              "group_index": 8,
+              "recipe": "energetic-graphite",
+              "uid": 2000034
+            }
+          ]
+        },
+        {
+          "index": 12,
+          "recipes": [
+            "copper-ingot"
+          ],
+          "units": [
+            {
+              "count": 24,
+              "group_index": 5,
+              "recipe": "copper-ingot",
+              "uid": 2000035
+            }
+          ]
+        },
+        {
+          "index": 13,
+          "recipes": [
+            "conveyor-belt-3",
+            "miniature-particle-collider",
+            "ray-receiver",
+            "sorter-4"
+          ],
+          "units": [
+            {
+              "count": 2,
+              "group_index": 4,
+              "recipe": "conveyor-belt-3",
+              "uid": 2000000
+            },
+            {
+              "count": 1,
+              "group_index": 19,
+              "recipe": "miniature-particle-collider",
+              "uid": 2000001
+            },
+            {
+              "count": 1,
+              "group_index": 24,
+              "recipe": "ray-receiver",
+              "uid": 2000002
+            },
+            {
+              "count": 2,
+              "group_index": 28,
+              "recipe": "sorter-4",
+              "uid": 2000003
+            }
+          ]
+        },
+        {
+          "index": 14,
+          "recipes": [
+            "super-magnetic-ring"
+          ],
+          "units": [
+            {
+              "count": 20,
+              "group_index": 30,
+              "recipe": "super-magnetic-ring",
+              "uid": 2000004
+            }
+          ]
+        },
+        {
+          "index": 15,
+          "recipes": [
+            "sorter-1",
+            "sorter-2",
+            "sorter-3"
+          ],
+          "units": [
+            {
+              "count": 4,
+              "group_index": 25,
+              "recipe": "sorter-1",
+              "uid": 2000006
+            },
+            {
+              "count": 2,
+              "group_index": 26,
+              "recipe": "sorter-2",
+              "uid": 2000007
+            },
+            {
+              "count": 2,
+              "group_index": 27,
+              "recipe": "sorter-3",
+              "uid": 2000008
+            }
+          ]
+        },
+        {
+          "index": 16,
+          "recipes": [
+            "electric-motor"
+          ],
+          "units": [
+            {
+              "count": 47,
+              "group_index": 6,
+              "recipe": "electric-motor",
+              "uid": 2000009
+            }
+          ]
+        },
+        {
+          "index": 17,
+          "recipes": [
+            "conveyor-belt-1",
+            "conveyor-belt-2",
+            "electromagnetic-turbine",
+            "magnetic-coil"
+          ],
+          "units": [
+            {
+              "count": 2,
+              "group_index": 2,
+              "recipe": "conveyor-belt-1",
+              "uid": 2000010
+            },
+            {
+              "count": 2,
+              "group_index": 3,
+              "recipe": "conveyor-belt-2",
+              "uid": 2000011
+            },
+            {
+              "count": 28,
+              "group_index": 7,
+              "recipe": "electromagnetic-turbine",
+              "uid": 2000012
+            },
+            {
+              "count": 21,
+              "group_index": 17,
+              "recipe": "magnetic-coil",
+              "uid": 2000013
+            }
+          ]
+        },
+        {
+          "index": 18,
+          "recipes": [
+            "circuit-board",
+            "logistics-distributor",
+            "microcrystalline-component",
+            "photon-combiner",
+            "plasma-exciter",
+            "prism",
+            "processor"
+          ],
+          "units": [
+            {
+              "count": 5,
+              "group_index": 1,
+              "recipe": "circuit-board",
+              "uid": 2000014
+            },
+            {
+              "count": 1,
+              "group_index": 15,
+              "recipe": "logistics-distributor",
+              "uid": 2000015
+            },
+            {
+              "count": 10,
+              "group_index": 18,
+              "recipe": "microcrystalline-component",
+              "uid": 2000016
+            },
+            {
+              "count": 3,
+              "group_index": 20,
+              "recipe": "photon-combiner",
+              "uid": 2000017
+            },
+            {
+              "count": 1,
+              "group_index": 21,
+              "recipe": "plasma-exciter",
+              "uid": 2000018
+            },
+            {
+              "count": 3,
+              "group_index": 22,
+              "recipe": "prism",
+              "uid": 2000019
+            },
+            {
+              "count": 9,
+              "group_index": 23,
+              "recipe": "processor",
+              "uid": 2000020
+            }
+          ]
+        }
+      ],
+      "round": 1
+    },
+    {
+      "block_budget_s": 10.12666118494235,
+      "blocks": [
+        {
+          "index": 0,
+          "recipes": [
+            "titanium-ingot"
+          ],
+          "units": [
+            {
+              "count": 6,
+              "group_index": 32,
+              "recipe": "titanium-ingot",
+              "uid": 2000025
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "recipes": [
+            "magnet"
+          ],
+          "units": [
+            {
+              "count": 37,
+              "group_index": 16,
+              "recipe": "magnet",
+              "uid": 2000026
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "recipes": [
+            "magnet"
+          ],
+          "units": [
+            {
+              "count": 37,
+              "group_index": 16,
+              "recipe": "magnet",
+              "uid": 2000027
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "recipes": [
+            "iron-ingot"
+          ],
+          "units": [
+            {
+              "count": 9,
+              "group_index": 14,
+              "recipe": "iron-ingot",
+              "uid": 2000000
+            }
+          ]
+        },
+        {
+          "index": 4,
+          "recipes": [
+            "iron-ingot"
+          ],
+          "units": [
+            {
+              "count": 8,
+              "group_index": 14,
+              "recipe": "iron-ingot",
+              "uid": 2000001
+            }
+          ]
+        },
+        {
+          "index": 5,
+          "recipes": [
+            "iron-ingot"
+          ],
+          "units": [
+            {
+              "count": 8,
+              "group_index": 14,
+              "recipe": "iron-ingot",
+              "uid": 2000002
+            }
+          ]
+        },
+        {
+          "index": 6,
+          "recipes": [
+            "iron-ingot"
+          ],
+          "units": [
+            {
+              "count": 9,
+              "group_index": 14,
+              "recipe": "iron-ingot",
+              "uid": 2000000
+            }
+          ]
+        },
+        {
+          "index": 7,
+          "recipes": [
+            "iron-ingot"
+          ],
+          "units": [
+            {
+              "count": 8,
+              "group_index": 14,
+              "recipe": "iron-ingot",
+              "uid": 2000001
+            }
+          ]
+        },
+        {
+          "index": 8,
+          "recipes": [
+            "iron-ingot"
+          ],
+          "units": [
+            {
+              "count": 8,
+              "group_index": 14,
+              "recipe": "iron-ingot",
+              "uid": 2000002
+            }
+          ]
+        },
+        {
+          "index": 9,
+          "recipes": [
+            "iron-ingot"
+          ],
+          "units": [
+            {
+              "count": 9,
+              "group_index": 14,
+              "recipe": "iron-ingot",
+              "uid": 2000000
+            }
+          ]
+        },
+        {
+          "index": 10,
+          "recipes": [
+            "iron-ingot"
+          ],
+          "units": [
+            {
+              "count": 8,
+              "group_index": 14,
+              "recipe": "iron-ingot",
+              "uid": 2000001
+            }
+          ]
+        },
+        {
+          "index": 11,
+          "recipes": [
+            "iron-ingot"
+          ],
+          "units": [
+            {
+              "count": 8,
+              "group_index": 14,
+              "recipe": "iron-ingot",
+              "uid": 2000002
+            }
+          ]
+        },
+        {
+          "index": 12,
+          "recipes": [
+            "gear"
+          ],
+          "units": [
+            {
+              "count": 7,
+              "group_index": 10,
+              "recipe": "gear",
+              "uid": 2000000
+            }
+          ]
+        },
+        {
+          "index": 13,
+          "recipes": [
+            "gear"
+          ],
+          "units": [
+            {
+              "count": 7,
+              "group_index": 10,
+              "recipe": "gear",
+              "uid": 2000001
+            }
+          ]
+        },
+        {
+          "index": 14,
+          "recipes": [
+            "gear"
+          ],
+          "units": [
+            {
+              "count": 7,
+              "group_index": 10,
+              "recipe": "gear",
+              "uid": 2000002
+            }
+          ]
+        },
+        {
+          "index": 15,
+          "recipes": [
+            "high-purity-silicon"
+          ],
+          "units": [
+            {
+              "count": 7,
+              "group_index": 13,
+              "recipe": "high-purity-silicon",
+              "uid": 2000000
+            }
+          ]
+        },
+        {
+          "index": 16,
+          "recipes": [
+            "high-purity-silicon"
+          ],
+          "units": [
+            {
+              "count": 7,
+              "group_index": 13,
+              "recipe": "high-purity-silicon",
+              "uid": 2000001
+            }
+          ]
+        },
+        {
+          "index": 17,
+          "recipes": [
+            "high-purity-silicon"
+          ],
+          "units": [
+            {
+              "count": 7,
+              "group_index": 13,
+              "recipe": "high-purity-silicon",
+              "uid": 2000002
+            }
+          ]
+        },
+        {
+          "index": 18,
+          "recipes": [
+            "graphene-advanced"
+          ],
+          "units": [
+            {
+              "count": 10,
+              "group_index": 12,
+              "recipe": "graphene-advanced",
+              "uid": 2000032
+            }
+          ]
+        },
+        {
+          "index": 19,
+          "recipes": [
+            "carbon-nanotube"
+          ],
+          "units": [
+            {
+              "count": 11,
+              "group_index": 0,
+              "recipe": "carbon-nanotube",
+              "uid": 2000000
+            }
+          ]
+        },
+        {
+          "index": 20,
+          "recipes": [
+            "steel",
+            "titanium-alloy"
+          ],
+          "units": [
+            {
+              "count": 11,
+              "group_index": 29,
+              "recipe": "steel",
+              "uid": 2000002
+            },
+            {
+              "count": 6,
+              "group_index": 31,
+              "recipe": "titanium-alloy",
+              "uid": 2000003
+            }
+          ]
+        },
+        {
+          "index": 21,
+          "recipes": [
+            "frame-material"
+          ],
+          "units": [
+            {
+              "count": 7,
+              "group_index": 9,
+              "recipe": "frame-material",
+              "uid": 2000001
+            }
+          ]
+        },
+        {
+          "index": 22,
+          "recipes": [
+            "glass"
+          ],
+          "units": [
+            {
+              "count": 6,
+              "group_index": 11,
+              "recipe": "glass",
+              "uid": 2000033
+            }
+          ]
+        },
+        {
+          "index": 23,
+          "recipes": [
+            "energetic-graphite"
+          ],
+          "units": [
+            {
+              "count": 4,
+              "group_index": 8,
+              "recipe": "energetic-graphite",
+              "uid": 2000000
+            }
+          ]
+        },
+        {
+          "index": 24,
+          "recipes": [
+            "energetic-graphite"
+          ],
+          "units": [
+            {
+              "count": 4,
+              "group_index": 8,
+              "recipe": "energetic-graphite",
+              "uid": 2000001
+            }
+          ]
+        },
+        {
+          "index": 25,
+          "recipes": [
+            "energetic-graphite"
+          ],
+          "units": [
+            {
+              "count": 3,
+              "group_index": 8,
+              "recipe": "energetic-graphite",
+              "uid": 2000002
+            }
+          ]
+        },
+        {
+          "index": 26,
+          "recipes": [
+            "copper-ingot"
+          ],
+          "units": [
+            {
+              "count": 12,
+              "group_index": 5,
+              "recipe": "copper-ingot",
+              "uid": 2000000
+            }
+          ]
+        },
+        {
+          "index": 27,
+          "recipes": [
+            "copper-ingot"
+          ],
+          "units": [
+            {
+              "count": 12,
+              "group_index": 5,
+              "recipe": "copper-ingot",
+              "uid": 2000001
+            }
+          ]
+        },
+        {
+          "index": 28,
+          "recipes": [
+            "magnetic-coil"
+          ],
+          "units": [
+            {
+              "count": 21,
+              "group_index": 17,
+              "recipe": "magnetic-coil",
+              "uid": 2000004
+            }
+          ]
+        },
+        {
+          "index": 29,
+          "recipes": [
+            "electric-motor"
+          ],
+          "units": [
+            {
+              "count": 16,
+              "group_index": 6,
+              "recipe": "electric-motor",
+              "uid": 2000000
+            }
+          ]
+        },
+        {
+          "index": 30,
+          "recipes": [
+            "electric-motor"
+          ],
+          "units": [
+            {
+              "count": 16,
+              "group_index": 6,
+              "recipe": "electric-motor",
+              "uid": 2000001
+            }
+          ]
+        },
+        {
+          "index": 31,
+          "recipes": [
+            "electric-motor"
+          ],
+          "units": [
+            {
+              "count": 15,
+              "group_index": 6,
+              "recipe": "electric-motor",
+              "uid": 2000002
+            }
+          ]
+        },
+        {
+          "index": 32,
+          "recipes": [
+            "conveyor-belt-1",
+            "conveyor-belt-2",
+            "electromagnetic-turbine"
+          ],
+          "units": [
+            {
+              "count": 2,
+              "group_index": 2,
+              "recipe": "conveyor-belt-1",
+              "uid": 2000000
+            },
+            {
+              "count": 2,
+              "group_index": 3,
+              "recipe": "conveyor-belt-2",
+              "uid": 2000001
+            },
+            {
+              "count": 14,
+              "group_index": 7,
+              "recipe": "electromagnetic-turbine",
+              "uid": 2000002
+            }
+          ]
+        },
+        {
+          "index": 33,
+          "recipes": [
+            "electromagnetic-turbine"
+          ],
+          "units": [
+            {
+              "count": 14,
+              "group_index": 7,
+              "recipe": "electromagnetic-turbine",
+              "uid": 2000003
+            }
+          ]
+        },
+        {
+          "index": 34,
+          "recipes": [
+            "super-magnetic-ring"
+          ],
+          "units": [
+            {
+              "count": 10,
+              "group_index": 30,
+              "recipe": "super-magnetic-ring",
+              "uid": 2000000
+            }
+          ]
+        },
+        {
+          "index": 35,
+          "recipes": [
+            "super-magnetic-ring"
+          ],
+          "units": [
+            {
+              "count": 10,
+              "group_index": 30,
+              "recipe": "super-magnetic-ring",
+              "uid": 2000001
+            }
+          ]
+        },
+        {
+          "index": 36,
+          "recipes": [
+            "circuit-board",
+            "logistics-distributor",
+            "microcrystalline-component",
+            "photon-combiner",
+            "plasma-exciter",
+            "prism",
+            "processor"
+          ],
+          "units": [
+            {
+              "count": 5,
+              "group_index": 1,
+              "recipe": "circuit-board",
+              "uid": 2000014
+            },
+            {
+              "count": 1,
+              "group_index": 15,
+              "recipe": "logistics-distributor",
+              "uid": 2000015
+            },
+            {
+              "count": 10,
+              "group_index": 18,
+              "recipe": "microcrystalline-component",
+              "uid": 2000016
+            },
+            {
+              "count": 3,
+              "group_index": 20,
+              "recipe": "photon-combiner",
+              "uid": 2000017
+            },
+            {
+              "count": 1,
+              "group_index": 21,
+              "recipe": "plasma-exciter",
+              "uid": 2000018
+            },
+            {
+              "count": 3,
+              "group_index": 22,
+              "recipe": "prism",
+              "uid": 2000019
+            },
+            {
+              "count": 9,
+              "group_index": 23,
+              "recipe": "processor",
+              "uid": 2000020
+            }
+          ]
+        },
+        {
+          "index": 37,
+          "recipes": [
+            "sorter-1",
+            "sorter-2",
+            "sorter-3"
+          ],
+          "units": [
+            {
+              "count": 4,
+              "group_index": 25,
+              "recipe": "sorter-1",
+              "uid": 2000006
+            },
+            {
+              "count": 2,
+              "group_index": 26,
+              "recipe": "sorter-2",
+              "uid": 2000007
+            },
+            {
+              "count": 2,
+              "group_index": 27,
+              "recipe": "sorter-3",
+              "uid": 2000008
+            }
+          ]
+        },
+        {
+          "index": 38,
+          "recipes": [
+            "conveyor-belt-3",
+            "miniature-particle-collider",
+            "ray-receiver",
+            "sorter-4"
+          ],
+          "units": [
+            {
+              "count": 2,
+              "group_index": 4,
+              "recipe": "conveyor-belt-3",
+              "uid": 2000000
+            },
+            {
+              "count": 1,
+              "group_index": 19,
+              "recipe": "miniature-particle-collider",
+              "uid": 2000001
+            },
+            {
+              "count": 1,
+              "group_index": 24,
+              "recipe": "ray-receiver",
+              "uid": 2000002
+            },
+            {
+              "count": 2,
+              "group_index": 28,
+              "recipe": "sorter-4",
+              "uid": 2000003
+            }
+          ]
+        }
+      ],
+      "round": 2
+    }
+  ],
+  "stats": {
+    "arm_dispatch_both": 13.0,
+    "arm_dispatch_freeform": 44.0,
+    "arm_dispatch_sequence_pair": 6.0,
+    "blocks": 39.0,
+    "blocks_unattempted": 0.0,
+    "compose_gap": 0.0,
+    "cut_lanes": 0.0,
+    "nogood_skips": 24.0,
+    "player_fed": 0.0,
+    "port_demands": 0.0,
+    "power_infill_towers": 0.0,
+    "power_uncovered_tiles": 0.0,
+    "recut_rounds": 2.0,
+    "reservation_degraded": 0.0,
+    "reservation_missing": 0.0,
+    "reservation_partial": 0.0,
+    "resplits": 2.0,
+    "unrouted_cuts": 0.0
+  },
+  "url": "https://factoriolab.github.io/dsp/list?z=eJwlx7uOwjAUhOG3OcUUKAYWhWKaY4mgVRaBEBAogRQWayVyuKTys6PEzf.NNNzAZHkmDdcnzBbD0ArTXBp-YH6kod0PtyZ-hxQSqHsgk8Bd4pLQG2Ak0Fbp223yL1Em1sfkMpEPeFoY8TyPdWPLsd3YFkZc3VMn4q41rbjuybmEuucWJ5xxxwMv9FhAN9ADtILeoI-o.9Ap7CraQrwP7GIbXSzFtx0LedOYL5cQRDE_&v=11"
+}

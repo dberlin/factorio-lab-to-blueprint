@@ -1,0 +1,19 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+hierarchical / all-products: 116 machines, 11297 tiles, 5994 buildings
+primary_band: 200
+certified_bands: 200
+inputs to belt in: copper-ingot, fire-ice, high-purity-silicon, hydrogen, iron-ingot, optical-grating-crystal, proliferator-3, silicon-ore, stone, titanium-ingot, water  (33 marked with icons)
+  recipe selection DERIVED, not pinned -- pass --flow or --fetch-flow to build FactorioLab's own selection
+  WARNING: this URL carried no technology set, so a FULLY-RESEARCHED save is ASSUMED: belt ceiling 26.55 (lab level 9), vertical belt construction YES. A URL exported from FactorioLab normally does carry one; if yours did, the belts here may climb higher than your save allows.
+  belts: conveyor-belt-3 (30.0/s); it is the fastest belt this save can build, so a lane over that rate is refused; stack 1; 0 piler(s)
+  entry lanes: copper-ingot 3 (needs 1 at 30/s)
+  entry lanes: high-purity-silicon 2 (needs 1 at 30/s)
+  entry lanes: hydrogen 2 (needs 1 at 30/s)
+  entry lanes: optical-grating-crystal 2 (needs 1 at 30/s)
+  entry lanes: proliferator-3 6 (needs 1 at 30/s)
+  entry lanes: stone 3 (needs 1 at 30/s)
+  entry lanes: titanium-ingot 5 (needs 1 at 30/s)
+  entry lanes: water 5 (needs 1 at 30/s)
+written to /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v4/docs/superpowers/evidence/2026-09-07-hierarchical-v4/large-titanium-glass-all-products-b60-r4-certify.blueprint.txt
+
+EXIT=0

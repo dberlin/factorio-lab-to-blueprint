@@ -1,0 +1,10 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+1 cells of stress, 1 at a time, 128 CP-SAT workers each, cap 3600s
+  . [  1/1]    27s freeform  stress   universe-matrix/output-products power=1 budget=30s   CLEAN     27.3s  <-- 27s
+
+=== freeform: 1/1 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 27s freeform universe-matrix/output-products power=1 budget=30s
+
+27s wall, 1/1 cells
+
+EXIT=0

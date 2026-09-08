@@ -13,7 +13,6 @@ import math
 import random
 import time
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
-from copy import deepcopy
 from dataclasses import fields, replace
 from fractions import Fraction
 from fractions import Fraction as F
@@ -39,6 +38,7 @@ from flab2bp.layout.base import (
 from flab2bp.layout.finalize import ProjectionNoGood
 from flab2bp.layout.freeform import (
     _BLAME_MAX_WALL,
+    _DETERMINISTIC_PACK_STRIPS,
     _ENTRY_RING,
     _LEVEL_TOLL,
     _ROUTE_RING,
@@ -60,6 +60,7 @@ from flab2bp.layout.freeform import (
     _commit_paths,
     _connect_short_cuts,
     _dests,
+    _deterministic_pack_work,
     _direct_column_deltas,
     _direct_net_candidates,
     _direct_origin_deltas,
@@ -385,7 +386,7 @@ def test_prepare_routing_problem_does_not_deepcopy_buildings(
     first = prepared.new_workspace()
     second = prepared.new_workspace()
     assert first.buildings is not second.buildings
-    assert first.buildings == second.buildings
+    assert tuple(first.buildings) == tuple(second.buildings)
 
 
 def test_lay_out_threads_one_strip_families_tuple_through_every_planner_call(
@@ -2623,8 +2624,9 @@ ALL_SPECS = [single_recipe_spec, two_stage_spec, magnetic_ring_spec, proliferate
 
 #: Freeform used to refuse any strip plan where one producer lane had to feed
 #: several consumer lanes, because a belt tile has one ``output_obj``.  It now
-#: taps a different TILE of the lane for each consumer and junctions there with
-#: a splitter, so the gap is closed and the marker that stood here is gone.
+#: closes the gap by having later nets branch off a sibling's committed path
+#: when they share a source lane (``_route``'s ``same_src``); ``_tap_source``
+#: builds the branch point as a splitter, so the marker that stood here is gone.
 #:
 #: Kept as a note rather than a marker: the tests it was attached to are the
 #: ones that prove the fan-out works, and they assert it directly now.
@@ -3172,6 +3174,31 @@ def test_greedy_seed_adds_only_requested_routing_clearance() -> None:
     assert freeform._routing_seed_clearance(large, sprayed_lanes=0) == 1
     assert freeform._routing_seed_clearance(large[:-1], sprayed_lanes=0) == 0
     assert freeform._routing_seed_clearance(large, sprayed_lanes=1) == 0
+
+
+class TestThePackWorkBoundScalesWithThePack:
+    """A 53-strip pack cannot have the same work bound as a 15-strip one.
+
+    Measured on `universe-matrix` (spec 2026-09-07-lane-fanout-design.md
+    section 4.1): at the fixed 0.02 units the 53-strip pack returned UNKNOWN
+    five solves out of five and produced no incumbent at all, giving up in
+    2.58s with 299s of a 300s budget unspent.
+    """
+
+    def test_the_calibrated_size_keeps_its_calibrated_bound(self) -> None:
+        assert _deterministic_pack_work(_DETERMINISTIC_PACK_STRIPS) == 0.02
+
+    def test_a_smaller_pack_is_not_given_more_work(self) -> None:
+        assert _deterministic_pack_work(4) <= 0.02
+
+    def test_a_much_larger_pack_is_given_proportionally_more(self) -> None:
+        small = _deterministic_pack_work(_DETERMINISTIC_PACK_STRIPS)
+        large = _deterministic_pack_work(53)
+        assert large > small, "a 53-strip pack must get more work than a 15-strip one"
+        assert large / small >= 53 / _DETERMINISTIC_PACK_STRIPS, (
+            "the bound must grow at least linearly in the strip count: a pack's "
+            "CP-SAT model grows at least that fast"
+        )
 
 
 # --- fallback --------------------------------------------------------------
@@ -6988,9 +7015,10 @@ class TestSolverActuallyRuns:
         """The gap this used to pin as unfixable, now closed.
 
         A belt tile has one ``output_obj``, so a lane feeding four consumers
-        cannot simply point at all four. It taps a different TILE of the lane
-        for each and puts a splitter there -- the lane keeps flowing past the
-        tap, and the branch draws from the junction.
+        cannot simply point at all four. Later nets branch off a sibling's
+        committed path instead (``_route``'s ``same_src``), and ``_tap_source``
+        builds that branch point as a splitter -- the lane keeps flowing past
+        the tap, and the branch draws from the junction.
 
         This test previously asserted the opposite (that the spec was refused),
         deliberately written to fail the moment the gap closed. It did.
@@ -8627,7 +8655,7 @@ def test_pack_window_over_every_strip_reproduces_the_full_pack() -> None:
         fixed_at={},
         seed=None,
         time_budget_s=5.0,
-        deterministic_work=freeform._DETERMINISTIC_PACK_WORK,
+        deterministic_work=freeform._DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE,
     )
     assert outcome is not None
     windowed = outcome.pack
@@ -8648,7 +8676,7 @@ def test_pack_window_reports_its_exact_cp_sat_outcome() -> None:
         fixed_at={},
         seed=None,
         time_budget_s=5.0,
-        deterministic_work=freeform._DETERMINISTIC_PACK_WORK,
+        deterministic_work=freeform._DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE,
     )
     assert outcome is not None
     assert outcome.status == "OPTIMAL"
@@ -10732,6 +10760,110 @@ class TestPower:
         assert not report.ok, "a tower 30 tiles away must not count as covering"
 
 
+# --- power infill on a composed canvas --------------------------------------
+
+
+def _canvas_with_limit(box: tuple[int, int, int, int]) -> _Canvas:
+    return _Canvas(limit=box)
+
+
+def _stand_tower(canvas: _Canvas, x: int, y: int) -> int:
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    return canvas.add(
+        PlacedBuilding(
+            item_id=catalog.TESLA_TOWER_ID,
+            model_index=tower.model_index,
+            x=x,
+            y=y,
+            width=tower.width,
+            height=tower.height,
+        ),
+        solid=True,
+    )
+
+
+def _stand_splitter(canvas: _Canvas, x: int, y: int) -> int:
+    splitter = catalog.building(catalog.SPLITTER_ID)
+    return canvas.add(
+        PlacedBuilding(
+            item_id=catalog.SPLITTER_ID,
+            model_index=splitter.model_index,
+            x=x,
+            y=y,
+            width=splitter.width,
+            height=splitter.height,
+        )
+    )
+
+
+def test_the_infill_covers_a_splitter_the_blocks_towers_do_not_reach() -> None:
+    # One tower at the origin, and a splitter far enough away to be dark. The
+    # shape of v3 gate §2.3: 76 of 80 splitters covered, 4 not.
+    canvas = _canvas_with_limit((0, 0, 60, 20))
+    _stand_tower(canvas, 0, 0)
+    _stand_splitter(canvas, 20, 0)
+
+    sites, uncovered = freeform.plan_power_infill(canvas)
+
+    assert uncovered == ()
+    assert len(sites) == 1
+
+
+def test_the_infill_places_nothing_when_every_powered_tile_is_already_covered() -> None:
+    canvas = _canvas_with_limit((0, 0, 60, 20))
+    _stand_tower(canvas, 10, 0)
+    _stand_splitter(canvas, 11, 0)
+
+    assert freeform.plan_power_infill(canvas) == ([], ())
+
+
+def test_the_infill_never_strands_a_tower_outside_the_existing_network() -> None:
+    # A splitter beyond every legal linked site: covering it would place a
+    # tower `power.connectivity` then convicts, which is a worse blueprint
+    # than a named uncovered tile.
+    canvas = _canvas_with_limit((0, 0, 400, 20))
+    _stand_tower(canvas, 0, 0)
+    _stand_splitter(canvas, 380, 0)
+
+    sites, uncovered = freeform.plan_power_infill(canvas)
+
+    assert sites == []
+    assert (380, 0) in uncovered
+
+
+def test_the_infill_refuses_a_site_inside_another_nodes_keepout() -> None:
+    # `game.power_too_close`: two power nodes closer than 3.5 world units are
+    # refused by the paste, and a Tesla Tower has no build collider, so
+    # nothing else in this file could see it.
+    #
+    # The splitter sits at x=31, not the nearest free column: the keepout disc
+    # has `max|dx| == 2` (measured off `power_node_keepout_offsets`), so with
+    # the tower at (20,0) the cell (21,0) -- one tile off the tower, the
+    # greedy's preferred site because it is closest to both the tower it must
+    # link to and the splitter it must cover -- is INSIDE the keepout and
+    # (21,3) is not. A splitter further out (x=33, tried first) lets the
+    # greedy's own distance preference land it on (23,0) regardless of whether
+    # the keepout rule runs at all, which asserts nothing: proved below by
+    # actually disabling the rule and watching this assertion fail only at
+    # x=31.
+    canvas = _canvas_with_limit((0, 0, 60, 20))
+    _stand_tower(canvas, 20, 0)
+    _stand_splitter(canvas, 31, 0)
+
+    sites, uncovered = freeform.plan_power_infill(canvas)
+
+    keepout = {
+        (20 + dx, 0 + dy)
+        for dx, dy, dz in rules.power_node_keepout_offsets(
+            catalog.building(catalog.TESLA_TOWER_ID).power_node,
+            catalog.building(catalog.TESLA_TOWER_ID).power_node,
+        )
+        if dz == 0
+    }
+    assert (21, 0) in keepout, "the scenario must actually pin a keepout cell the greedy prefers"
+    assert not set(sites) & keepout
+
+
 # --- exact arithmetic ------------------------------------------------------
 
 
@@ -11933,53 +12065,13 @@ class TestCanvasClone:
         canvas.junction_ban.add((7, 7, 0))
         return canvas
 
-    def test_clone_equals_the_original_field_for_field(self) -> None:
-        original = self._populated()
-        clone = original.clone()
-        for f in fields(_Canvas):
-            assert getattr(clone, f.name) == getattr(original, f.name), f.name
-
-    def test_clone_matches_deepcopy(self) -> None:
-        # Every field on `_Canvas` is either an immutable value (shared by
-        # `clone`, re-created by `deepcopy`) or a plain container of those, so
-        # `==` on the dataclass compares them the same way regardless of which
-        # one built them. There is no field here (like a compiled kernel
-        # handle or a callable) that lacks value equality, so nothing needs to
-        # be excluded from this comparison.
-        original = self._populated()
-        assert original.clone() == deepcopy(original)
-
-    def test_clone_passes_a_keyword_for_every_declared_field(self) -> None:
-        """Structural guard: `clone`'s hand-written field list cannot drift
-        from `_Canvas`'s actual fields without failing here.
-
-        `clone`'s docstring says listing every field by name is deliberate
-        and that a field added without a line there fails a test -- this is
-        that test.  It reads `clone`'s own source rather than exercising a
-        populated canvas, so it catches a missing (or misspelled, or
-        positional) field before anyone has to think to populate and mutate
-        the new one in the other `TestCanvasClone` tests.
-        """
-        import ast
-        import inspect
-        import textwrap
-
-        source = textwrap.dedent(inspect.getsource(_Canvas.clone))
-        call = next(
-            node
-            for node in ast.walk(ast.parse(source))
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "_Canvas"
-        )
-        passed_keywords = {kw.arg for kw in call.keywords if kw.arg is not None}
-        assert not call.args, "clone must pass every field by keyword, not positionally"
-        assert passed_keywords == {f.name for f in fields(_Canvas)}
-
     def test_mutating_the_clone_leaves_the_original_alone(self) -> None:
         original = self._populated()
         clone = original.clone()
         clone.buildings.append(_linked_belt(1, None))
+        clone.buildings[0] = replace(clone.buildings[0], output_obj=1)
+        assert clone.buildings.belts_into(1) == (0,)
+        assert original.buildings.belts_into(1) == ()
         clone.blocked[(8, 8, 0)] = 1
         clone.world_taken.add((8, 8, Fraction(0)))
         clone.solid.add((8, 8))
@@ -11992,7 +12084,12 @@ class TestCanvasClone:
         clone.port_corridors[(8, 8, 0)] = ()
         reference = self._populated()
         for f in fields(_Canvas):
-            assert getattr(original, f.name) == getattr(reference, f.name), f.name
+            original_value = getattr(original, f.name)
+            reference_value = getattr(reference, f.name)
+            if f.name == "buildings":
+                assert tuple(original_value) == tuple(reference_value)
+            else:
+                assert original_value == reference_value, f.name
 
 
 class TestAltitudeProfileCache:
@@ -12437,7 +12534,7 @@ class TestPortAccessIsReservedForEveryRole:
                     ((3, 0, 0), (4, 0, 0)),
                 ),
             },
-        )
+        ).assigned
 
         assert set(matched) == {first, second}
         occupied = {
@@ -12587,7 +12684,7 @@ def test_corridor_tie_break_never_outruns_its_work_cap(monkeypatch: pytest.Monke
     demands, corridors = _two_ports_with_two_corridors_each()
     assigned = freeform._match_access_corridors(
         demands, corridors, validate=lambda _assigned: None, deadline=time.monotonic() + 30.0
-    )
+    ).assigned
     assert len(assigned) == len(demands)
     assert seen, "the matcher solved nothing"
     assert all(work > 0.0 for work, _wall in seen), seen
@@ -12612,7 +12709,7 @@ def test_corridor_matcher_falls_back_to_the_rank_solution_when_polish_is_cut_sho
     demands, corridors = _two_ports_with_two_corridors_each()
     assigned = freeform._match_access_corridors(
         demands, corridors, validate=lambda _assigned: None, deadline=time.monotonic() + 30.0
-    )
+    ).assigned
     assert len(assigned) == len(demands)
 
 
@@ -13148,6 +13245,48 @@ class TestOneLaneCanServeSeveralDestinations:
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=4.0)
+        report = _full_report(p, spec)
+        assert report.ok, "\n".join(f.message for f in report.errors[:5])
+        assert p.stats["route_failures"] == 0.0
+
+    def test_a_lane_serves_more_consumers_than_it_has_tiles(self) -> None:
+        """A producer lane plans and lays out with more consumer strips than tiles.
+
+        `_fanout_shortfall` did NOT fire for this fixture shape, before or
+        after its deletion: measured for consumers=3..8 (the vendored
+        dataset's cap on distinct `copper-ingot` consumers), `_merge_lanes`
+        packs the distinct one-machine dest groups onto exactly
+        `producer.width` lanes, and every merged key ends up with
+        `n_src == n_sink == 1` -- the guard was structurally inert here. The
+        guard's real firing shape was different: ONE dest group sharded into
+        many strips against one narrow producer lane --
+        `universe-matrix#37`, `n_src=1`, `n_sink=15`, `tiles=10`. The
+        regression evidence for removing the guard is therefore the corpus
+        control in
+        `docs/superpowers/evidence/2026-09-07-lane-fanout/gate/control-task2.md`,
+        not this test.
+
+        What this test does cover, and why it is still worth keeping: the
+        router's model of a shared source lane is not "one tap per TILE" --
+        nets that share a source lane branch off each other's committed paths
+        (`_route`'s `same_src` grouping), and `_tap_source` builds the
+        splitter on that path.  Measured on `universe-matrix`: a 10-tile lane
+        wired all twelve of its consumers
+        (spec 2026-09-07-lane-fanout-design.md section 2).
+        """
+        spec = one_machine_fan_out_spec(4)
+        strips = plan_strips(spec, strip_len=6)
+        producers = [s for s in strips if s.group_key.startswith("copper-ingot")]
+        assert len(producers) == 1, "one machine cannot be split across shards"
+        consumers = [s for s in strips if "copper-ingot" in s.in_lanes]
+        assert len(consumers) > producers[0].width, (
+            "this spec no longer exercises fan-out past the lane's tiles: "
+            f"{len(consumers)} consumer lane(s) against a {producers[0].width}-tile lane"
+        )
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            workers=DETERMINISTIC_WORKERS,
+        ).lay_out(spec, time_budget_s=8.0)
         report = _full_report(p, spec)
         assert report.ok, "\n".join(f.message for f in report.errors[:5])
         assert p.stats["route_failures"] == 0.0
@@ -18361,57 +18500,39 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
                 policy=BandPolicy("portable"),
             )
 
-    def test_coater_keepout_prepares_flat_candidates_in_one_pass(self) -> None:
-        class CountedBuildings(Sequence[PlacedBuilding]):
-            def __init__(self, buildings: tuple[PlacedBuilding, ...]) -> None:
-                self.buildings = buildings
-                self.iterations = 0
-
-            def __len__(self) -> int:
-                return len(self.buildings)
-
-            @overload
-            def __getitem__(self, index: int) -> PlacedBuilding: ...
-
-            @overload
-            def __getitem__(self, index: slice) -> Sequence[PlacedBuilding]: ...
-
-            def __getitem__(
-                self,
-                index: int | slice,
-            ) -> PlacedBuilding | Sequence[PlacedBuilding]:
-                return self.buildings[index]
-
-            def __iter__(self) -> Iterator[PlacedBuilding]:
-                self.iterations += 1
-                return iter(self.buildings)
-
+    def test_indexed_coater_keepout_keeps_overlapping_offset_footprints(self) -> None:
+        # The obstacle's centre is far outside the collider search square, but
+        # the edge of its footprint intersects the independent lateral keepout.
         coater = catalog.building(catalog.SPRAY_COATER_ID)
-        buildings = CountedBuildings(
-            (
-                _belt(0, 0, item=self.ITEM),
-                PlacedBuilding(
-                    item_id=2303,
-                    model_index=catalog.building(2303).model_index,
-                    x=20,
-                    y=20,
-                    width=3,
-                    height=3,
-                ),
-            )
+        assembler = catalog.building(2303)
+        obstacle = PlacedBuilding(
+            item_id=2303,
+            model_index=assembler.model_index,
+            x=-100,
+            y=-1,
+            width=101,
+            height=3,
         )
+        records = (
+            obstacle,
+            replace(obstacle, z=Fraction(30)),
+            _belt(0, 0, item=self.ITEM),
+        )
+        canvas = _Canvas()
+        for building in records:
+            canvas.buildings.append(building)
         candidate = PlacedBuilding(
             item_id=catalog.SPRAY_COATER_ID,
             model_index=coater.model_index,
-            x=2,
-            y=2,
-            width=coater.width,
-            height=coater.height,
+            x=0,
+            y=0,
         )
-
-        freeform._coater_keepout_hits(buildings, candidate)
-
-        assert buildings.iterations == 1
+        assert freeform._coater_keepout_hits(records, candidate) == (0,)
+        assert freeform._coater_keepout_hits(
+            canvas.buildings,
+            candidate,
+            max_obstacle_span=freeform._static_collider_span(obstacle),
+        ) == (0,)
 
     def test_staged_static_alternate_seat_advances_in_order(
         self,
@@ -18447,7 +18568,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         monkeypatch.setattr(
             freeform,
             "_coater_keepout_hits",
-            lambda _buildings, _candidate: (),
+            lambda _buildings, _candidate, *, max_obstacle_span=None: (),
         )
         monkeypatch.setattr(
             freeform,
@@ -18505,7 +18626,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         monkeypatch.setattr(
             freeform,
             "_coater_keepout_hits",
-            lambda _buildings, _candidate: (),
+            lambda _buildings, _candidate, *, max_obstacle_span=None: (),
         )
         monkeypatch.setattr(
             freeform,
@@ -18549,6 +18670,8 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         def keepout_hits(
             _buildings: Sequence[PlacedBuilding],
             candidate: PlacedBuilding,
+            *,
+            max_obstacle_span: float | None = None,
         ) -> tuple[int, ...]:
             keepout.append(candidate.x)
             return (obstacle_index,) if candidate.x == 2 else ()
@@ -24337,12 +24460,14 @@ def test_a_neutral_refusal_names_an_unknown_pack_solve_and_the_unspent_wall(
 
     "no pack was ever produced" reads as a statement about the packing, and on
     the user's compressed-mall URL it was read that way: at 33 strips every one
-    of the fifteen candidate solves returned UNKNOWN inside the fixed
-    ``_DETERMINISTIC_PACK_WORK`` allowance, the sweep exhausted its candidates
-    in 1.4s and refused with 28.6s of a 30s ceiling unspent -- and none of that
-    was in the sentence.  INFEASIBLE would have been a verdict; UNKNOWN is a
-    clock, and a refusal that cannot tell them apart sends the next reader to
-    the packer's model instead of to its work bound.
+    of the fifteen candidate solves returned UNKNOWN inside the
+    ``_deterministic_pack_work`` allowance that pack was given -- then a fixed
+    0.02 units for every size, the value ``_deterministic_pack_work`` still
+    gives at the calibrated fifteen-strip size -- the sweep exhausted its
+    candidates in 1.4s and refused with 28.6s of a 30s ceiling unspent -- and
+    none of that was in the sentence.  INFEASIBLE would have been a verdict;
+    UNKNOWN is a clock, and a refusal that cannot tell them apart sends the
+    next reader to the packer's model instead of to its work bound.
     """
 
     def unknown_every_solve(
@@ -24373,19 +24498,19 @@ def test_a_neutral_refusal_names_an_unknown_pack_solve_and_the_unspent_wall(
     assert "PACKER" not in message
 
 
-def test_lay_out_still_names_the_packer_defect_for_a_routed_attempt(
+def test_lay_out_bounds_a_routed_refusal_to_the_recurring_net(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A retained attempt whose router actually ran and left nets unrouted is
+    """A stable failing net is a diagnostic target, not proof against all packing.
 
-    the ORIGINAL failure mode this refusal names: `_port_seating_refusal`
-    returns `None` for it (a SEALED_POCKET failure is not STATIC_ACCESS-only),
-    so the PACKER-defect wording must still fire.
+    This is the distinction Task 8 needs for the archived mall block 20
+    refusal.  Reverting to the old generic PACKER sentence would erase both
+    the repeated logical net and the failure kind, and this test would fail.
     """
     spec = two_stage_spec()
     strips = plan_strips(spec)
 
-    def report_one_stranded_attempt(
+    def report_two_stranded_attempts(
         self: FreeformLayout,
         _spec: BuildSpec,
         _strips: list[Strip],
@@ -24398,19 +24523,61 @@ def test_lay_out_still_names_the_packer_defect_for_a_routed_attempt(
         **_kwargs: object,
     ) -> Placement | None:
         if attempts is not None:
-            attempts.append(
-                _proof_attempt(_routing_failures(RouteFailureKind.SEALED_POCKET), strips)
+            first = _proof_attempt(
+                _routing_failures(RouteFailureKind.SEALED_POCKET),
+                strips,
             )
+            attempts.extend((first, replace(first, height=24)))
         return None
 
-    monkeypatch.setattr(FreeformLayout, "_sweep", report_one_stranded_attempt)
+    monkeypatch.setattr(FreeformLayout, "_sweep", report_two_stranded_attempts)
 
     with pytest.raises(NoValidLayout) as caught:
         FreeformLayout(band_policy=BandPolicy("portable")).lay_out(spec, time_budget_s=1.0)
 
     message = str(caught.value)
-    assert "PACKER defect" in message
-    assert "every pack the sweep produced left nets unrouted" in message
+    assert "route evidence from 2 packs at candidate heights 20, 24" in message
+    assert "sealed-pocket=2" in message
+    assert "the same logical net" in message
+    assert "NET-LEVEL routing constraint" in message
+    assert "That is a PACKER defect" not in message
+
+
+@pytest.mark.parametrize(
+    ("kinds", "expected"),
+    (
+        ((RouteFailureKind.BUDGET,), "ROUTING-CLOCK bound"),
+        (
+            (RouteFailureKind.BUDGET, RouteFailureKind.SEALED_POCKET),
+            "BUDGET and non-budget failures coexist",
+        ),
+    ),
+)
+def test_routing_clock_evidence_cannot_convict_geometry(
+    kinds: tuple[RouteFailureKind, ...], expected: str
+) -> None:
+    """Even repeated logical failures cannot establish geometry if work ran out."""
+    first = _proof_attempt(_routing_failures(*kinds), plan_strips(two_stage_spec()))
+    bound = freeform._routing_failure_bound((first, replace(first, height=24)))
+
+    assert bound is not None
+    assert expected in bound
+    assert "NET-LEVEL" not in bound
+    assert "DENSITY/SEARCH-SPACE" not in bound
+
+
+def test_different_logical_failures_bound_the_searched_space_not_one_net() -> None:
+    strips = plan_strips(two_stage_spec())
+    attempts = (
+        _proof_attempt(_routing_failures(RouteFailureKind.SEALED_POCKET), strips),
+        replace(_proof_attempt(_feedback_bearing_routing(), strips), height=24),
+    )
+
+    bound = freeform._routing_failure_bound(attempts)
+
+    assert bound is not None
+    assert "DENSITY/SEARCH-SPACE" in bound
+    assert "NET-LEVEL" not in bound
 
 
 def test_the_schedule_replaces_the_over_band_height_with_the_boundary(
@@ -25181,7 +25348,7 @@ def test_two_reachable_boundary_claims_are_jointly_rematched() -> None:
             first: (((1, 0, 0), shared), ((0, 1, 0), (0, 2, 0))),
             second: (((3, 0, 0), shared), ((4, 1, 0), (4, 2, 0))),
         },
-    )
+    ).assigned
     assert set(matched) == {first, second}
     occupied = {cell for corridor in matched.values() for cell in (corridor.access, corridor.exit)}
     assert len(occupied) == 4
@@ -25224,7 +25391,7 @@ def test_validated_access_rematching_keeps_each_tie_break_solve_bounded(
             )
         },
         validate=reject_first,
-    )
+    ).assigned
 
     assert matched
     assert len(validations) == 2
@@ -25257,7 +25424,7 @@ def test_tie_work_limit_unknown_uses_ranked_fallback_before_wall_deadline(
         (demand,),
         {demand: (((1, 0, 0), (2, 0, 0)),)},
         deadline=time.monotonic() + 60.0,
-    )
+    ).assigned
 
     assert set(matched) == {demand}
 
@@ -25302,7 +25469,7 @@ def test_tie_work_limit_after_validation_cut_never_reuses_cut_assignment(
             )
         },
         validate=reject_first_assignment,
-    )
+    ).assigned
 
     assert set(matched) == {demand}
     assert len(validations) == 2
@@ -25424,7 +25591,7 @@ def _recorded_reachable_options(
         demands: Sequence[freeform.PortAccessDemand],
         options: Mapping[freeform.PortAccessDemand, tuple[tuple[Cell, Cell], ...]],
         **kwargs: object,
-    ) -> dict[freeform.PortAccessDemand, freeform.PortAccessCorridor]:
+    ) -> freeform._CorridorMatch:
         recorded.update(options)
         return real_match(demands, options, **kwargs)  # type: ignore[arg-type]
 
@@ -25709,3 +25876,196 @@ def test_freeform_with_an_attached_observer_does_not_perturb_the_result(
     )
     assert (a.area, a.stats["belt_tiles"]) == (b.area, b.stats["belt_tiles"])
     assert observer.events, "an attached observer must actually receive events"
+
+
+def _demand(index: int) -> freeform.PortAccessDemand:
+    """One claim at a distinct cell, so `by_port` never groups two together."""
+    return freeform.PortAccessDemand(
+        cell=(10 * index, 0, 0),
+        kind=freeform.PortAccessKind.INTERNAL_DEPARTURE,
+        item="iron-ingot",
+        belt=index,
+        strip_index=None,
+        columns=1,
+    )
+
+
+def _corridors(demand: freeform.PortAccessDemand) -> tuple[tuple[Cell, Cell], ...]:
+    """Two disjoint (access, exit) pairs beside this demand's own cell."""
+    x, y, z = demand.cell
+    return (((x + 1, y, z), (x + 2, y, z)), ((x, y + 1, z), (x, y + 2, z)))
+
+
+def test_the_matcher_commits_the_partial_when_the_cut_loop_runs_out_of_rounds() -> None:
+    # Nine demands and a validate that convicts a DIFFERENT one every round:
+    # eight cut rounds can never satisfy it, which is exactly the shape
+    # production hits with 91 demands and _ACCESS_CUT_ROUNDS = 8.
+    demands = [_demand(i) for i in range(9)]
+    options = {demand: _corridors(demand) for demand in demands}
+    rounds = 0
+
+    def validate(
+        assigned: Mapping[freeform.PortAccessDemand, freeform.PortAccessCorridor],
+    ) -> tuple[freeform.PortAccessDemand, ...]:
+        nonlocal rounds
+        rounds += 1
+        return (demands[rounds % len(demands)],)
+
+    def survey(
+        assigned: Mapping[freeform.PortAccessDemand, freeform.PortAccessCorridor],
+    ) -> tuple[freeform.PortAccessDemand, ...]:
+        # The two the cut loop never satisfied.
+        return (demands[0], demands[1])
+
+    match = freeform._match_access_corridors(demands, options, validate=validate, survey=survey)
+
+    assert match.converged is False
+    assert set(match.assigned) == set(demands[2:])
+    assert len(match.assigned) == 7
+
+
+def test_a_converged_match_reports_converged_and_assigns_everything() -> None:
+    demands = [_demand(i) for i in range(4)]
+    options = {demand: _corridors(demand) for demand in demands}
+
+    match = freeform._match_access_corridors(
+        demands, options, validate=lambda assigned: None, survey=lambda assigned: ()
+    )
+
+    assert match.converged is True
+    assert set(match.assigned) == set(demands)
+
+
+def test_no_demands_is_a_converged_empty_answer_not_a_give_up() -> None:
+    # `compose`'s trigger used to spell this `goal_driven.assigned or not
+    # demands`; it is now spelled by `converged`, so the empty case has to
+    # keep saying yes or a demandless composition would degrade for nothing.
+    match = freeform._match_access_corridors([], {}, validate=lambda a: None, survey=lambda a: ())
+
+    assert match.converged is True
+    assert match.assigned == {}
+
+
+def test_a_surveyed_partial_never_keeps_a_corridor_the_survey_convicted() -> None:
+    demands = [_demand(i) for i in range(5)]
+    options = {demand: _corridors(demand) for demand in demands}
+
+    match = freeform._match_access_corridors(
+        demands,
+        options,
+        validate=lambda assigned: (demands[0],),
+        survey=lambda assigned: tuple(assigned),
+    )
+
+    assert match.converged is False
+    assert match.assigned == {}
+
+
+def test_a_matcher_with_no_survey_gives_up_wholesale_as_before() -> None:
+    # freeform's own default path passes `validate` and no `survey`; without a
+    # survey there is no way to know which corridors are safe, so the old
+    # wholesale give-up is what it must keep doing.
+    demands = [_demand(i) for i in range(9)]
+    options = {demand: _corridors(demand) for demand in demands}
+
+    match = freeform._match_access_corridors(
+        demands, options, validate=lambda assigned: (demands[0],)
+    )
+
+    assert match.converged is False
+    assert match.assigned == {}
+
+
+def test_a_survey_that_raises_the_preparation_deadline_gives_up_wholesale() -> None:
+    # An incomplete survey cannot say which of the untested corridors would
+    # have failed, so a deadline caught while it runs must fall back to the
+    # wholesale give-up -- never propagate, and never commit a partial the
+    # survey never finished looking at.
+    demands = [_demand(i) for i in range(5)]
+    options = {demand: _corridors(demand) for demand in demands}
+
+    def raising_survey(
+        assigned: Mapping[freeform.PortAccessDemand, freeform.PortAccessCorridor],
+    ) -> Collection[freeform.PortAccessDemand]:
+        raise freeform._PreparationDeadline
+
+    match = freeform._match_access_corridors(
+        demands,
+        options,
+        validate=lambda assigned: (demands[0],),
+        survey=raising_survey,
+    )
+
+    assert match.converged is False
+    assert match.assigned == {}
+
+
+def _mall_task8_spec() -> tuple[BuildSpec, str]:
+    """The archived mall URL through the same rates entry point as production."""
+    from flab2bp.lab.data import load_vendored
+    from flab2bp.lab.url import parse_url
+    from flab2bp.rates.candidates import CandidatePolicy, build_candidates
+
+    urls = (
+        Path(__file__).resolve().parents[2]
+        / "docs/superpowers/evidence/2026-09-05-speedups-2/large-urls/urls.txt"
+    ).read_text()
+    url = next(line.split("\t", 1)[1] for line in urls.splitlines() if line.startswith("mall\t"))
+    spec = next(
+        candidate
+        for candidate in build_candidates(
+            load_vendored(),
+            parse_url(url),
+            candidate_policies=(CandidatePolicy.ALL_PRODUCTS,),
+        ).candidates
+        if candidate.label == "all-products"
+    )
+    return spec, url
+
+
+@pytest.mark.slow
+def test_the_mall_block_the_packer_convicted_is_placed_or_names_the_cause() -> None:
+    """Block 20 may be fixed or bounded, but may never regress to generic blame.
+
+    The archived v3 gate records this exact block as the smallest of seven
+    mall/all-products blocks rejected by the generic "PACKER defect" sentence.
+    A bound is consumer-visible behavior: the live refusal must retain the
+    logical-net stability and failure kinds that identify the next subsystem.
+    """
+    from flab2bp.lab.techs import belt_rules_for_url
+    from flab2bp.layout.hierarchy.partition import Unit, sub_spec
+    from flab2bp.layout.hierarchy.strategy import _BLOCK_WORKERS
+
+    spec, url = _mall_task8_spec()
+    # The gate names a RE-CUT entry, not initial_partition(spec).blocks[20].
+    # Exact real round-2 units: block-20-hierarchy-capture-r1.json.
+    block = [
+        Unit(2_000_002, spec.groups[29], 11),
+        Unit(2_000_003, spec.groups[31], 6),
+    ]
+    assert sorted({unit.recipe for unit in block}) == ["steel", "titanium-alloy"]
+    block_spec = sub_spec(spec, block, 20)
+
+    try:
+        placement = FreeformLayout(
+            band_policy=BandPolicy.parse("portable"),
+            belt_vertical_construction=belt_rules_for_url(url).vertical_construction,
+            workers=_BLOCK_WORKERS,
+        ).lay_out(block_spec, time_budget_s=60.0)
+    except NoValidLayout as refusal:
+        reason = str(refusal)
+        assert "route evidence from" in reason
+        assert any(
+            cause in reason
+            for cause in (
+                "NET-LEVEL routing constraint",
+                "DENSITY/SEARCH-SPACE",
+                "ROUTING-CLOCK bound",
+                "insufficient to distinguish",
+                "BUDGET and non-budget failures coexist",
+            )
+        )
+        assert "That is a PACKER defect" not in reason
+    else:
+        report = validate.certify(placement, block_spec, expect_power=True)
+        assert report.ok, report.errors

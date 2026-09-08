@@ -1,0 +1,49 @@
+{
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?z=eJwlx7uOwjAUhOG3OcUUKAYWhWKaY4mgVRaBEBAogRQWayVyuKTys6PEzf.NNNzAZHkmDdcnzBbD0ArTXBp-YH6kod0PtyZ-hxQSqHsgk8Bd4pLQG2Ak0Fbp223yL1Em1sfkMpEPeFoY8TyPdWPLsd3YFkZc3VMn4q41rbjuybmEuucWJ5xxxwMv9FhAN9ADtILeoI-o.9Ap7CraQrwP7GIbXSzFtx0LedOYL5cQRDE_&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "60",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "no-proliferator",
+  "-o",
+  "docs/superpowers/evidence/2026-09-07-hierarchical-v4/mall-no-proliferator-b60-r5.blueprint.txt"
+ ],
+ "blueprint": {
+  "bytes": 0,
+  "exists": false,
+  "path": "docs/superpowers/evidence/2026-09-07-hierarchical-v4/mall-no-proliferator-b60-r5.blueprint.txt"
+ },
+ "built": {},
+ "exit": 3,
+ "refusals": [
+  "no valid layout for no-proliferator after 60s: hierarchical/no-proliferator: 70 block(s) never placed, 21.0s left over 5 wave(s) is under the 5s a block solve is given at all: block 2 (magnet): not attempted; block 3 (magnet): not attempted; block 4 (magnet): not attempted; block 5 (magnet): not attempted; block 6 (magnet): not attempted; block 7 (magnet): not attempted; block 8 (magnet): not attempted; block 9 (magnet): not attempted; block 10 (magnet): not attempted; block 11 (magnet): not attempted; block 12 (magnet): not attempted; block 13 (magnet): not attempted; block 14 (magnet): not attempted; block 15 (magnet): not attempted; block 16 (magnet): not attempted; block 17 (magnet): not attempted; block 18 (magnet): not attempted; block 19 (magnet): not attempted; block 20 (magnet): not attempted; block 21 (magnet): not attempted; block 22 (magnet): not attempted; block 23 (iron-ingot): not attempted; block 24 (iron-ingot): not attempted; block 25 (iron-ingot): not attempted; block 26 (iron-ingot): not attempted; block 27 (iron-ingot): not attempted; block 28 (iron-ingot): not attempted; block 29 (iron-ingot): not attempted; block 30 (iron-ingot): not attempted; block 31 (iron-ingot): not attempted; block 32 (iron-ingot): not attempted; block 33 (iron-ingot): not attempted; block 34 (iron-ingot): not attempted; block 35 (iron-ingot): not attempted; block 36 (iron-ingot): not attempted; block 37 (iron-ingot): not attempted; block 38 (iron-ingot): not attempted; block 39 (iron-ingot): not attempted; block 40 (iron-ingot): not attempted; block 41 (iron-ingot): not attempted; block 58 (magnetic-coil): not attempted; block 59 (magnetic-coil): not attempted; block 60 (magnetic-coil): not attempted; block 61 (magnetic-coil): not attempted; block 62 (electric-motor): not attempted; block 63 (electric-motor): not attempted; block 64 (electric-motor): not attempted; block 65 (electric-motor): not attempted; block 66 (electric-motor): not attempted; block 67 (electric-motor): not attempted; block 68 (electric-motor): not attempted; block 69 (electric-motor): not attempted; block 70 (electric-motor): not attempted; block 71 (electric-motor): not attempted; block 72 (electric-motor): not attempted; block 73 (electric-motor): not attempted; block 74 (electric-motor): not attempted; block 75 (electric-motor): not attempted; block 76 (electromagnetic-turbine): not attempted; block 77 (electromagnetic-turbine): not attempted; block 78 (electromagnetic-turbine): not attempted; block 79 (electromagnetic-turbine): not attempted; block 80 (electromagnetic-turbine): not attempted; block 82 (super-magnetic-ring): not attempted; block 83 (super-magnetic-ring): not attempted; block 84 (super-magnetic-ring): not attempted; block 85 (super-magnetic-ring): not attempted; block 86 (circuit-board): not attempted; block 87 (circuit-board): not attempted; block 88 (sorter-1, sorter-2): not attempted. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise."
+ ],
+ "stats": {
+  "hierarchical/no-proliferator": {
+   "arm_dispatch_both": "143",
+   "arm_dispatch_freeform": "0",
+   "arm_dispatch_sequence_pair": "0",
+   "blocks": "95",
+   "blocks_unattempted": "70",
+   "compose_gap": "0",
+   "cut_lanes": "0",
+   "nogood_skips": "54",
+   "player_fed": "0",
+   "port_demands": "0",
+   "power_infill_towers": "0",
+   "power_uncovered_tiles": "0",
+   "recut_rounds": "2",
+   "reservation_degraded": "0",
+   "reservation_missing": "0",
+   "reservation_partial": "0",
+   "resplits": "2",
+   "unrouted_cuts": "0"
+  }
+ },
+ "validation_errors": {},
+ "wall_s": 15.76
+}

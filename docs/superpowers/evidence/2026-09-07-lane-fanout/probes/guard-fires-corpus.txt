@@ -1,0 +1,4 @@
+universe-matrix,no-proliferator,antimatter: mass-energy-storage#23 lane is 10 tile(s) wide but must tap 15 consumer lane(s) of universe-matrix#37
+universe-matrix,all-products,antimatter: mass-energy-storage#23 lane is 10 tile(s) wide but must tap 12 consumer lane(s) of universe-matrix#37
+universe-matrix,output-products,antimatter: mass-energy-storage#23 lane is 10 tile(s) wide but must tap 12 consumer lane(s) of universe-matrix#37
+cells where the guard fires: 3 of 36

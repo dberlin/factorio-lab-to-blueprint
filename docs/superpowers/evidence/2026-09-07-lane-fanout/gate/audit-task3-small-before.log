@@ -1,0 +1,41 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+30 cells, 8 at a time, 16 CP-SAT workers each, cap 900s
+  . [  1/30]     3s freeform  small    graphene/no-proliferator power=1 budget=30s          CLEAN      1.5s
+  . [  2/30]     4s freeform  small    electromagnetic-matrix/no-proliferator power=1 budget=30s CLEAN      2.5s
+  . [  3/30]     4s freeform  small    graphene/output-products power=1 budget=30s          CLEAN      2.6s
+  . [  4/30]     5s freeform  small    graphene/all-products power=1 budget=30s             CLEAN      3.5s
+  . [  5/30]     7s freeform  small    electromagnetic-matrix/output-products power=1 budget=30s CLEAN      4.1s
+  . [  6/30]     9s freeform  small    plastic/no-proliferator power=1 budget=30s           CLEAN      2.3s
+  . [  7/30]    16s freeform  small    plastic/all-products power=1 budget=30s              CLEAN      7.2s
+  . [  8/30]    20s freeform  small    electromagnetic-matrix/all-products power=1 budget=30s CLEAN     18.1s  <-- 18s
+  . [  9/30]    22s freeform  small    plastic/output-products power=1 budget=30s           CLEAN      5.1s
+  . [ 10/30]    30s sequence-pair small    graphene/no-proliferator power=1 budget=30s          CLEAN     28.3s  <-- 28s
+  . [ 11/30]    32s sequence-pair small    graphene/output-products power=1 budget=30s          CLEAN     30.7s  <-- 31s
+  . [ 12/30]    32s sequence-pair small    graphene/all-products power=1 budget=30s             CLEAN     30.9s  <-- 31s
+  . [ 13/30]    32s freeform  trivial  iron-ingot/no-proliferator power=1 budget=30s        CLEAN      0.3s
+  . [ 14/30]    33s freeform  trivial  iron-ingot/all-products power=1 budget=30s           CLEAN      0.9s
+  . [ 15/30]    33s freeform  trivial  iron-ingot/output-products power=1 budget=30s        CLEAN      0.9s
+  . [ 16/30]    35s sequence-pair small    electromagnetic-matrix/all-products power=1 budget=30s CLEAN     30.5s  <-- 31s
+  . [ 17/30]    35s sequence-pair small    electromagnetic-matrix/no-proliferator power=1 budget=30s CLEAN     31.2s  <-- 31s
+  . [ 18/30]    35s sequence-pair small    electromagnetic-matrix/output-products power=1 budget=30s CLEAN     30.5s  <-- 31s
+  . [ 19/30]    36s freeform  trivial  magnetic-coil/no-proliferator power=1 budget=30s     CLEAN      0.5s
+  . [ 20/30]    38s freeform  trivial  magnetic-coil/output-products power=1 budget=30s     CLEAN      2.5s
+  . [ 21/30]    40s freeform  trivial  magnetic-coil/all-products power=1 budget=30s        CLEAN      4.2s
+  . [ 22/30]    43s sequence-pair trivial  iron-ingot/no-proliferator power=1 budget=30s        CLEAN     10.2s  <-- 10s
+  . [ 23/30]    51s sequence-pair small    plastic/all-products power=1 budget=30s              CLEAN     29.5s  <-- 29s
+  . [ 24/30]    51s sequence-pair small    plastic/no-proliferator power=1 budget=30s           CLEAN     31.6s  <-- 32s
+  . [ 25/30]    56s sequence-pair trivial  iron-ingot/all-products power=1 budget=30s           CLEAN     22.9s  <-- 23s
+  . [ 26/30]    57s sequence-pair trivial  iron-ingot/output-products power=1 budget=30s        CLEAN     22.8s  <-- 23s
+  . [ 27/30]    59s sequence-pair trivial  magnetic-coil/no-proliferator power=1 budget=30s     CLEAN     20.9s  <-- 21s
+  . [ 28/30]    60s sequence-pair small    plastic/output-products power=1 budget=30s           CLEAN     30.0s  <-- 30s
+  . [ 29/30]    70s sequence-pair trivial  magnetic-coil/all-products power=1 budget=30s        CLEAN     30.4s  <-- 30s
+  . [ 30/30]    74s sequence-pair trivial  magnetic-coil/output-products power=1 budget=30s     CLEAN     30.5s  <-- 30s
+
+=== freeform: 15/15 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 18s freeform electromagnetic-matrix/all-products power=1 budget=30s
+
+=== sequence-pair: 15/15 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 32s sequence-pair plastic/no-proliferator power=1 budget=30s, 31s sequence-pair electromagnetic-matrix/no-proliferator power=1 budget=30s, 31s sequence-pair graphene/all-products power=1 budget=30s, 31s sequence-pair graphene/output-products power=1 budget=30s, 31s sequence-pair electromagnetic-matrix/output-products power=1 budget=30s
+
+74s wall, 30/30 cells
+8 cells completed after their own requested search deadline; the largest completion tail was 1.6s. Emission, detailed routing already in flight, and validation finish atomically.

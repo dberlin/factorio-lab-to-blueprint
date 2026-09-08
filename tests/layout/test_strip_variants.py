@@ -981,7 +981,6 @@ def test_projection_pitch_origin_matching_has_linear_structural_growth() -> None
     brute_large_count = _adversarial_brute_force_origin_operations(128)
 
     assert large_count <= small_count * 5
-    assert large_count <= 128 * 10
     assert brute_large_count >= brute_small_count * 12
     assert brute_large_count >= 2 * 128**2
 

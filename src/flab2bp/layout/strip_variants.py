@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Literal
 from flab2bp.dsp import catalog
 from flab2bp.layout import slots
 from flab2bp.layout.base import Facing, NoValidLayout, PlacedBuilding, Placement
+from flab2bp.layout.buildings import Buildings
 from flab2bp.layout.finalize import (
     ProjectionFailure,
     projection_safe_machine_pitch_x,
@@ -619,11 +620,13 @@ def projection_pitch_requirements(
     ):
         return (None,) * len(failures)
 
-    machine_flags: list[bool] = []
+    building_index = Buildings.of(placement)
+    machine_flags = [False] * len(placement.buildings)
     positions_by_key: dict[_ProjectionMachineKey, set[tuple[int, int]]] = {}
-    for building in placement.buildings:
+    for index in sorted((*building_index.machines(), *building_index.by_item(catalog.PILER_ID))):
+        building = placement.buildings[index]
         is_machine = _is_machine_building(building)
-        machine_flags.append(is_machine)
+        machine_flags[index] = is_machine
         owner = building.owner_strip
         if not is_machine or type(owner) is not int or not 0 <= owner < len(variants):
             continue

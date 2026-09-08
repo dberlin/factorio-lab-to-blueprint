@@ -10,6 +10,7 @@ from __future__ import annotations
 from fractions import Fraction
 
 from flab2bp.bench.metrics import measure
+from flab2bp.dsp import catalog
 from flab2bp.layout.base import PlacedBuilding, Placement
 
 #: Deliberately a round number rather than the real assembler footprint. These
@@ -46,6 +47,24 @@ def _sorter(x: int, y: int, *, inp: int | None, out: int | None) -> PlacedBuildi
         z2=Fraction(0),
         input_obj=inp,
         output_obj=out,
+    )
+
+
+def _tower(x: int, y: int) -> PlacedBuilding:
+    return PlacedBuilding(
+        item_id=catalog.TESLA_TOWER_ID,
+        model_index=catalog.building(catalog.TESLA_TOWER_ID).model_index,
+        x=x,
+        y=y,
+    )
+
+
+def _coater(x: int, y: int) -> PlacedBuilding:
+    return PlacedBuilding(
+        item_id=catalog.SPRAY_COATER_ID,
+        model_index=catalog.building(catalog.SPRAY_COATER_ID).model_index,
+        x=x,
+        y=y,
     )
 
 
@@ -112,3 +131,29 @@ def test_empty_placement_does_not_divide_by_zero() -> None:
     m = measure(Placement(buildings=()))
     assert m.machines == 0
     assert m.packing_efficiency == 0.0
+
+
+def test_machine_metrics_include_piler_but_exclude_tower_and_coater() -> None:
+    piler = catalog.building(catalog.PILER_ID)
+    placement = Placement(
+        buildings=(
+            _assembler(0, 0),
+            _assembler(10, 0),
+            _tower(20, 0),
+            _coater(21, 0),
+            PlacedBuilding(
+                item_id=catalog.PILER_ID,
+                model_index=piler.model_index,
+                x=25,
+                y=0,
+            ),
+            _sorter(4, 0, inp=0, out=4),
+            _sorter(15, 0, inp=4, out=1),
+            _sorter(20, 0, inp=0, out=2),
+            _sorter(21, 0, inp=3, out=1),
+        )
+    )
+    measured = measure(placement)
+    assert measured.machines == 3
+    assert measured.direct_inserts == 2
+    assert measured.towers == 1

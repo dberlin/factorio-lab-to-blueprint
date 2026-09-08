@@ -1063,6 +1063,39 @@ def _coater_on_a_run(yaw: float, *, along_y: bool = False) -> Placement:
     )
 
 
+def test_indexed_addon_ride_keeps_the_first_belt_and_exact_neighbours() -> None:
+    placement = _coater_on_a_run(90.0)
+    ctx = _context(placement, None, None, 256, DEFAULT_MAX_BELT_Z, True)
+    rides = tuple(validate_module._addon_rides(ctx))
+    assert rides == ((2, 1, (1, 0, 0.0), None),)
+    for kind in Kind:
+        expected = tuple(
+            (index, building)
+            for index, building in enumerate(placement.buildings)
+            if _kind(building) is kind
+        )
+        assert tuple(ctx.of_kind(kind)) == expected
+
+
+def test_junction_closure_does_not_follow_sorter_transfer_edges() -> None:
+    placement = place(
+        belt(0, 0, out=1),
+        splitter(1, 0),
+        belt(2, 0, inp=1),
+        belt(4, 0),
+        sorter(2, 0, 4, 0, inp=2, out=3),
+    )
+    ctx = _context(placement, None, None, 256, DEFAULT_MAX_BELT_Z, True)
+    source = ctx.run_of[0]
+    through_junction = ctx.run_of[2]
+    transfer_only = ctx.run_of[3]
+    assert transfer_only != through_junction
+    assert validate_module._close_over_junctions(ctx, {source}) == {
+        source,
+        through_junction,
+    }
+
+
 def test_game_addon_facing_clean_along_the_run() -> None:
     """The negative control, and the reversal the game accepts.
 

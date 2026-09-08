@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
+from pathlib import Path
 
 from flab2bp.dsp import catalog as cat
 from flab2bp.dsp import codec, colliders
+from flab2bp.dsp.records import BlueprintBuilding
 from flab2bp.layout import freeform, slots
 from flab2bp.layout.base import Facing, PlacedBuilding
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
+
+#: 351 buildings, 34 real sorters -- the same corpus fixture Task 4's
+#: (finalize.py) equivalence tests use, chosen there because it is the one
+#: fixture in ``tests/fixtures`` non-empty across every converted bucket.
+_MULTI_BUCKET_FIXTURE = (
+    FIXTURES / "tillable-blackbox-module-polar-artificial-stars-x85-warper-production-x24.txt"
+)
 
 
 def _host(item_id: int, yaw: float = 0.0) -> PlacedBuilding:
@@ -175,3 +187,83 @@ def test_the_reserved_pitch_contains_the_tap_column_for_every_belt_port_host() -
                 assert dock.cell[0] + offset < pitch_w, (item_id, yaw, dock, offset, pitch_w)
                 checked += 1
     assert checked >= 8, checked  # not vacuous
+
+
+# --- sorter_seat_boxes onto Buildings.sorters(): equivalence -----------------
+
+
+def _placed_from_blueprint(bs: Sequence[BlueprintBuilding]) -> tuple[PlacedBuilding, ...]:
+    """A decoded blueprint as PlacedBuildings, index-aligned so links resolve.
+
+    Same conversion as ``tests/layout/test_finalize.py``'s
+    ``_placed_from_blueprint`` and ``tests/layout/test_sorter_slots.py``'s
+    private helper, kept local so this file's real-fixture equivalence test
+    does not depend on another test module's private helper.
+    """
+    out = []
+    for b in bs:
+        d = cat.building(b.item_id)
+        out.append(
+            PlacedBuilding(
+                item_id=b.item_id,
+                model_index=b.model_index,
+                x=b.x - (d.width - 1) / 2,  # type: ignore[arg-type]
+                y=b.y - (d.height - 1) / 2,  # type: ignore[arg-type]
+                z=b.z,  # type: ignore[arg-type]
+                width=d.width,
+                height=d.height,
+                yaw=b.yaw,
+                x2=b.x2,  # type: ignore[arg-type]
+                y2=b.y2,  # type: ignore[arg-type]
+                z2=b.z2,  # type: ignore[arg-type]
+                yaw2=b.yaw2,
+                input_obj=b.input_obj_idx if b.input_obj_idx >= 0 else None,
+                output_obj=b.output_obj_idx if b.output_obj_idx >= 0 else None,
+                input_from_slot=b.input_from_slot,
+                output_to_slot=b.output_to_slot,
+            )
+        )
+    return tuple(out)
+
+
+def _real_buildings() -> tuple[PlacedBuilding, ...]:
+    blueprint = codec.decode(_MULTI_BUCKET_FIXTURE.read_text(encoding="utf-8").strip())
+    return _placed_from_blueprint(blueprint.buildings)
+
+
+def _brute_sorter_seat_boxes(
+    buildings: Sequence[PlacedBuilding], *, skip: int | None = None
+) -> list[colliders.Box]:
+    """The pre-conversion linear scan, kept here as the equivalence oracle."""
+    out = []
+    for i, b in enumerate(buildings):
+        if i == skip or not cat.is_sorter(b.item_id):
+            continue
+        seat = slots.seated_sorter(b, buildings)
+        if seat is not None:
+            out.append(colliders.sorter_box(seat))
+    return out
+
+
+def test_sorter_seat_boxes_matches_the_brute_force_scan_on_a_real_fixture() -> None:
+    """``Buildings.sorters()`` must yield exactly the pre-conversion seat list.
+
+    The fixture is a genuinely decoded corpus blueprint (34 real sorters), not
+    a synthetic one -- legitimate here because the converted predicate
+    (``item_id`` -> ``Kind.SORTER``) never reads ``carries_item``, the field a
+    raw decode leaves empty.
+    """
+    buildings = _real_buildings()
+    sorter_count = sum(1 for b in buildings if cat.is_sorter(b.item_id))
+    assert sorter_count == 34, sorter_count
+
+    expected = _brute_sorter_seat_boxes(buildings)
+    actual = slots.sorter_seat_boxes(buildings)
+    assert len(expected) > 0, "empty comparison proves nothing"
+    assert actual == expected
+
+    skip_index = next(i for i, b in enumerate(buildings) if cat.is_sorter(b.item_id))
+    expected_skip = _brute_sorter_seat_boxes(buildings, skip=skip_index)
+    actual_skip = slots.sorter_seat_boxes(buildings, skip=skip_index)
+    assert len(expected_skip) == len(expected) - 1
+    assert actual_skip == expected_skip

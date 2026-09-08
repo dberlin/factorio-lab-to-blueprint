@@ -1,0 +1,46 @@
+{
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?o=conveyor-belt-3*1080&ibe=conveyor-belt-3&rex=P*Y*d*k*u*BN*BU*BX*Bk~Bl*Bs*CF~CG*CQ~CR&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "60",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "all-products",
+  "-o",
+  "/tmp/v4probe/belt3-before.blueprint.txt"
+ ],
+ "blueprint": {
+  "bytes": 0,
+  "exists": false,
+  "path": "/tmp/v4probe/belt3-before.blueprint.txt"
+ },
+ "built": {},
+ "exit": 3,
+ "refusals": [
+  "no valid layout for all-products after 60s: hierarchical/all-products: unrouted cut(s): electric-motor: block 8 -> block 7: DYNAMIC_ACCESS; gear: block 5 -> block 8: DYNAMIC_ACCESS; gear: block 5 -> block 8: SEALED_POCKET; iron-ingot: block 1 -> block 8: SEALED_POCKET; iron-ingot: block 1 -> block 8: COMMIT_LINK; iron-ingot: block 1 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 9: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 9: COMMIT_LINK; iron-ingot: block 1 -> block 9: COMMIT_LINK; magnet: block 0 -> block 7: DYNAMIC_ACCESS; magnet: block 0 -> block 7: DYNAMIC_ACCESS; magnetic-coil: block 7 -> block 8: SEALED_POCKET; magnetic-coil: block 7 -> block 8: COMMIT_LINK; magnetic-coil: block 7 -> block 9: DYNAMIC_ACCESS; magnetic-coil: block 7 -> block 9: COMMIT_LINK; magnetic-coil: block 7 -> block 9: SEALED_POCKET; magnetic-coil: block 7 -> block 9: SEALED_POCKET; magnetic-coil: block 7 -> block 9: DYNAMIC_ACCESS. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise."
+ ],
+ "stats": {
+  "hierarchical/all-products": {
+   "arm_dispatch_both": "2",
+   "arm_dispatch_freeform": "7",
+   "arm_dispatch_sequence_pair": "5",
+   "blocks": "11",
+   "blocks_unattempted": "0",
+   "compose_gap": "2",
+   "cut_lanes": "89",
+   "nogood_skips": "2",
+   "player_fed": "0",
+   "port_demands": "102",
+   "recut_rounds": "2",
+   "reservation_degraded": "1",
+   "reservation_missing": "0",
+   "resplits": "2",
+   "unrouted_cuts": "18"
+  }
+ },
+ "validation_errors": {},
+ "wall_s": 53.3
+}
