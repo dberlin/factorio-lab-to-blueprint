@@ -1,0 +1,62 @@
+{
+  "text": "original-ownership-final-tests: failed exit=1 uptime=1m50s restarts=0\nCommand: /usr/bin/timeout --kill-after=5 150 taskset -c 112-119 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-original/.venv/bin/python -m pytest -q tests/indexed/test_staked_paths.py tests/indexed/test_port_reservations.py tests/indexed/test_nets.py tests/indexed/test_reference_graph.py tests/dsp/test_provenance.py tests/layout/test_buildings.py tests/layout/test_markers.py tests/layout/hierarchy/test_contracts.py tests/layout/test_freeform.py tests/layout/hierarchy/test_compose.py -k not nonexistent_marker --tb=short\nCwd: ~/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-original\nPTY: false; restart=no; persist=false; detached=false",
+  "details": {
+    "op": "describe",
+    "daemon": {
+      "name": "original-ownership-final-tests",
+      "id": "91700fee-7ef0-473c-a20c-1a54c5653ee8",
+      "state": "failed",
+      "createdAt": 1788879777537,
+      "startedAt": 1788879777545,
+      "readyAt": 1788879784743,
+      "exitedAt": 1788879888088,
+      "exitCode": 1,
+      "restartCount": 0,
+      "outputBytes": 42135,
+      "owner": "01a07e04-630a-75c9-a268-070c59282100",
+      "readyMatch": "[",
+      "persist": false,
+      "detached": false
+    },
+    "spec": {
+      "name": "original-ownership-final-tests",
+      "application": "/usr/bin/timeout",
+      "args": [
+        "--kill-after=5",
+        "150",
+        "taskset",
+        "-c",
+        "112-119",
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-original/.venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/indexed/test_staked_paths.py",
+        "tests/indexed/test_port_reservations.py",
+        "tests/indexed/test_nets.py",
+        "tests/indexed/test_reference_graph.py",
+        "tests/dsp/test_provenance.py",
+        "tests/layout/test_buildings.py",
+        "tests/layout/test_markers.py",
+        "tests/layout/hierarchy/test_contracts.py",
+        "tests/layout/test_freeform.py",
+        "tests/layout/hierarchy/test_compose.py",
+        "-k",
+        "not nonexistent_marker",
+        "--tb=short"
+      ],
+      "env": {
+        "PYTHONPATH": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-original/src"
+      },
+      "cwd": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-original",
+      "pty": false,
+      "ready": {
+        "log": "\\[",
+        "timeoutMs": 30000
+      },
+      "restart": "no",
+      "persist": false,
+      "detached": false
+    }
+  }
+}

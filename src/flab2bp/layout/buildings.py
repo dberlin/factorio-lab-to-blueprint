@@ -364,34 +364,61 @@ class _BuildingsQueries:
             return preds[0]
         return None
 
-    def splitter_successors(self, index: int) -> tuple[int, ...]:
-        """Every building fed by the splitter (or piler) at ``index``.
+    def transport_successors(self, index: int) -> tuple[int, ...]:
+        """Directed belt/Splitter/Piler edges from the current link buckets.
 
-        A splitter/piler names neither neighbour itself: the belts around one
-        name IT as their ``input_obj``/``output_obj`` instead (see
-        :class:`~flab2bp.layout.base.PlacedBuilding`). So a splitter's
-        successors are literally :meth:`by_input_obj` of its own index --
-        computed fresh from the live bucket on every call, never memoised.
-        That matters on ``MutableBuildings``: ``_Canvas.add()`` grows the
-        building list inside the same commit pass that queries a splitter's
-        successors, so a memo keyed on the sequence would answer from before
-        the append. Delegating straight to ``by_input_obj`` here means there
-        is nothing to go stale.
+        Belts name their destination with ``output_obj``. Splitters and Pilers
+        instead feed belts naming the host with ``input_obj``; arbitrary raw
+        input links do not create another forward edge.
         """
-        return self.by_input_obj(index)
+        building = self.by_index(index)
+        if building is None:
+            return _EMPTY
+        kind = self._kinds[index]
+        if kind is Kind.OTHER:
+            return tuple(
+                i for i in self._by_input_obj.get(index, _EMPTY) if self._kinds[i] is Kind.BELT
+            )
+        if kind is Kind.BELT:
+            target = building.output_obj
+            if (
+                target is not None
+                and self.by_index(target) is not None
+                and self._kinds[target] in (Kind.BELT, Kind.OTHER)
+            ):
+                return (target,)
+        return _EMPTY
+
+    def transport_predecessors(self, index: int) -> tuple[int, ...]:
+        """The inverse transport edges, in ascending live-bucket order."""
+        building = self.by_index(index)
+        if building is None or self._kinds[index] not in (Kind.BELT, Kind.OTHER):
+            return _EMPTY
+        predecessors = [
+            i for i in self._by_output_obj.get(index, _EMPTY) if self._kinds[i] is Kind.BELT
+        ]
+        host = building.input_obj
+        if (
+            self._kinds[index] is Kind.BELT
+            and host is not None
+            and self.by_index(host) is not None
+            and self._kinds[host] is Kind.OTHER
+        ):
+            bisect.insort(predecessors, host)
+        return tuple(predecessors)
 
     def belt_run(
         self, index: int, *, forward: bool, through_any_host: bool = False
     ) -> frozenset[int]:
-        """Every belt of the run through ``index``, in one direction.
+        """Every belt of the run anchored by belt ``index``, in one direction.
 
         Belt chains are forward-linked, so a tail's run is everything that
         flows INTO it (``forward=False``) and a head's run is everything it
         flows into (``forward=True``). Splitters and pilers (``Kind.OTHER``)
         are crossed rather than stopped at: the belts around one name it as
-        their ``output_obj``/``input_obj`` and the cargo passes through, so
-        ``index`` itself need not be a belt to anchor a run -- only the
-        neighbours actually walked must be. Cycle-safe via a visited set.
+        their ``output_obj``/``input_obj`` and the cargo passes through.
+        The seed must be a belt; hosts are transit points reached from a belt,
+        not supported starting anchors. Cycle-safe via a visited set.
 
         ``through_any_host`` also crosses other valid non-belt hosts. Hierarchy
         lane weighting uses this to retain the input/output belt connection

@@ -80,6 +80,7 @@ from collections.abc import (
     Sequence,
     Set,
 )
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -93,6 +94,7 @@ from ortools.sat.python import cp_model
 
 from flab2bp.dsp import catalog, codec, colliders, params, planet, rules, splitter_ports
 from flab2bp.indexed import Nets, PortReservations, StakedPaths, UnionFind
+from flab2bp.indexed.staked_paths import StakedPathSnapshot
 from flab2bp.layout import finalize, junction, last_mile, route_kernel, slots, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
@@ -8834,8 +8836,10 @@ def _astar(
     return _PathSearchResult(None, RouteFailureKind.SEALED_POCKET, wall_cells, expansions)
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class _Net:
+    """A detailed query phase's immutable endpoints and identity-bearing fields."""
+
     src: _Port | None
     dst: _Port
     item: str
@@ -9529,10 +9533,8 @@ def _route_all(
     #: They are staked and unstaked together, always through `_stake`/`_unstake`,
     #: because `canvas.blocked`, `grid.occ` and `owner` disagreeing is a router
     #: that quietly routes through a committed belt.
-    paths: dict[int, tuple[Cell, ...]] = {}
-    staked_paths = StakedPaths(_STEPS)
+    paths = StakedPaths(_STEPS)
     owner: dict[Cell, int] = {}
-    retired_roles: dict[tuple[Cell, str], PortAccessCorridor] = {}
     iterations = 0
     expansions = 0
     # A TOTAL expansion budget across every net and every rip-up round.
@@ -9570,7 +9572,7 @@ def _route_all(
     #: heights reported `routed=0 failed=115` -- every net -- while their first
     #: round had routed roughly seventy of them. Rip-up-and-reroute is a search
     #: over rounds; keeping the incumbent is what makes it one.
-    best_paths: dict[int, tuple[Cell, ...]] = {}
+    best_paths: Mapping[int, tuple[Cell, ...]] = MappingProxyType({})
     best_failures: dict[int, NetFailure] = {}
     best_source_hints: dict[int, Cell] = {}
     best_path_taps: dict[int, Cell] = {}
@@ -9590,9 +9592,10 @@ def _route_all(
     def role_rows() -> Iterator[tuple[NetId, str, str, Cell, str, tuple[int, _Net]]]:
         for index, net in enumerate(nets):
             net_id = _net_id(index)
+            payload = (index, net)
             if net.src is not None:
-                yield (net_id, net.item, "", (net.src.x, net.src.y, net.src.z), "src", (index, net))
-            yield net_id, net.item, "", (net.dst.x, net.dst.y, net.dst.z), "dst", (index, net)
+                yield (net_id, net.item, "", (net.src.x, net.src.y, net.src.z), "src", payload)
+            yield net_id, net.item, "", (net.dst.x, net.dst.y, net.dst.z), "dst", payload
 
     net_index = Nets.of(role_rows())
 
@@ -9688,7 +9691,7 @@ def _route_all(
         )
 
     def _finish(
-        selected_paths: dict[int, tuple[Cell, ...]],
+        selected_paths: Mapping[int, tuple[Cell, ...]],
         selected_failures: dict[int, NetFailure],
         selected_source_hints: Mapping[int, Cell],
         selected_sink_hints: Mapping[int, Cell],
@@ -9806,6 +9809,7 @@ def _route_all(
     # `blocked` is a router that quietly routes through a committed belt.
     grid_box = _route_box(canvas, bounds)
     grid = _make_grid(canvas, grid_box, _canvas_span(canvas, grid_box), history)
+    corridor_reservations = _CorridorReservations(canvas, grid, owner)
     # The landmark sweeps go here and NOT in `_make_grid`, because they are only
     # worth their build to a caller that will make hundreds of searches against
     # one grid.  Everybody else routes a handful of nets and gets Manhattan.
@@ -10011,60 +10015,6 @@ def _route_all(
         if claimed:
             path_guards[index] = claimed
 
-    def _retire_served_roles(index: int, path: tuple[Cell, ...]) -> None:
-        for key, role in net_index.roles_of(_net_id(index)):
-            source = role == "src"
-            token = (key, role)
-            if token in retired_roles:
-                continue
-            endpoint_cells = path[:2] if source else path[-2:]
-            retired = _retire_port_corridor(
-                canvas,
-                key,
-                endpoint_cells,
-                (PortAccessKind.INTERNAL_DEPARTURE if source else PortAccessKind.INTERNAL_ARRIVAL),
-            )
-            if retired is None:
-                continue
-            retired_roles[token] = retired
-            for cell in (retired.access, retired.exit):
-                if cell not in owner and canvas.free(cell):
-                    grid.restore(cell)
-            retired_indices = {
-                grid.index(retired.access),
-                grid.index(retired.exit),
-            }
-            grid.reserved = tuple(
-                reservation
-                for reservation in grid.reserved
-                if reservation[0] not in retired_indices
-            )
-
-    def _restore_unserved_roles(index: int) -> None:
-        for key, role in net_index.roles_of(_net_id(index)):
-            token = (key, role)
-            retired = retired_roles.get(token)
-            if retired is None:
-                continue
-            if any(
-                member != index and member in paths
-                for member, _net in net_index.payloads_in_role(key, role)
-            ):
-                continue
-            _restore_port_corridor(canvas, key, retired)
-            del retired_roles[token]
-            grid.block(retired.access)
-            grid.block(retired.exit)
-            grid.reserved = tuple(
-                sorted(
-                    (
-                        *grid.reserved,
-                        (grid.index(retired.access), key),
-                        (grid.index(retired.exit), key),
-                    )
-                )
-            )
-
     def _selected_hints(
         path: Sequence[Cell],
         offers: tuple[Mapping[Cell, Cell], Mapping[Cell, Cell], Mapping[Cell, Cell]],
@@ -10085,8 +10035,7 @@ def _route_all(
     ) -> None:
         """Put a path down with the exact sibling endpoints it selected."""
         selected = hints
-        paths[index] = path
-        staked_paths.stake(index, path, linked_head=selected[2] is not None or index in path_tap)
+        paths.stake(index, path, linked_head=selected[2] is not None or index in path_tap)
         if selected[0] is not None:
             source_hint[index] = selected[0]
         else:
@@ -10100,11 +10049,18 @@ def _route_all(
             grid.block(cell)
             owner[cell] = index
         _claim_junction_guard(index, selected[2])
-        _retire_served_roles(index, path)
+        corridor_reservations.retire_served_roles(net_index.roles_of(_net_id(index)), path)
 
     def _unstake(index: int) -> None:
         """Take a path, its exact endpoint, and its conditional guard up."""
-        _restore_unserved_roles(index)
+        corridor_reservations.restore_unserved_roles(
+            (key, role)
+            for key, role in net_index.roles_of(_net_id(index))
+            if not any(
+                member != index and member in paths
+                for member, _net in net_index.payloads_in_role(key, role)
+            )
+        )
         tap = path_tap.pop(index, None)
         if tap is not None:
             planned = planned_taps[tap]
@@ -10123,8 +10079,9 @@ def _route_all(
                 grid.restore(cell)
         source_hint.pop(index, None)
         sink_hint.pop(index, None)
-        staked_paths.unstake(index)
-        for cell in paths.pop(index):
+        path = paths[index]
+        paths.unstake(index)
+        for cell in path:
             if canvas.blocked.get(cell, -1) == _TENTATIVE:
                 del canvas.blocked[cell]
                 grid.restore(cell)
@@ -10353,7 +10310,7 @@ def _route_all(
             else ()
         )
         owned_source_starts[index] = frozenset(set(starts) & owned_guard.keys())
-        reverse_link_guard = staked_paths.linked_heads()
+        reverse_link_guard = paths.linked_heads()
 
         destination_access = tuple((net.dst.x + dx, net.dst.y + dy, net.dst.z) for dx, dy in _STEPS)
         sink_provenance: dict[Cell, Cell] = {}
@@ -10496,13 +10453,13 @@ def _route_all(
             while queue and len(grown) <= _REPAIR_MAX_VICTIMS:
                 leant_on = queue.pop()
                 for cell in paths[leant_on]:
-                    for other in staked_paths.beside_in_scan_order(cell):
+                    for other in paths.beside_in_scan_order(cell):
                         if other in grown:
                             continue
                         if (
                             leant_on in src_group.get(other, ())
                             or leant_on in dst_group.get(other, ())
-                            or leant_on in staked_paths.sole_neighbours(other, owner)
+                            or leant_on in paths.sole_neighbours(other, owner)
                         ):
                             grown.add(other)
                             queue.append(other)
@@ -10592,7 +10549,7 @@ def _route_all(
                     (
                         (sibling, position)
                         for sibling in src_group.get(index, ())
-                        if (position := staked_paths.position_in(sibling, selected_tap)) is not None
+                        if (position := paths.position_in(sibling, selected_tap)) is not None
                     ),
                     None,
                 )
@@ -10662,80 +10619,76 @@ def _route_all(
             # swap is a transaction. Every displaced net must find a new route
             # or the whole thing is rolled back, which makes a repair pass
             # monotone: it can place a net or decline, never subtract one.
-            saved = {
-                hurt: (
-                    paths[hurt],
-                    source_hint.get(hurt),
-                    sink_hint.get(hurt),
-                    path_tap.get(hurt),
-                )
+            staked_before = paths.snapshot()
+            saved_hints = {
+                hurt: (source_hint.get(hurt), sink_hint.get(hurt), path_tap.get(hurt))
                 for hurt in victims
             }
-            for hurt in victims:
-                _unstake(hurt)
-            _stake(
-                index,
-                through_path,
-                hints=_selected_hints(through_path, through_offers),
-            )
-            # The displaced go looking for a way round, longest first for the
-            # same reason the round orders that way.
-            moved: list[int] = []
-            for hurt in sorted(
-                victims,
-                key=lambda i: (
-                    -(abs(nets[i].source.x - nets[i].dst.x) + abs(nets[i].source.y - nets[i].dst.y))
-                ),
-            ):
-                starts, goals, again_offers = _ends(hurt)
-                again = _astar(
-                    canvas,
-                    starts,
-                    goals,
-                    history,
-                    pressure,
-                    bounds,
-                    budget,
-                    deadline,
-                    blame,
-                    grid,
-                    owned_starts=owned_source_starts.get(hurt, ()),
-                    forbidden=rejected_path_cells.get(hurt, ()),
-                    blocking_owners=owner,
-                )
-                canvas.routing_ports = frozenset()
-                expansions += again.expansions
-                round_expansions[hurt] = round_expansions.get(hurt, 0) + again.expansions
-                if again.path is None:
-                    if again.kind is RouteFailureKind.BUDGET:
-                        # The transaction rolls back, so `index` remains the
-                        # stranded net. Its outcome is still unknown when a
-                        # displaced victim exhausted a per-search cap.
-                        search_failures[index] = again
-                        search_blockers[index] = ()
-                    break
-                _stake(
-                    hurt,
-                    again.path,
-                    hints=_selected_hints(again.path, again_offers),
-                )
-                moved.append(hurt)
-            if len(moved) == len(victims):
-                search_failures.pop(index, None)
-                search_blockers.pop(index, None)
-                continue
-            # Roll back to exactly the arrangement we found. The cells every
-            # saved path wants are free again the moment the nets that took
-            # them are lifted, because nothing outside this transaction moved.
-            for hurt in moved:
-                _unstake(hurt)
-            _unstake(index)
-            for hurt, (was, source_was, sink_was, tap_was) in saved.items():
-                _stake(
-                    hurt,
-                    was,
-                    hints=(source_was, sink_was, tap_was),
-                )
+            with corridor_reservations.temporarily_released({}) as release:
+                try:
+                    for hurt in victims:
+                        _unstake(hurt)
+                    _stake(
+                        index,
+                        through_path,
+                        hints=_selected_hints(through_path, through_offers),
+                    )
+                    # Displaced nets still search longest first.
+                    moved = 0
+                    for hurt in sorted(
+                        victims,
+                        key=lambda i: (
+                            -(
+                                abs(nets[i].source.x - nets[i].dst.x)
+                                + abs(nets[i].source.y - nets[i].dst.y)
+                            )
+                        ),
+                    ):
+                        starts, goals, again_offers = _ends(hurt)
+                        again = _astar(
+                            canvas,
+                            starts,
+                            goals,
+                            history,
+                            pressure,
+                            bounds,
+                            budget,
+                            deadline,
+                            blame,
+                            grid,
+                            owned_starts=owned_source_starts.get(hurt, ()),
+                            forbidden=rejected_path_cells.get(hurt, ()),
+                            blocking_owners=owner,
+                        )
+                        canvas.routing_ports = frozenset()
+                        expansions += again.expansions
+                        round_expansions[hurt] = round_expansions.get(hurt, 0) + again.expansions
+                        if again.path is None:
+                            if again.kind is RouteFailureKind.BUDGET:
+                                search_failures[index] = again
+                                search_blockers[index] = ()
+                            break
+                        _stake(
+                            hurt,
+                            again.path,
+                            hints=_selected_hints(again.path, again_offers),
+                        )
+                        moved += 1
+                    if moved == len(victims):
+                        release.commit()
+                        search_failures.pop(index, None)
+                        search_blockers.pop(index, None)
+                        continue
+                finally:
+                    if not release.finished:
+                        canvas.routing_ports = frozenset()
+                        for hurt in (index, *victims):
+                            if hurt in paths:
+                                _unstake(hurt)
+                        for hurt, path, _linked_head in staked_before:
+                            if hurt in saved_hints:
+                                _stake(hurt, path, hints=saved_hints[hurt])
+                        paths.restore(staked_before)
             still.append(index)
         return still
 
@@ -10896,57 +10849,28 @@ def _route_all(
         )
 
     def _round_state() -> tuple[object, ...]:
-        """Everything the pass borrows, in a form two snapshots can compare.
+        """Borrowed state, including observable path/reservation insertion order.
 
-        `grid.reserved` is in here because it is NOT constant across a pass:
-        `_retire_served_roles` filters it and `_restore_unserved_roles` rebuilds
-        it.  A role that came back not at all is precisely the silent corruption
-        this comparison exists to catch.
-
-        It is compared SORTED, and that is not laziness.  The two writers
-        disagree about order by construction: `_restore_unserved_roles`
-        canonicalises the WHOLE tuple with `sorted`, while
-        `_retire_served_roles` only filters it, order-preserving.  A pass whose
-        entry tuple is unsorted -- it is built from `canvas.reserved` in port
-        CONSTRUCTION order, not index order -- therefore fails an ordered
-        comparison after a perfectly correct restore, because any restore
-        sorts the tuple and no re-retire can un-sort it.  Order is not
-        observable either: the tuple's only consumer in this router is
-        `_routing_flags`, which iterates it writing `flags[at] = 0`, and
-        `_open/_close_every_corridor` save and restore it verbatim.  Comparing
-        it ordered reported a mismatch for a difference no reader can see, and
-        cost `universe-matrix/output-products` both of its cluster proofs.
-
-        FOUR tables are deliberately EXEMPT: `_ends` overwrites
-        `source_access_walls`, `destination_access_walls`,
-        `source_access_blockers` and `owned_source_starts` for whichever net it
-        is called on, so the last cluster search to run leaves its own values
-        behind.  They are
-        derived-and-overwritten rather than borrowed -- every reader gets them
-        from the `_ends` call that produced them, and the only consumer that
-        outlives a search is `round_failures`, which is built before
-        `_last_mile` is ever reached.  Comparing them would report a mismatch
-        for a difference no later reader can observe.
+        Endpoint walls/blockers and owned starts are deliberately excluded:
+        each `_ends` call derives and overwrites them for its next consumer.
         """
         return (
-            dict(paths),
+            paths.snapshot(),
             dict(owner),
             bytes(grid.occ),
-            tuple(sorted(grid.reserved)),
             set(canvas.guard),
             {cell for cell, holder in canvas.blocked.items() if holder == _TENTATIVE},
             dict(path_tap),
             {index: set(cells) for index, cells in path_guards.items()},
             {cell: set(claims) for cell, claims in guard_claims.items()},
-            dict(canvas.reserved),
-            dict(canvas.port_corridors),
+            corridor_reservations.snapshot(),
         )
 
     def _restore_staked(
-        order: Sequence[int],
-        staked: Mapping[int, tuple[Cell, ...]],
+        staked: StakedPathSnapshot,
         held: Mapping[int, tuple[Cell | None, Cell | None, Cell | None]],
         before: tuple[object, ...],
+        release: _CorridorRelease,
     ) -> bool:
         """Re-stake in the original order and report whether it worked.
 
@@ -10959,9 +10883,11 @@ def _route_all(
         `_route_all` becomes a CRASH row in `scripts/audit.py` and fails the
         corpus gate on the very condition the gate is measuring.
         """
-        for index in order:
+        for index, path, _linked_head in staked:
             if index not in paths:
-                _stake(index, staked[index], hints=held[index])
+                _stake(index, path, hints=held[index])
+        paths.restore(staked)
+        corridor_reservations.restore(release)
         if before == _round_state():
             return True
         last_mile_counts["restore_mismatch"] += 1
@@ -10984,67 +10910,6 @@ def _route_all(
         return not any(
             src_group.get(index, ()) or dst_group.get(index, ()) for index in problem.nets
         )
-
-    def _open_every_corridor() -> _CorridorRelease:
-        """Retire EVERY port's corridor, as if every role had been served.
-
-        Unstaking the pack is not enough to make run 2's world loose.
-        `_stake` -> `_retire_served_roles` DELETES a served port's corridor
-        from `canvas.reserved`, `canvas.port_corridors` and `grid.reserved`,
-        and `_unstake` -> `_restore_unserved_roles` puts it all back and
-        `grid.block`s the two cells.  `_Canvas.free` refuses any reserved cell
-        that is not the searching net's own, so a corridor a staked non-cluster
-        net had retired is FREE to a cluster net in run 1 and RESERVED again in
-        run 2 -- run 2 would be TIGHTER than run 1 in exactly those cells, and
-        a closure there could forbid a placement a realizable world allows.
-
-        Retirement is per served role and this has no served paths to choose
-        corridors from, so it retires every corridor of every port at once,
-        which is the loosest the reservation tables can be.
-        """
-        release = _CorridorRelease(
-            reserved=dict(canvas.reserved),
-            corridors=dict(canvas.port_corridors),
-            grid_reserved=tuple(grid.reserved),
-            opened=(),
-        )
-        canvas.reserved.clear()
-        canvas.port_corridors.clear()
-        grid.reserved = ()
-        # Two guards, and the second one is the whole correctness of the
-        # inverse.  `cell not in owner and canvas.free(cell)` is what
-        # `_retire_served_roles` uses, for the same reason: a reserved cell can
-        # also be blocked by a path or a guard, and that blocking is not this
-        # release's to undo.  `occ != base` then keeps only the cells this
-        # release actually FREES -- a corridor nobody ever served was never
-        # `grid.block`ed, so re-blocking it on the way out would hand the round
-        # back tighter than it was lent.
-        #
-        # `canvas.free` also consults `canvas.limit`, which is CONSTANT inside
-        # one pass: it is a plain field with no setter, and the only two writes
-        # in the module (`_prepare_routing_problem`, `_place_coaters`) both run
-        # before `_route_all` is entered, so the filter cannot see a different
-        # extent from the one that retired the corridor.
-        opened = tuple(
-            cell
-            for cell in release.reserved
-            if cell not in owner
-            and canvas.free(cell)
-            and grid.occ[grid.index(cell)] != grid.base[grid.index(cell)]
-        )
-        for cell in opened:
-            grid.restore(cell)
-        return replace(release, opened=opened)
-
-    def _close_every_corridor(release: _CorridorRelease) -> None:
-        """Undo `_open_every_corridor`, exactly and in the inverse order."""
-        for cell in release.opened:
-            grid.block(cell)
-        canvas.reserved.clear()
-        canvas.reserved.update(release.reserved)
-        canvas.port_corridors.clear()
-        canvas.port_corridors.update(release.corridors)
-        grid.reserved = release.grid_reserved
 
     def _relaxed_cluster_result(
         problem: last_mile.ClusterProblem,
@@ -11104,42 +10969,35 @@ def _route_all(
             )
             for index in every
         }
-        staked = {index: paths[index] for index in every}
+        staked = paths.snapshot()
         # Saved so the round gets its own table back whatever run 2 does to it;
         # `_restore_staked` rebuilds the same content from the paths, and this
         # is the belt to that braces.
         taps_before = {cell: set(members) for cell, members in planned_taps.items()}
         before_all = _round_state()
-        release: _CorridorRelease | None = None
-        try:
-            for table in rejections:
-                for index in problem.nets:
-                    table[index].clear()
-            for index in every:
-                _unstake(index)
-            release = _open_every_corridor()
-            # Empty, not run 1's: the cluster's own taps are the only ones
-            # every realizable world has, and they accumulate as CBS stakes.
-            planned_taps.clear()
-            relaxed_junctions = True
-            _capture(2, problem)
-            return last_mile.solve_cluster(problem, _cluster_environment())
-        finally:
-            # Put the world back BEFORE re-staking, so `_stake` rebuilds the
-            # taps and the retirements from the paths exactly as run 1's
-            # restore does.  Then the SAME verified restore run 1 uses, so run
-            # 2 cannot skip the check that run 1 must pass; its return value is
-            # read by the caller through `restore_mismatch`.
-            relaxed_junctions = False
-            planned_taps.clear()
-            planned_taps.update(taps_before)
-            if release is not None:
-                _close_every_corridor(release)
-            _restore_staked(every, staked, held_all, before_all)
-            for table, snapshot in zip(rejections, saved, strict=True):
-                for index, cells in snapshot.items():
-                    table[index].clear()
-                    table[index].update(cells)
+        with corridor_reservations.temporarily_released({}) as original:
+            try:
+                for table in rejections:
+                    for index in problem.nets:
+                        table[index].clear()
+                for index in every:
+                    _unstake(index)
+                # Removing paths re-holds their roles. Release every corridor
+                # as well so this world cannot be tighter than the strict run.
+                with corridor_reservations.temporarily_released():
+                    planned_taps.clear()
+                    relaxed_junctions = True
+                    _capture(2, problem)
+                    return last_mile.solve_cluster(problem, _cluster_environment())
+            finally:
+                relaxed_junctions = False
+                planned_taps.clear()
+                planned_taps.update(taps_before)
+                _restore_staked(staked, held_all, before_all, original)
+                for table, snapshot in zip(rejections, saved, strict=True):
+                    for index, cells in snapshot.items():
+                        table[index].clear()
+                        table[index].update(cells)
 
     def _record_cluster_relation(problem: last_mile.ClusterProblem) -> None:
         """Turn a closed run 1 into a relation no-good, or say why not.
@@ -11238,7 +11096,7 @@ def _route_all(
         # because `_claim_junction_guard` computes its `excused` set from the
         # sibling paths already down.
         order = [index for index in paths if index in set(problem.nets)]
-        released = {index: paths[index] for index in order}
+        released = paths.snapshot()
         held = {
             index: (
                 source_hint.get(index),
@@ -11250,54 +11108,40 @@ def _route_all(
         before = _round_state()
         environment = _cluster_environment()
 
-        for index in order:
-            _unstake(index)
-        _capture(1, problem)
-        result = last_mile.solve_cluster(problem, environment)
-        _tally(result)
-
-        if result.outcome is last_mile.ClusterOutcome.SOLVED:
-            # Stake in ascending index order, re-querying each net's offers
-            # THROUGH THE ENVIRONMENT as we go: the offers CBS saw were
-            # collected with NO cluster net staked, and every stake takes cells
-            # the next net's offers were computed against.  A stale hint is
-            # exactly the defect `_ends`' own docstring names.  Going through
-            # `environment.offers` rather than the closure keeps the field a
-            # live part of the contract the bench's stub also implements.
-            #
-            # A SOLVED result must carry a path for EVERY cluster net.
-            # `solve_cluster` gates its return on exactly that, and
-            # `ClusterResult` cannot re-check it because it does not carry the
-            # net list -- so the one place that can is here, where the list is.
-            # A short mapping is a broken solver rather than a fact about the
-            # grid, and it degrades the way a refused commit does: nothing to
-            # keep and nothing to claim.  A `KeyError` here would instead be a
-            # CRASH row, which is a failure of the gate rather than a reading
-            # from it.
-            unlinked_now: tuple[int, ...] = problem.nets
-            if all(index in result.paths for index in problem.nets):
-                for index in problem.nets:
-                    path = result.paths[index]
-                    _stake(
-                        index,
-                        path,
-                        hints=_selected_hints(path, environment.offers(index)),
-                    )
-                unlinked_now, _details_now = commit_once()
-            if not unlinked_now:
-                last_mile_counts["solved"] += 1
-                return left_out
-            # A commit-link rejection is exact static evidence about buildings,
-            # not a routing proof.  Put the round back and report a bound.
-            for index in problem.nets:
-                if index in paths:
+        restored = False
+        with corridor_reservations.temporarily_released({}) as release:
+            try:
+                for index in order:
                     _unstake(index)
-            _restore_staked(order, released, held, before)
-            last_mile_counts["commit_rejected"] += 1
-            last_mile_counts["bounded"] += 1
-            return round_stranded
+                _capture(1, problem)
+                result = last_mile.solve_cluster(problem, environment)
+                _tally(result)
+                if result.outcome is last_mile.ClusterOutcome.SOLVED:
+                    # Re-query offers after each stake: preceding cluster paths
+                    # may have taken a sibling endpoint that CBS originally saw.
+                    # A short solved mapping is a refused commit, not a proof.
+                    unlinked_now: tuple[int, ...] = problem.nets
+                    if all(index in result.paths for index in problem.nets):
+                        for index in problem.nets:
+                            path = result.paths[index]
+                            _stake(
+                                index,
+                                path,
+                                hints=_selected_hints(path, environment.offers(index)),
+                            )
+                        unlinked_now, _details_now = commit_once()
+                    if not unlinked_now:
+                        release.commit()
+                        last_mile_counts["solved"] += 1
+                        return left_out
+                    last_mile_counts["commit_rejected"] += 1
+            finally:
+                if not release.finished:
+                    for index in problem.nets:
+                        if index in paths:
+                            _unstake(index)
+                    restored = _restore_staked(released, held, before, release)
 
-        restored = _restore_staked(order, released, held, before)
         if result.outcome is last_mile.ClusterOutcome.PROVED and restored:
             last_mile_counts["proved"] += 1
             proved_round = round_index
@@ -11803,7 +11647,7 @@ def _route_all(
             # reference kept a snapshot; it now persists across rounds and is
             # mutated in place by the rip-up and by the repair, so keeping the
             # reference would make "the best round" mean "the last one".
-            fewest_failed, stale, best_paths = failed, 0, dict(paths)
+            fewest_failed, stale, best_paths = failed, 0, MappingProxyType(dict(paths))
             best_round = it
             best_failures = dict(round_failures)
             best_source_hints = {
@@ -11971,65 +11815,238 @@ class PortAccessCorridor:
     kind: PortAccessKind | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class _CorridorRelease:
-    """What the relaxed cluster run took away, so it can put it back exactly.
+    """Ordered entry state and only the occupancy cells this release opened."""
 
-    ``opened`` is only the cells the release actually handed back to
-    ``grid.occ``; a reserved cell that was blocked for some OTHER reason was
-    left alone and must not be re-blocked, or the restore would tighten the
-    round it is meant to reproduce.
-    """
-
-    reserved: dict[Cell, Cell]
-    corridors: dict[Cell, tuple[PortAccessCorridor, ...]]
+    reserved: tuple[tuple[Cell, Cell], ...]
+    corridors: tuple[tuple[Cell, tuple[PortAccessCorridor, ...]], ...]
     grid_reserved: tuple[tuple[int, Cell], ...]
-    opened: tuple[Cell, ...]
+    retired_roles: tuple[tuple[tuple[Cell, str], PortAccessCorridor], ...]
+    opened: tuple[Cell, ...] = ()
+    finished: bool = False
+
+    def commit(self) -> None:
+        """Explicitly keep this operation's reservation changes."""
+        self.finished = True
 
 
-def _retire_port_corridor(
-    canvas: _Canvas,
-    key: Cell,
-    endpoint_cells: Collection[Cell],
-    kind: PortAccessKind | None = None,
-) -> PortAccessCorridor | None:
-    """Release one served role's corridor, preferring the path it used."""
-    corridors = canvas.port_corridors.get(key, ())
-    eligible = tuple(
-        corridor for corridor in corridors if kind is None or corridor.kind in (None, kind)
-    )
-    if not eligible:
-        return None
-    endpoint_set = set(endpoint_cells)
-    selected = min(
-        eligible,
-        key=lambda corridor: (
-            not bool(endpoint_set & {corridor.access, corridor.exit}),
-            corridor.access,
-            corridor.exit,
-        ),
-    )
-    canvas.port_corridors[key] = tuple(corridor for corridor in corridors if corridor != selected)
-    for cell in (selected.access, selected.exit):
-        if canvas.reserved.get(cell) == key:
-            del canvas.reserved[cell]
-    return selected
+class _CorridorReservations:
+    """One call's coordinated canvas/grid reservations, never demand selection."""
 
+    def __init__(
+        self,
+        canvas: _Canvas,
+        grid: _Grid | None = None,
+        owner: Mapping[Cell, int] = MappingProxyType({}),
+    ) -> None:
+        self.canvas = canvas
+        self.grid = grid
+        self.owner = owner
+        self._retired_roles: dict[tuple[Cell, str], PortAccessCorridor] = {}
 
-def _restore_port_corridor(
-    canvas: _Canvas,
-    key: Cell,
-    corridor: PortAccessCorridor,
-) -> None:
-    """Restore a retired corridor before its role's last path is ripped up."""
-    canvas.port_corridors[key] = tuple(
-        sorted(
-            (*canvas.port_corridors.get(key, ()), corridor),
-            key=lambda candidate: (candidate.access, candidate.exit),
+    def snapshot(self) -> _CorridorRelease:
+        return _CorridorRelease(
+            tuple(self.canvas.reserved.items()),
+            tuple(self.canvas.port_corridors.items()),
+            () if self.grid is None else self.grid.reserved,
+            tuple(self._retired_roles.items()),
         )
-    )
-    canvas.reserved[corridor.access] = key
-    canvas.reserved[corridor.exit] = key
+
+    def restore(self, release: _CorridorRelease) -> None:
+        if release.finished:
+            return
+        if self.grid is not None:
+            for cell in release.opened:
+                # A newly claimed route is not the reservation owner's to undo.
+                if cell not in self.owner:
+                    self.grid.block(cell)
+            self.grid.reserved = release.grid_reserved
+        self.canvas.reserved.clear()
+        self.canvas.reserved.update(release.reserved)
+        self.canvas.port_corridors.clear()
+        self.canvas.port_corridors.update(release.corridors)
+        self._retired_roles.clear()
+        self._retired_roles.update(release.retired_roles)
+        release.finished = True
+
+    def finish(self) -> None:
+        """Spend the attempt-local reservation stores before physical publication."""
+        self.canvas.reserved.clear()
+        self.canvas.port_corridors.clear()
+        self._retired_roles.clear()
+        if self.grid is not None:
+            self.grid.reserved = ()
+
+    def _open_cells(self, cells: Iterable[Cell]) -> tuple[Cell, ...]:
+        if self.grid is None:
+            return ()
+        opened = tuple(
+            cell
+            for cell in cells
+            if cell not in self.owner
+            and cell not in self.canvas.reserved
+            and self.canvas.free(cell)
+            and self.grid.occ[self.grid.index(cell)] != self.grid.base[self.grid.index(cell)]
+        )
+        for cell in opened:
+            self.grid.restore(cell)
+        return opened
+
+    def _remove(self, key: Cell, selected: Collection[PortAccessCorridor]) -> tuple[Cell, ...]:
+        remaining = tuple(
+            corridor
+            for corridor in self.canvas.port_corridors.get(key, ())
+            if corridor not in selected
+        )
+        self.canvas.port_corridors[key] = remaining
+        retained = {cell for corridor in remaining for cell in (corridor.access, corridor.exit)}
+        removed: list[Cell] = []
+        for corridor in selected:
+            for cell in (corridor.access, corridor.exit):
+                if cell not in retained and self.canvas.reserved.get(cell) == key:
+                    del self.canvas.reserved[cell]
+                    removed.append(cell)
+        if self.grid is not None:
+            indices = {self.grid.index(cell) for cell in removed}
+            self.grid.reserved = tuple(row for row in self.grid.reserved if row[0] not in indices)
+        return self._open_cells(removed)
+
+    @contextmanager
+    def temporarily_released(
+        self,
+        selected: Mapping[Cell, tuple[PortAccessCorridor, ...]] | None = None,
+    ) -> Iterator[_CorridorRelease]:
+        """Release caller-selected corridors, or all holdings when omitted.
+
+        An empty selection snapshots without releasing: the enclosed route may
+        retire/reinsert roles, but rollback still restores exact entry order.
+        Ordinary return restores too; only an explicit commit retains changes.
+        """
+        release = self.snapshot()
+        try:
+            if selected is None:
+                self.canvas.reserved.clear()
+                self.canvas.port_corridors.clear()
+                if self.grid is not None:
+                    self.grid.reserved = ()
+                release.opened = self._open_cells(cell for cell, _port in release.reserved)
+            else:
+                opened: list[Cell] = []
+                for key, corridors in selected.items():
+                    opened.extend(self._remove(key, corridors))
+                    release.opened = tuple(opened)
+            yield release
+        finally:
+            self.restore(release)
+
+    def retire(
+        self,
+        key: Cell,
+        endpoint_cells: Collection[Cell],
+        kind: PortAccessKind | None = None,
+    ) -> PortAccessCorridor | None:
+        """Retire one eligible role, preferring the endpoint the path selected."""
+        eligible = tuple(
+            corridor
+            for corridor in self.canvas.port_corridors.get(key, ())
+            if kind is None or corridor.kind in (None, kind)
+        )
+        if not eligible:
+            return None
+        endpoint_set = set(endpoint_cells)
+        selected = min(
+            eligible,
+            key=lambda corridor: (
+                not bool(endpoint_set & {corridor.access, corridor.exit}),
+                corridor.access,
+                corridor.exit,
+            ),
+        )
+        self._remove(key, (selected,))
+        return selected
+
+    def retire_first(self, key: Cell) -> None:
+        """Spend the legacy single-cell reservation when no corridor exists."""
+        cell = self.canvas.reserved.first_for(key)
+        if cell is None:
+            return
+        del self.canvas.reserved[cell]
+        if self.grid is not None:
+            at = self.grid.index(cell)
+            self.grid.reserved = tuple(row for row in self.grid.reserved if row[0] != at)
+        self._open_cells((cell,))
+
+    def restore_role(self, key: Cell, corridor: PortAccessCorridor) -> None:
+        """Ordinary role reinsertion, distinct from exact transaction rollback."""
+        self.canvas.port_corridors[key] = tuple(
+            sorted(
+                (*self.canvas.port_corridors.get(key, ()), corridor),
+                key=lambda candidate: (candidate.access, candidate.exit),
+            )
+        )
+        added: list[tuple[int, Cell]] = []
+        for cell in (corridor.access, corridor.exit):
+            fresh = cell not in self.canvas.reserved
+            self.canvas.reserved[cell] = key
+            if self.grid is not None:
+                self.grid.block(cell)
+                if fresh:
+                    added.append((self.grid.index(cell), key))
+        if self.grid is not None:
+            self.grid.reserved = tuple(sorted((*self.grid.reserved, *added)))
+
+    def retire_served_roles(
+        self, roles: Iterable[tuple[Cell, str]], path: tuple[Cell, ...]
+    ) -> None:
+        for key, role in roles:
+            token = (key, role)
+            if token in self._retired_roles:
+                continue
+            source = role == "src"
+            retired = self.retire(
+                key,
+                path[:2] if source else path[-2:],
+                PortAccessKind.INTERNAL_DEPARTURE if source else PortAccessKind.INTERNAL_ARRIVAL,
+            )
+            if retired is not None:
+                self._retired_roles[token] = retired
+
+    def restore_unserved_roles(self, roles: Iterable[tuple[Cell, str]]) -> None:
+        for token in roles:
+            retired = self._retired_roles.pop(token, None)
+            if retired is not None:
+                self.restore_role(token[0], retired)
+
+    def hold(self, assignments: Mapping[PortAccessDemand, PortAccessCorridor]) -> None:
+        """Publish caller-selected assignments, retaining existing cell precedence."""
+        assigned_by_port: dict[Cell, list[PortAccessCorridor]] = defaultdict(list)
+        for demand, corridor in assignments.items():
+            self.canvas.reserved[corridor.access] = demand.cell
+            self.canvas.reserved[corridor.exit] = demand.cell
+            assigned_by_port[demand.cell].append(corridor)
+        kind_order = {kind: ordinal for ordinal, kind in enumerate(PortAccessKind)}
+        self.canvas.port_corridors.clear()
+        self.canvas.port_corridors.update(
+            (
+                key,
+                tuple(
+                    sorted(
+                        corridors,
+                        key=lambda corridor: (
+                            len(kind_order) if corridor.kind is None else kind_order[corridor.kind],
+                            corridor.access,
+                            corridor.exit,
+                        ),
+                    )
+                ),
+            )
+            for key, corridors in assigned_by_port.items()
+        )
+        if self.grid is not None:
+            self.grid.reserved = tuple(
+                (self.grid.index(cell), key) for cell, key in self.canvas.reserved.items()
+            )
 
 
 class _CorridorMatch(NamedTuple):
@@ -12293,21 +12310,12 @@ def _reserve_port_access(
     choices cannot veto an alternate candidate; nothing is committed until the
     joint matcher has selected every compatible corridor.
 
-    ``held`` is corridors an EARLIER reservation already staked on this canvas,
-    for demands this call is NOT being asked about.  It is what makes a second
-    call a TOP-UP rather than a replacement, and without it a top-up would take
-    the first call's corridors off the canvas the router reads: the clear below
-    wipes ``canvas.reserved`` wholesale, and the finalization REBINDS
-    ``canvas.port_corridors`` from this call's own assignments alone (an empty
-    assignment collapsing it to ``{}``).  A held corridor is re-staked before
-    enumeration so nothing here can pick its cells, is never re-assigned, and is
-    written back on every RETURNING path -- including the one where the joint
-    matcher's own survey cleared the canvas on its way to a wholesale give-up.
-    Every RAISING path restores the entry snapshot, which in a top-up already
-    holds those same corridors.  See `hierarchy.compose._top_up_partial`, which
-    is where the AUTHORITATIVE `assigned` union lives: it recomputes the union
-    from its own partial rather than reading this one, so a change here cannot
-    silently change what a rung commits.
+    ``held`` names corridors from an earlier reservation, making this call a
+    top-up rather than a replacement. They are held before enumeration, cannot
+    be reassigned, and survive every returning path, including ordinary matcher
+    give-up. The owner restores exact entry order on every raising path.
+    `hierarchy.compose._top_up_partial` still owns the authoritative assignment
+    union and recomputes its preferred order from its partial.
 
     PASSING ``held`` CHANGES ``assigned``'S ORDER: held pairs come first and the
     newly assigned follow in ``demands`` order, where with no ``held`` the tuple
@@ -12318,275 +12326,242 @@ def _reserve_port_access(
 
     if (cancelled is not None and cancelled()) or _expired(deadline):
         raise _PreparationDeadline
-    saved_reserved = dict(canvas.reserved)
-    saved_corridors = dict(canvas.port_corridors)
-    canvas.reserved.clear()
-    canvas.port_corridors.clear()
-    # RE-STAKED HERE AND NOT ONLY AT FINALIZATION, because the options below are
-    # built from `canvas.free` and the clear just handed this call every cell
-    # the earlier reservation is holding.  Without this a top-up could run a
-    # corridor straight through the partial it is completing.
-    held_by_demand = dict(held or {})
-    for held_demand, held_corridor in held_by_demand.items():
-        canvas.reserved[held_corridor.access] = held_demand.cell
-        canvas.reserved[held_corridor.exit] = held_demand.cell
+    reservations = _CorridorReservations(canvas)
+    with reservations.temporarily_released() as release:
+        held_by_demand = dict(held or {})
+        reservations.hold(held_by_demand)
 
-    def check_cancelled() -> None:
-        if not ((cancelled is not None and cancelled()) or _expired(deadline)):
-            return
-        canvas.reserved.clear()
-        canvas.reserved.update(saved_reserved)
-        canvas.port_corridors.clear()
-        canvas.port_corridors.update(saved_corridors)
-        raise _PreparationDeadline
+        def check_cancelled() -> None:
+            if not ((cancelled is not None and cancelled()) or _expired(deadline)):
+                return
+            raise _PreparationDeadline
 
-    bounds = bounds or canvas.limit
-    local_options: dict[PortAccessDemand, tuple[tuple[Cell, Cell], ...]] = {}
-    reachable_options: dict[PortAccessDemand, tuple[tuple[Cell, Cell], ...]] = {}
-    exhaustive: dict[PortAccessDemand, bool] = {}
-    frontiers: dict[PortAccessDemand, set[Cell]] = defaultdict(set)
-    boundary_set = set(boundary or ())
-    # AN EMPTY GOAL SET IS NO GOAL, dropped here rather than handled at each
-    # use, so that "has an explicit goal" has ONE spelling.  `_goal_for` asks
-    # whether the lookup returned a set and the probe cap below asks whether
-    # the demand is a key; leaving an empty set in would make those two
-    # disagree, and the demand would be probed towards nowhere -- every option
-    # failing `DYNAMIC_ACCESS`, the cap firing on the wreckage.
-    goal_by_demand = {demand: goal for demand, goal in (goals or {}).items() if goal}
-    # WHETHER ANY PROBE RUNS AT ALL.  With neither a boundary nor a goal this
-    # function is the purely LOCAL oracle it has always been: every free
-    # (access, exit) pair is admitted unprobed, `exhaustive` is False, and no
-    # grid is built.
-    #
-    # Which caller takes which path, because the answer is NOT "all of them
-    # take the local one" and a reader who assumes it is will conclude the
-    # boundary probe is dead code and cap it.  Named by SYMBOL, never by line:
-    # this file is 22k lines and a line citation here was already stale one
-    # commit after it was written.
-    #
-    #   `_route_all`                       passes neither -- local only.
-    #   `_prepare_routing_problem`         passes `boundary=boundary_cells`
-    #     (in its nested `hold_ports`)     and IS probed.  This is freeform's
-    #                                      OWN default path.
-    #   `hierarchy.compose.pack_with_access`  passes a `boundary` that it
-    #                                      computes as `None` today.
-    probed = boundary is not None or bool(goal_by_demand)
+        bounds = bounds or canvas.limit
+        local_options: dict[PortAccessDemand, tuple[tuple[Cell, Cell], ...]] = {}
+        reachable_options: dict[PortAccessDemand, tuple[tuple[Cell, Cell], ...]] = {}
+        exhaustive: dict[PortAccessDemand, bool] = {}
+        frontiers: dict[PortAccessDemand, set[Cell]] = defaultdict(set)
+        boundary_set = set(boundary or ())
+        # AN EMPTY GOAL SET IS NO GOAL, dropped here rather than handled at each
+        # use, so that "has an explicit goal" has ONE spelling.  `_goal_for` asks
+        # whether the lookup returned a set and the probe cap below asks whether
+        # the demand is a key; leaving an empty set in would make those two
+        # disagree, and the demand would be probed towards nowhere -- every option
+        # failing `DYNAMIC_ACCESS`, the cap firing on the wreckage.
+        goal_by_demand = {demand: goal for demand, goal in (goals or {}).items() if goal}
+        # WHETHER ANY PROBE RUNS AT ALL.  With neither a boundary nor a goal this
+        # function is the purely LOCAL oracle it has always been: every free
+        # (access, exit) pair is admitted unprobed, `exhaustive` is False, and no
+        # grid is built.
+        #
+        # Which caller takes which path, because the answer is NOT "all of them
+        # take the local one" and a reader who assumes it is will conclude the
+        # boundary probe is dead code and cap it.  Named by SYMBOL, never by line:
+        # this file is 22k lines and a line citation here was already stale one
+        # commit after it was written.
+        #
+        #   `_route_all`                       passes neither -- local only.
+        #   `_prepare_routing_problem`         passes `boundary=boundary_cells`
+        #     (in its nested `hold_ports`)     and IS probed.  This is freeform's
+        #                                      OWN default path.
+        #   `hierarchy.compose.pack_with_access`  passes a `boundary` that it
+        #                                      computes as `None` today.
+        probed = boundary is not None or bool(goal_by_demand)
 
-    def _goal_for(demand: PortAccessDemand) -> set[Cell] | None:
-        """Where this demand's corridor must be able to reach, or None.
+        def _goal_for(demand: PortAccessDemand) -> set[Cell] | None:
+            """Where this demand's corridor must be able to reach, or None.
 
-        An explicit goal WINS over the boundary and is honoured whatever the
-        demand's kind says.  A composed canvas's cut lanes are all
-        `INTERNAL_*` -- `reaches_boundary` False -- and their trunks run to
-        another BLOCK's port rather than to the rim, so the kind flag is the
-        wrong question for them; see
-        `docs/superpowers/evidence/2026-09-07-hierarchical-v2/gate.md` §6.
-        """
-        explicit = goal_by_demand.get(demand)
-        if explicit is not None:
-            return set(explicit)
-        if boundary is not None and demand.kind.reaches_boundary:
-            return boundary_set
-        return None
+            An explicit goal WINS over the boundary and is honoured whatever the
+            demand's kind says.  A composed canvas's cut lanes are all
+            `INTERNAL_*` -- `reaches_boundary` False -- and their trunks run to
+            another BLOCK's port rather than to the rim, so the kind flag is the
+            wrong question for them; see
+            `docs/superpowers/evidence/2026-09-07-hierarchical-v2/gate.md` §6.
+            """
+            explicit = goal_by_demand.get(demand)
+            if explicit is not None:
+                return set(explicit)
+            if boundary is not None and demand.kind.reaches_boundary:
+                return boundary_set
+            return None
 
-    # ONE GRID PER RESERVATION INSTEAD OF ONE PER PROBE, because every
-    # reachability probe below -- and every re-probe the matcher's validate
-    # callback runs -- searches the same box towards the same boundary, and a
-    # mall-sized reservation flattened the canvas 872 times for 3.9s.
-    #
-    # The canvas is NOT WRITTEN between this build and the last probe: the
-    # reservations and corridors were cleared just above, and the assignments
-    # are only written after the matcher returns -- so the shared grid carries
-    # exactly the state a per-probe build would have derived.  `probe_cells`
-    # names every cell two steps from a demand, which is every exit cell any
-    # probe can start from; `_astar` falls back to a private grid for a start
-    # or goal outside the span, so a miss costs a build and never a result.
-    shared_grid: _Grid | None = None
-    if bounds is not None and probed:
-        probe_box = _route_box(canvas, bounds)
-        probe_cells = [
-            (key[0] + dx + ex, key[1] + dy + ey, key[2])
-            for demand in demands
-            for key in (demand.cell,)
-            for dx, dy in _STEPS
-            for ex, ey in _STEPS
-        ]
-        # EVERY goal cell has to be inside the span, not just the boundary's:
-        # `_astar` falls back to a private grid for a goal outside it, which
-        # would cost a fresh flatten per probe -- the 872 rebuilds and 3.9s
-        # this shared grid exists to avoid.
-        goal_cells = sorted(
-            boundary_set.union(*goal_by_demand.values()) if goal_by_demand else boundary_set
-        )
-        shared_grid = _make_grid(
-            canvas, probe_box, _span_for(probe_box, probe_cells, goal_cells), {}
-        )
+        # ONE GRID PER RESERVATION INSTEAD OF ONE PER PROBE, because every
+        # reachability probe below -- and every re-probe the matcher's validate
+        # callback runs -- searches the same box towards the same boundary, and a
+        # mall-sized reservation flattened the canvas 872 times for 3.9s.
+        #
+        # The canvas is NOT WRITTEN between this build and the last probe: the
+        # reservations and corridors were cleared just above, and the assignments
+        # are only written after the matcher returns -- so the shared grid carries
+        # exactly the state a per-probe build would have derived.  `probe_cells`
+        # names every cell two steps from a demand, which is every exit cell any
+        # probe can start from; `_astar` falls back to a private grid for a start
+        # or goal outside the span, so a miss costs a build and never a result.
+        shared_grid: _Grid | None = None
+        if bounds is not None and probed:
+            probe_box = _route_box(canvas, bounds)
+            probe_cells = [
+                (key[0] + dx + ex, key[1] + dy + ey, key[2])
+                for demand in demands
+                for key in (demand.cell,)
+                for dx, dy in _STEPS
+                for ex, ey in _STEPS
+            ]
+            # EVERY goal cell has to be inside the span, not just the boundary's:
+            # `_astar` falls back to a private grid for a goal outside it, which
+            # would cost a fresh flatten per probe -- the 872 rebuilds and 3.9s
+            # this shared grid exists to avoid.
+            goal_cells = sorted(
+                boundary_set.union(*goal_by_demand.values()) if goal_by_demand else boundary_set
+            )
+            shared_grid = _make_grid(
+                canvas, probe_box, _span_for(probe_box, probe_cells, goal_cells), {}
+            )
 
-    for demand in demands:
-        check_cancelled()
-        key = demand.cell
-        access_cells = tuple(
-            cell
-            for cell in ((key[0] + dx, key[1] + dy, key[2]) for dx, dy in _STEPS)
-            if canvas.free(cell)
-        )
-        options = tuple(
-            (access, exit_cell)
-            for access in access_cells
-            for exit_cell in ((access[0] + dx, access[1] + dy, access[2]) for dx, dy in _STEPS)
-            if exit_cell != key and canvas.free(exit_cell)
-        )
-        local_options[demand] = options
-        goal = _goal_for(demand)
-        if goal is None:
-            reachable_options[demand] = options
-            exhaustive[demand] = probed
-            continue
-        if bounds is None:
-            reachable_options[demand] = options
-            exhaustive[demand] = False
-            continue
-        # STOP ONCE TWO OPTIONS ARE PROVEN, BUT ONLY FOR A GOAL-DRIVEN PROBE.
-        # The joint matcher needs alternatives, not every alternative, and
-        # probing all twelve options of every satisfiable demand is what would
-        # spend the router's wall to re-confirm what the first probe already
-        # said.  A demand that is genuinely walled in still probes every
-        # option, which is the case worth paying for.  A demand probed against
-        # the `boundary` is exempt: it enumerated every option before this
-        # parameter existed and must keep doing so.
-        probe_cap = _PORT_ACCESS_PROBE_KEEP if demand in goal_by_demand else None
-        candidates: list[tuple[Cell, Cell]] = []
-        complete = True
-        for access, exit_cell in options:
-            if probe_cap is not None and len(candidates) >= probe_cap:
-                complete = False
-                break
+        for demand in demands:
+            check_cancelled()
+            key = demand.cell
+            access_cells = tuple(
+                cell
+                for cell in ((key[0] + dx, key[1] + dy, key[2]) for dx, dy in _STEPS)
+                if canvas.free(cell)
+            )
+            options = tuple(
+                (access, exit_cell)
+                for access in access_cells
+                for exit_cell in ((access[0] + dx, access[1] + dy, access[2]) for dx, dy in _STEPS)
+                if exit_cell != key and canvas.free(exit_cell)
+            )
+            local_options[demand] = options
+            goal = _goal_for(demand)
+            if goal is None:
+                reachable_options[demand] = options
+                exhaustive[demand] = probed
+                continue
+            if bounds is None:
+                reachable_options[demand] = options
+                exhaustive[demand] = False
+                continue
+            # STOP ONCE TWO OPTIONS ARE PROVEN, BUT ONLY FOR A GOAL-DRIVEN PROBE.
+            # The joint matcher needs alternatives, not every alternative, and
+            # probing all twelve options of every satisfiable demand is what would
+            # spend the router's wall to re-confirm what the first probe already
+            # said.  A demand that is genuinely walled in still probes every
+            # option, which is the case worth paying for.  A demand probed against
+            # the `boundary` is exempt: it enumerated every option before this
+            # parameter existed and must keep doing so.
+            probe_cap = _PORT_ACCESS_PROBE_KEEP if demand in goal_by_demand else None
+            candidates: list[tuple[Cell, Cell]] = []
+            complete = True
+            for access, exit_cell in options:
+                if probe_cap is not None and len(candidates) >= probe_cap:
+                    complete = False
+                    break
+                result = _astar(
+                    canvas,
+                    [exit_cell],
+                    goal,
+                    {},
+                    0.0,
+                    bounds,
+                    deadline=deadline,
+                    grid=shared_grid,
+                )
+                check_cancelled()
+                if result.path is not None:
+                    candidates.append((access, exit_cell))
+                elif result.kind is RouteFailureKind.SEALED_POCKET:
+                    frontiers[demand].update(result.wall)
+                else:
+                    complete = False
+                    candidates.append((access, exit_cell))
+            reachable_options[demand] = tuple(candidates)
+            exhaustive[demand] = complete
+
+        def _selection(
+            assigned: Mapping[PortAccessDemand, PortAccessCorridor],
+        ) -> tuple[
+            dict[Cell, PortAccessDemand], dict[PortAccessDemand, int], dict[int, PortAccessDemand]
+        ]:
+            selected_cells: dict[Cell, PortAccessDemand] = {
+                cell: owner
+                for owner, selected in assigned.items()
+                for cell in (selected.access, selected.exit)
+            }
+            ordered_owners = tuple(assigned)
+            owner_index = {owner: index for index, owner in enumerate(ordered_owners)}
+            return selected_cells, owner_index, dict(enumerate(ordered_owners))
+
+        def _wall_between(
+            demand: PortAccessDemand,
+            corridor: PortAccessCorridor,
+            selected_cells: Mapping[Cell, PortAccessDemand],
+            owner_index: Mapping[PortAccessDemand, int],
+        ) -> tuple[Cell, ...] | None:
+            """The wall between this corridor and its goal, or None if it reaches.
+
+            A ``BUDGET`` refusal is NOT a wall: the A* ran out of expansions, which
+            says nothing about the ground, and convicting on it would drop
+            corridors for the searcher's clock rather than for geometry.
+            """
+            goal = _goal_for(demand)
+            if goal is None or bounds is None:
+                return None
             result = _astar(
                 canvas,
-                [exit_cell],
+                [corridor.exit],
                 goal,
                 {},
                 0.0,
                 bounds,
                 deadline=deadline,
                 grid=shared_grid,
+                forbidden={cell for cell, owner in selected_cells.items() if owner != demand},
+                blocking_owners={
+                    cell: owner_index[owner]
+                    for cell, owner in selected_cells.items()
+                    if owner != demand
+                },
             )
             check_cancelled()
-            if result.path is not None:
-                candidates.append((access, exit_cell))
-            elif result.kind is RouteFailureKind.SEALED_POCKET:
-                frontiers[demand].update(result.wall)
-            else:
-                complete = False
-                candidates.append((access, exit_cell))
-        reachable_options[demand] = tuple(candidates)
-        exhaustive[demand] = complete
+            if result.path is not None or result.kind is RouteFailureKind.BUDGET:
+                return None
+            frontiers[demand].update(result.wall)
+            return tuple(result.wall)
 
-    def _selection(
-        assigned: Mapping[PortAccessDemand, PortAccessCorridor],
-    ) -> tuple[
-        dict[Cell, PortAccessDemand], dict[PortAccessDemand, int], dict[int, PortAccessDemand]
-    ]:
-        selected_cells: dict[Cell, PortAccessDemand] = {
-            cell: owner
-            for owner, selected in assigned.items()
-            for cell in (selected.access, selected.exit)
-        }
-        ordered_owners = tuple(assigned)
-        owner_index = {owner: index for index, owner in enumerate(ordered_owners)}
-        return selected_cells, owner_index, dict(enumerate(ordered_owners))
-
-    def _wall_between(
-        demand: PortAccessDemand,
-        corridor: PortAccessCorridor,
-        selected_cells: Mapping[Cell, PortAccessDemand],
-        owner_index: Mapping[PortAccessDemand, int],
-    ) -> tuple[Cell, ...] | None:
-        """The wall between this corridor and its goal, or None if it reaches.
-
-        A ``BUDGET`` refusal is NOT a wall: the A* ran out of expansions, which
-        says nothing about the ground, and convicting on it would drop
-        corridors for the searcher's clock rather than for geometry.
-        """
-        goal = _goal_for(demand)
-        if goal is None or bounds is None:
+        def assignment_boundary_cut(
+            assigned: Mapping[PortAccessDemand, PortAccessCorridor],
+        ) -> Collection[PortAccessDemand] | None:
+            if not probed or bounds is None:
+                return None
+            selected_cells, owner_index, owner_by_index = _selection(assigned)
+            cell_owner_index = {cell: owner_index[owner] for cell, owner in selected_cells.items()}
+            for demand, corridor in assigned.items():
+                wall = _wall_between(demand, corridor, selected_cells, owner_index)
+                if wall is None:
+                    continue
+                blocking_demands = {
+                    owner_by_index[index]
+                    for cell in wall
+                    for index in (cell_owner_index.get(cell),)
+                    if index is not None
+                }
+                return (demand, *sorted(blocking_demands, key=lambda blocked: blocked.cell))
             return None
-        result = _astar(
-            canvas,
-            [corridor.exit],
-            goal,
-            {},
-            0.0,
-            bounds,
-            deadline=deadline,
-            grid=shared_grid,
-            forbidden={cell for cell, owner in selected_cells.items() if owner != demand},
-            blocking_owners={
-                cell: owner_index[owner]
-                for cell, owner in selected_cells.items()
-                if owner != demand
-            },
-        )
-        check_cancelled()
-        if result.path is not None or result.kind is RouteFailureKind.BUDGET:
-            return None
-        frontiers[demand].update(result.wall)
-        return tuple(result.wall)
 
-    def assignment_boundary_cut(
-        assigned: Mapping[PortAccessDemand, PortAccessCorridor],
-    ) -> Collection[PortAccessDemand] | None:
-        if not probed or bounds is None:
-            return None
-        selected_cells, owner_index, owner_by_index = _selection(assigned)
-        cell_owner_index = {cell: owner_index[owner] for cell, owner in selected_cells.items()}
-        for demand, corridor in assigned.items():
-            wall = _wall_between(demand, corridor, selected_cells, owner_index)
-            if wall is None:
-                continue
-            blocking_demands = {
-                owner_by_index[index]
-                for cell in wall
-                for index in (cell_owner_index.get(cell),)
-                if index is not None
-            }
-            return (demand, *sorted(blocking_demands, key=lambda blocked: blocked.cell))
-        return None
-
-    def assignment_survey(
-        assigned: Mapping[PortAccessDemand, PortAccessCorridor],
-    ) -> Collection[PortAccessDemand]:
-        """EVERY demand whose corridor cannot reach its goal, not just the first.
-
-        ``assignment_boundary_cut`` short-circuits because one witness is all a
-        no-good needs.  A partial commit needs the WHOLE failing set: committing
-        a corridor the survey never looked at is exactly the wrong half of
-        Ruling R7's residual.  This runs ONCE per reservation, on give-up only.
-
-        `_wall_between` shares `check_cancelled` with the validate path, where
-        letting it restore the canvas to the PRE-reservation snapshot and raise
-        is correct -- that call is aborting the whole attempt.  Here it is not:
-        a deadline caught mid-survey is `_match_access_corridors.surrender`'s
-        cue to fall back to the wholesale give-up, which is the ordinary EMPTY
-        outcome, not an aborted one.  So the restore is overwritten with the
-        empty give-up state before the exception is allowed to continue past
-        this function, or the two would disagree about which one happened.
-        """
-        if not probed or bounds is None:
-            return ()
-        selected_cells, owner_index, _ = _selection(assigned)
-        try:
+        def assignment_survey(
+            assigned: Mapping[PortAccessDemand, PortAccessCorridor],
+        ) -> Collection[PortAccessDemand]:
+            """Survey every claim; the matcher may catch expiry as ordinary give-up."""
+            if not probed or bounds is None:
+                return ()
+            selected_cells, owner_index, _ = _selection(assigned)
             return tuple(
                 demand
                 for demand, corridor in assigned.items()
                 if _wall_between(demand, corridor, selected_cells, owner_index) is not None
             )
-        except _PreparationDeadline:
-            canvas.reserved.clear()
-            canvas.port_corridors.clear()
-            raise
 
-    try:
         match = _match_access_corridors(
             demands,
             reachable_options,
@@ -12595,72 +12570,50 @@ def _reserve_port_access(
             cancelled=cancelled,
             deadline=deadline,
         )
-    except _PreparationDeadline:
-        canvas.reserved.clear()
-        canvas.reserved.update(saved_reserved)
-        canvas.port_corridors.clear()
-        canvas.port_corridors.update(saved_corridors)
-        raise
-    # An empty MATCH stakes nothing new below, so there is nothing for this
-    # check to protect -- and `surrender`'s survey may have just spent the
-    # remaining deadline finding that out, which would make this re-detect the
-    # SAME expiry and turn a give-up `_reserve_port_access` was meant to hand
-    # back normally into a raise anyway.  Skip it precisely where staking is a
-    # no-op; a non-empty match still gets checked before being staked.  It is
-    # the MATCH and not `assignments` that is asked, so a top-up whose own
-    # matcher came back empty still returns `held` normally rather than raising
-    # and costing the caller the partial this call was completing.
-    if match.assigned:
-        check_cancelled()
-    assignments = dict(match.assigned)
-    # HELD WINS: a demand an earlier reservation already served is never
-    # re-assigned or overwritten.  Its cells were denied above, so this can only
-    # fire for a caller that put a held demand back into `demands`.
-    assignments.update(held_by_demand)
-    assigned_by_port: dict[Cell, list[PortAccessCorridor]] = defaultdict(list)
-    for demand, corridor in assignments.items():
-        canvas.reserved[corridor.access] = demand.cell
-        canvas.reserved[corridor.exit] = demand.cell
-        assigned_by_port[demand.cell].append(corridor)
-    kind_order = {kind: ordinal for ordinal, kind in enumerate(PortAccessKind)}
-    canvas.port_corridors = {
-        key: tuple(
-            sorted(
-                assigned,
-                key=lambda corridor: (
-                    (kind_order[corridor.kind] if corridor.kind is not None else len(kind_order)),
-                    corridor.access,
-                    corridor.exit,
+        # An empty MATCH stakes nothing new below, so there is nothing for this
+        # check to protect -- and `surrender`'s survey may have just spent the
+        # remaining deadline finding that out, which would make this re-detect the
+        # SAME expiry and turn a give-up `_reserve_port_access` was meant to hand
+        # back normally into a raise anyway.  Skip it precisely where staking is a
+        # no-op; a non-empty match still gets checked before being staked.  It is
+        # the MATCH and not `assignments` that is asked, so a top-up whose own
+        # matcher came back empty still returns `held` normally rather than raising
+        # and costing the caller the partial this call was completing.
+        if match.assigned:
+            check_cancelled()
+        assignments = dict(match.assigned)
+        # HELD WINS: a demand an earlier reservation already served is never
+        # re-assigned or overwritten.  Its cells were denied above, so this can only
+        # fire for a caller that put a held demand back into `demands`.
+        assignments.update(held_by_demand)
+        reservations.hold(assignments)
+        missing = tuple(demand for demand in demands if demand not in assignments)
+        reservation = PortAccessReservation(
+            assigned=(
+                *held_by_demand.items(),
+                *(
+                    (demand, assignments[demand])
+                    for demand in demands
+                    if demand in assignments and demand not in held_by_demand
                 ),
-            )
-        )
-        for key, assigned in assigned_by_port.items()
-    }
-    missing = tuple(demand for demand in demands if demand not in assignments)
-    return PortAccessReservation(
-        assigned=(
-            *held_by_demand.items(),
-            *(
-                (demand, assignments[demand])
-                for demand in demands
-                if demand in assignments and demand not in held_by_demand
             ),
-        ),
-        missing=missing,
-        evidence=tuple(
-            PortAccessEvidence(
-                demand=demand,
-                held=0,
-                wanted=1,
-                local_options=len(local_options[demand]),
-                reachable_options=len(reachable_options[demand]),
-                exhaustive=exhaustive[demand],
-                frontier=tuple(sorted(frontiers[demand])),
-            )
-            for demand in missing
-        ),
-        converged=match.converged,
-    )
+            missing=missing,
+            evidence=tuple(
+                PortAccessEvidence(
+                    demand=demand,
+                    held=0,
+                    wanted=1,
+                    local_options=len(local_options[demand]),
+                    reachable_options=len(reachable_options[demand]),
+                    exhaustive=exhaustive[demand],
+                    frontier=tuple(sorted(frontiers[demand])),
+                )
+                for demand in missing
+            ),
+            converged=match.converged,
+        )
+        release.commit()
+        return reservation
 
 
 def _commit_paths(
@@ -12725,7 +12678,7 @@ def _commit_paths(
     # routed, and nothing is being routed here. Leaving them held made every
     # path that ran through its OWN start or goal cell fail the free() check
     # below and get dropped. Silently, until `_commit_paths` learned to count.
-    canvas.reserved.clear()
+    _CorridorReservations(canvas).finish()
     canvas.routing_ports = frozenset()
     unlinked: list[int] = []
     laid: dict[int, list[int]] = {}
@@ -12977,13 +12930,8 @@ def _commit_paths(
                 ),
                 reason="unstable-belt-keepout",
             )
-    splitter_successors = _splitter_successors(canvas)
     for i, indices in laid.items():
-        if i in unlinked or not _committed_path_closes_cycle(
-            canvas,
-            indices,
-            splitter_successors,
-        ):
+        if i in unlinked or not _committed_path_closes_cycle(canvas, indices):
             continue
         unlinked.append(i)
         record(i, paths[i][-1], "sink", reason="belt-cycle")
@@ -13138,15 +13086,6 @@ def _source_for(
     return None
 
 
-def _splitter_successors(canvas: _Canvas) -> dict[int, tuple[int, ...]]:
-    """Index every belt branch fed by a splitter."""
-    return {
-        splitter: canvas.buildings.splitter_successors(splitter)
-        for splitter in canvas.buildings.by_item(catalog.SPLITTER_ID)
-        if canvas.buildings.splitter_successors(splitter)
-    }
-
-
 def _output_tail_nets(canvas: _Canvas, nets: Sequence[_Net]) -> list[_Net]:
     """Move shared output taps past their internal consumers.
 
@@ -13157,7 +13096,6 @@ def _output_tail_nets(canvas: _Canvas, nets: Sequence[_Net]) -> list[_Net]:
     upstream source reaches that tail through the committed merges, and one
     exterior belt carries the actual surplus left after the consumers draw.
     """
-    successors = _splitter_successors(canvas)
     selected: dict[int, _Net] = {}
     limit = canvas.limit
 
@@ -13185,8 +13123,8 @@ def _output_tail_nets(canvas: _Canvas, nets: Sequence[_Net]) -> list[_Net]:
             if index in seen or building is None:
                 continue
             seen.add(index)
-            if building.item_id == catalog.SPLITTER_ID:
-                stack.extend(successors.get(index, ()))
+            if building.item_id in (catalog.SPLITTER_ID, catalog.PILER_ID):
+                stack.extend(canvas.buildings.transport_successors(index))
                 continue
             if not catalog.is_belt(building.item_id) or building.carries_item != net.item:
                 continue
@@ -13194,7 +13132,7 @@ def _output_tail_nets(canvas: _Canvas, nets: Sequence[_Net]) -> list[_Net]:
                 if building.z.denominator == 1:
                     tails.append(index)
                 continue
-            stack.append(building.output_obj)
+            stack.extend(canvas.buildings.transport_successors(index))
 
         if not tails:
             selected.setdefault(net.src.belt, net)
@@ -13234,7 +13172,6 @@ def _leads_back(
     canvas: _Canvas,
     start: int,
     own: set[int],
-    splitter_successors: Mapping[int, Sequence[int]] | None = None,
 ) -> bool:
     """Does flow leaving ``start`` come back to this path?
 
@@ -13245,10 +13182,9 @@ def _leads_back(
     loop.  The validator reports it as ``belt.acyclic``, and it is a real fault:
     the game would run items round it forever.
 
-    Splitters are followed, not stopped at: they carry no ``output_obj`` of
-    their own, so a link-following walk misses exactly the loops a fan-out
-    router most easily builds.  Same rule as ``validate._belt_successors``, so
-    what this refuses to build is what that refuses to accept.
+    Splitters and Pilers are followed through the shared transport adjacency,
+    just as the validator follows them; cargo and endpoint policy stay with
+    their respective consumers.
     """
     seen: set[int] = set()
     stack = [start]
@@ -13260,21 +13196,13 @@ def _leads_back(
         if i in seen or b is None:
             continue
         seen.add(i)
-        if b.item_id == catalog.SPLITTER_ID:
-            stack.extend(
-                canvas.buildings.splitter_successors(i)
-                if splitter_successors is None
-                else splitter_successors.get(i, ())
-            )
-        elif catalog.is_belt(b.item_id) and b.output_obj is not None:
-            stack.append(b.output_obj)
+        stack.extend(canvas.buildings.transport_successors(i))
     return False
 
 
 def _committed_path_closes_cycle(
     canvas: _Canvas,
     indices: Sequence[int],
-    splitter_successors: Mapping[int, Sequence[int]] | None = None,
 ) -> bool:
     """Whether flow from any committed belt can return to that same belt.
 
@@ -13283,9 +13211,8 @@ def _committed_path_closes_cycle(
     the belt graph reachable from ``indices`` answers that for every index at
     once; the per-index walk it replaces re-traversed the same graph once per
     committed cell (30k walks and 3.4M visits on ``universe-matrix``) and was
-    the largest single cost of ``_commit_paths``.  Edges are the same ones
-    ``_leads_back`` follows: a Splitter to each branch fed from it, a belt to
-    its ``output_obj``; anything else has no successors.
+    the largest single cost of ``_commit_paths``. Edges are the shared directed
+    transport edges that ``_leads_back`` and the validator also follow.
     """
     buildings = canvas.buildings
     n = len(buildings)
@@ -13293,17 +13220,7 @@ def _committed_path_closes_cycle(
     if not wanted:
         return False
 
-    def successors(i: int) -> tuple[int, ...]:
-        b = buildings[i]
-        if b.item_id == catalog.SPLITTER_ID:
-            return (
-                buildings.splitter_successors(i)
-                if splitter_successors is None
-                else tuple(splitter_successors.get(i, ()))
-            )
-        if catalog.is_belt(b.item_id) and b.output_obj is not None:
-            return (b.output_obj,)
-        return ()
+    successors = buildings.transport_successors
 
     order = [-1] * n
     low = [0] * n
@@ -13902,6 +13819,7 @@ def _route_boundary_nets(
     # runs already use; a cell on the outermost ring cannot wall anything in,
     # because outward of it is ground no pass can reach.
     astar_bounds = _grow(core, _ENTRY_RING)
+    reservations = _CorridorReservations(canvas)
 
     def port_of(net: _Net) -> _Port:
         return net.source if outward else net.dst
@@ -13965,8 +13883,7 @@ def _route_boundary_nets(
             # blocking the straight path and seals the port behind its own
             # claim. Leave any other corridor held for the opposite role.
             port_key = (port.x, port.y, port.z)
-            retired = _retire_port_corridor(
-                canvas,
+            retired = reservations.retire(
                 port_key,
                 (),
                 (
@@ -13976,9 +13893,7 @@ def _route_boundary_nets(
                 ),
             )
             if retired is None:
-                mine = canvas.reserved.first_for(port_key)
-                if mine is not None:
-                    del canvas.reserved[mine]
+                reservations.retire_first(port_key)
 
             # The straight fast path is ground-only. Elevated ports must use
             # the shared z-aware search so the level transition is explicit.
@@ -18663,7 +18578,7 @@ def _build_prepared(
 
     # Reservations and tentative markers are attempt-local and are spent before
     # the held power sites become buildings.
-    canvas.reserved.clear()
+    _CorridorReservations(canvas).finish()
     for cell in [c for c, owner in canvas.blocked.items() if owner == _TENTATIVE]:
         del canvas.blocked[cell]
     canvas.keep_out.clear()

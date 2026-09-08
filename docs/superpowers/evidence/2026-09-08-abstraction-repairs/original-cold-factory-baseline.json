@@ -1,0 +1,9 @@
+{
+  "text": "============================= test session starts ==============================\nplatform linux -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- /home/dannyb/sources/factorio-lab-to-blueprint/.venv/bin/python\ncachedir: .pytest_cache\nrootdir: /home/dannyb/sources/factorio-lab-to-blueprint\nconfigfile: pyproject.toml\nplugins: xdist-3.8.0, timeout-2.4.0, cov-7.1.0, anyio-4.14.2\ntimeout: 120.0s\ntimeout method: signal\ntimeout func_only: False\ncollecting ... collected 1 item\n\ntests/layout/test_freeform.py::test_all_products_band_160_cold_proof_reaches_a_valid_layout FAILED [100%]\n\n=================================== FAILURES ===================================\n_________ test_all_products_band_160_cold_proof_reaches_a_valid_layout _________\ntests/layout/test_freeform.py:19552: in test_all_products_band_160_cold_proof_reaches_a_valid_layout\n    ).lay_out(spec, time_budget_s=15.0)\n      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntests/conftest.py:131: in lay_out\n    return original(\nsrc/flab2bp/layout/freeform.py:21270: in lay_out\n    raise NoValidLayout(\nE   flab2bp.layout.base.NoValidLayout: no valid layout for all-products after 15s: route evidence from 1 packs at candidate heights 65: failure kinds dynamic-access=1; one routed pack is insufficient to distinguish a recurring net from a density/search-space defect. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.\n=========================== short test summary info ============================\nFAILED tests/layout/test_freeform.py::test_all_products_band_160_cold_proof_reaches_a_valid_layout\n============================== 1 failed in 6.49s ===============================\n[original-cold-factory-baseline: failed; cursor=1689]",
+  "details": {
+    "op": "logs",
+    "cursor": 1689,
+    "timedOut": false,
+    "state": "failed"
+  }
+}

@@ -1,0 +1,13 @@
+Supervised process: original-transport-tail-red
+Command: taskset -c 126 .venv/bin/python -m pytest -q tests/layout/test_freeform.py::test_output_tail_nets_cross_pilers_without_crossing_cargo_domains --tb=short
+Watchdog: 150 seconds; observed runtime 9.6 seconds; exit 1.
+
+Observed assertion:
+tests/layout/test_freeform.py:12043:
+    assert [net.source.belt for net in freeform._output_tail_nets(canvas, (output,))] == [2]
+E   assert [0] == [2]
+E   At index 0 diff: 0 != 2
+
+FAILED tests/layout/test_freeform.py::test_output_tail_nets_cross_pilers_without_crossing_cargo_domains
+
+Original 25-second collection timeout remains recorded separately in tail-red.log and Main tool history; it is not semantic red evidence.

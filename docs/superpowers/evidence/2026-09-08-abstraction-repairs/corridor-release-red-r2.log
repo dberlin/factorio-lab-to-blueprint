@@ -1,0 +1,19 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_____ test_failed_cluster_restores_two_corridors_and_unrelated_grid[False] _____
+tests/layout/test_freeform.py:21502: in test_failed_cluster_restores_two_corridors_and_unrelated_grid
+    assert before and state() == before[0]
+E   AssertionError: assert ([((((-3, 3, 0), (-4, 3, 0)), ((-3, 4, 0), (-4, 3, 0)), ((-1, -2, 0), (0, -2, 0)), ((-2, -2, 0), (0, -2, 0))), (((-4, 3...\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')] and ((), (((-4, 3...\x00\x00\x00') == ((((-3, 3, 0)...\x00\x00\x00')
+E     
+E     At index 0 diff: () != (((-3, 3, 0), (-4, 3, 0)), ((-3, 4, 0), (-4, 3, 0)), ((-1, -2, 0), (0, -2, 0)), ((-2, -2, 0), (0, -2, 0)))
+E     Use -v to get more diff)
+_____ test_failed_cluster_restores_two_corridors_and_unrelated_grid[True] ______
+tests/layout/test_freeform.py:21502: in test_failed_cluster_restores_two_corridors_and_unrelated_grid
+    assert before and state() == before[0]
+E   AssertionError: assert ([((((-3, 3, 0), (-4, 3, 0)), ((-3, 4, 0), (-4, 3, 0)), ((-1, -2, 0), (0, -2, 0)), ((-2, -2, 0), (0, -2, 0))), (((-4, 3...\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')] and ((((-3, 3, 0)...\x00\x00\x00') == ((((-3, 3, 0)...\x00\x00\x00')
+E     
+E     At index 0 diff: (((-3, 3, 0), (-4, 3, 0)), ((-3, 4, 0), (-4, 3, 0)), ((-1, -2, 0), (0, -2, 0)), ((-2, -2, 0), (0, -2, 0)), ((0, -1, 0), (0, -2, 0)), ((0, 0, 0), (0, -2, 0))) != (((-3, 3, 0), (-4, 3, 0)), ((-3, 4, 0), (-4, 3, 0)), ((-1, -2, 0), (0, -2, 0)), ((-2, -2, 0), (0, -2, 0)))
+E     Use -v to get more diff)
+=========================== short test summary info ============================
+FAILED tests/layout/test_freeform.py::test_failed_cluster_restores_two_corridors_and_unrelated_grid[False]
+FAILED tests/layout/test_freeform.py::test_failed_cluster_restores_two_corridors_and_unrelated_grid[True]

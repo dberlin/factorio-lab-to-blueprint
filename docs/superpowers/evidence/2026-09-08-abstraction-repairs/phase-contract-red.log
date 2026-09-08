@@ -1,0 +1,9 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_replacing_phase_endpoints_preserves_old_queries_and_payload_identity ___
+tests/indexed/test_nets.py:181: in test_replacing_phase_endpoints_preserves_old_queries_and_payload_identity
+    with pytest.raises(FrozenInstanceError):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE FrozenInstanceError
+=========================== short test summary info ============================
+FAILED tests/indexed/test_nets.py::test_replacing_phase_endpoints_preserves_old_queries_and_payload_identity

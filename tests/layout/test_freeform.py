@@ -332,7 +332,7 @@ def test_prepared_problem_creates_fresh_workspaces() -> None:
     first.canvas.blocked[(999, 999, 0)] = -1
     first.canvas.reserved[(999, 999, 0)] = (999, 999, 0)
     first.canvas.guard.add((999, 999, 1))
-    first.nets[0].item = "mutated-only-in-first"
+    first.nets[0] = replace(first.nets[0], item="mutated-only-in-first")
 
     assert (999, 999, 0) not in second.canvas.blocked
     assert (999, 999, 0) not in second.canvas.reserved
@@ -11996,14 +11996,73 @@ def _splitter_at(x: int) -> PlacedBuilding:
     return PlacedBuilding(item_id=catalog.SPLITTER_ID, model_index=38, x=x, y=0, width=2, height=2)
 
 
+def test_piler_transit_cycle_is_rejected_by_router_admission() -> None:
+    """Retained graph-only regression, using the real canvas owner."""
+    piler = catalog.building(catalog.PILER_ID)
+    placement = Placement(
+        buildings=(
+            replace(_linked_belt(0, 1), carries_item="gear"),
+            PlacedBuilding(item_id=catalog.PILER_ID, model_index=piler.model_index, x=1, y=0),
+            replace(_linked_belt(2, 0), input_obj=1, carries_item="gear"),
+        )
+    )
+    canvas = _Canvas(buildings=list(placement.buildings))
+    assert freeform._leads_back(canvas, 0, {2})
+    assert freeform._committed_path_closes_cycle(canvas, [0])
+    report = validate.validate(placement, only=("belt.acyclic",), expect_power=False)
+    assert any(f.check == "belt.acyclic" for f in report.errors)
+
+
+def test_serial_piler_merge_stays_admissible_until_relinked_into_cycle() -> None:
+    piler = catalog.building(catalog.PILER_ID)
+    canvas = _Canvas(
+        buildings=[
+            _linked_belt(0, 1),
+            PlacedBuilding(item_id=catalog.PILER_ID, model_index=piler.model_index, x=1, y=0),
+            replace(_linked_belt(2, 3), input_obj=1),
+            PlacedBuilding(item_id=catalog.PILER_ID, model_index=piler.model_index, x=3, y=0),
+            replace(_linked_belt(4, None), input_obj=3),
+            _linked_belt(5, 0),
+            _linked_belt(6, 0),
+        ]
+    )
+    assert not freeform._leads_back(canvas, 0, {5, 6})
+    assert not freeform._committed_path_closes_cycle(canvas, [0, 5, 6])
+    canvas.buildings[4] = replace(canvas.buildings[4], output_obj=5)
+    assert freeform._leads_back(canvas, 0, {5})
+    assert freeform._committed_path_closes_cycle(canvas, [5])
+    assert not freeform._committed_path_closes_cycle(canvas, [6])
+
+
+def test_output_tail_nets_cross_pilers_without_crossing_cargo_domains() -> None:
+    piler = catalog.building(catalog.PILER_ID)
+    canvas = _Canvas(
+        buildings=[
+            replace(_linked_belt(0, 1), carries_item="gear"),
+            PlacedBuilding(item_id=catalog.PILER_ID, model_index=piler.model_index, x=1, y=0),
+            replace(_linked_belt(2, None), input_obj=1, carries_item="gear"),
+        ]
+    )
+    port = _Port(0, 0, 0, 0, 0)
+    output = _Net(port, port, "gear")
+    assert [net.source.belt for net in freeform._output_tail_nets(canvas, (output,))] == [2]
+    canvas = _Canvas(
+        buildings=[
+            canvas.buildings[0],
+            canvas.buildings[1],
+            replace(canvas.buildings[2], carries_item="iron-ingot"),
+        ]
+    )
+    assert [net.source.belt for net in freeform._output_tail_nets(canvas, (output,))] == [0]
+
+
 class TestCommittedPathClosesCycle:
     """`_committed_path_closes_cycle` answers "is any committed belt on a loop"."""
 
     def _reference(self, canvas: _Canvas, indices: list[int]) -> bool:
-        successors = freeform._splitter_successors(canvas)
         return any(
             (onward := canvas.buildings[index].output_obj) is not None
-            and freeform._leads_back(canvas, onward, {index}, successors)
+            and freeform._leads_back(canvas, onward, {index})
             for index in indices
         )
 
@@ -21285,6 +21344,174 @@ def test_a_bounded_cluster_search_restores_the_round_exactly(
     assert result.last_mile.invocations == 1
     assert result.last_mile.bounded == 1
     assert result.last_mile.restore_mismatch == 0
+
+
+def test_failed_cluster_preserves_order_beside_unrelated_stakes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canvas, nets, bounds = _one_stranded_net_fixture()
+    nets.append(
+        _last_mile_belt_net(canvas, (3, 4), (5, 4), NetId(4, 5, "unrelated", NetRole.INTERNAL, 0))
+    )
+    original = last_mile.build_cluster
+    saved: list[tuple[tuple[int, tuple[Cell, ...]], ...]] = []
+    live: list[Mapping[int, tuple[Cell, ...]]] = []
+    subsequent: list[tuple[int, ...]] = []
+    commit = freeform._commit_paths
+
+    def cluster(*args: object, **kwargs: object) -> last_mile.ClusterProblem:
+        paths = cast(Mapping[int, tuple[Cell, ...]], kwargs["paths"])
+        saved.append(tuple(paths.items()))
+        live.append(paths)
+        result = original(*args, **kwargs)  # type: ignore[arg-type]
+        assert 0 in result.nets and 2 not in result.nets
+        return result
+
+    def observe_commit(
+        canvas: _Canvas,
+        nets: list[_Net],
+        paths: Mapping[int, tuple[Cell, ...]],
+        *args: object,
+        **kwargs: object,
+    ) -> tuple[int, ...]:
+        if saved:
+            subsequent.append(tuple(paths))
+        return commit(canvas, nets, paths, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(last_mile, "build_cluster", cluster)
+    monkeypatch.setattr(last_mile, "solve_cluster", lambda *_args: _bounded_result())
+    monkeypatch.setattr(freeform, "_commit_paths", observe_commit)
+    monkeypatch.setattr(freeform, "RRR_MAX", 1)
+    result = _route_all(canvas, nets, 2001, 35, bounds)
+
+    assert saved and tuple(index for index, _path in saved[0]) == (0, 2)
+    assert tuple(live[0].items()) == saved[0]
+    assert subsequent[-1] == (0, 2)
+    assert result.last_mile is not None and result.last_mile.restore_mismatch == 0
+
+
+@pytest.mark.parametrize("unexpected", [False, True])
+def test_reservation_abort_restores_held_corridor_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    unexpected: bool,
+) -> None:
+    canvas = _Canvas(limit=(-4, -4, 10, 6))
+    held = _access_demand((0, 0, 0), freeform.PortAccessKind.INTERNAL_DEPARTURE, belt=1)
+    incoming = _access_demand((6, 0, 0), freeform.PortAccessKind.INTERNAL_ARRIVAL, belt=2)
+    first = freeform.PortAccessCorridor((1, 0, 0), (2, 0, 0), held.kind)
+    second = freeform.PortAccessCorridor((0, 1, 0), (0, 2, 0), incoming.kind)
+    unrelated = (9, 5, 0)
+    canvas.reserved[unrelated] = (9, 6, 0)
+    for corridor in (first, second):
+        canvas.reserved[corridor.access] = held.cell
+        canvas.reserved[corridor.exit] = held.cell
+    canvas.port_corridors[held.cell] = (first, second)
+    before = tuple(canvas.reserved.items()), tuple(canvas.port_corridors.items())
+    checks = 0
+
+    def cancelled() -> bool:
+        nonlocal checks
+        checks += 1
+        if checks == 2 and unexpected:
+            raise RuntimeError("reservation probe")
+        return checks == 2
+
+    with pytest.raises(RuntimeError if unexpected else freeform._PreparationDeadline):
+        _reserve_port_access(canvas, (incoming,), held={held: first}, cancelled=cancelled)
+
+    assert (tuple(canvas.reserved.items()), tuple(canvas.port_corridors.items())) == before
+    assert canvas.reserved.first_for(held.cell) == first.access
+    grid = _make_grid(canvas, canvas.limit, canvas.limit, {})
+    flags = _routing_flags(grid)
+    assert flags[grid.index(first.access)] == 0
+    assert flags[grid.index(second.access)] == 0
+    assert flags[grid.index((3, 3, 0))] == 1
+
+
+@pytest.mark.parametrize("unexpected", [False, True])
+def test_failed_cluster_restores_two_corridors_and_unrelated_grid(
+    monkeypatch: pytest.MonkeyPatch,
+    unexpected: bool,
+) -> None:
+    canvas, nets, bounds = _one_stranded_net_fixture()
+    # A second, opposite-role approach beside the selected blocker source.
+    # Opening this dead-end approach cannot bypass the blocker's destination:
+    # its only approach is still (0, -1), on the stranded net's real wall.
+    for x, y in ((-1, -2), (-2, -2)):
+        canvas.solid.discard((x, y))
+        for level in range(LEVELS):
+            canvas.blocked.pop((x, y, level), None)
+    departure = freeform.PortAccessCorridor(
+        (0, -1, 0), (0, 0, 0), freeform.PortAccessKind.INTERNAL_DEPARTURE
+    )
+    arrival = freeform.PortAccessCorridor(
+        (-1, -2, 0), (-2, -2, 0), freeform.PortAccessKind.INTERNAL_ARRIVAL
+    )
+    unrelated = freeform.PortAccessCorridor((-3, 3, 0), (-3, 4, 0))
+    for port, corridors in (((-4, 3, 0), (unrelated,)), ((0, -2, 0), (departure, arrival))):
+        canvas.port_corridors[port] = corridors
+        for corridor in corridors:
+            canvas.reserved[corridor.access] = port
+            canvas.reserved[corridor.exit] = port
+    grid: list[_Grid] = []
+    before: list[tuple[object, ...]] = []
+    after: list[tuple[object, ...]] = []
+    make_grid = freeform._make_grid
+    build_cluster = last_mile.build_cluster
+    commit_paths = freeform._commit_paths
+
+    def capture_grid(*args: object, **kwargs: object) -> _Grid:
+        value = make_grid(*args, **kwargs)  # type: ignore[arg-type]
+        if args[0] is canvas:
+            grid.append(value)
+        return value
+
+    def state() -> tuple[object, ...]:
+        return (
+            tuple(canvas.reserved.items()),
+            tuple(canvas.port_corridors.items()),
+            grid[0].reserved,
+            bytes(grid[0].occ),
+            canvas.reserved.first_for((0, -2, 0)),
+            bytes(_routing_flags(grid[0])),
+        )
+
+    def cluster(*args: object, **kwargs: object) -> last_mile.ClusterProblem:
+        value = build_cluster(*args, **kwargs)  # type: ignore[arg-type]
+        assert 0 in value.nets
+        before.append(state())
+        return value
+
+    def abort(*_args: object) -> object:
+        if unexpected:
+            raise RuntimeError("cluster probe")
+        return _bounded_result()
+
+    def next_commit(*args: object, **kwargs: object) -> tuple[int, ...]:
+        if before and args[0] is canvas:
+            after.append(state())
+        return commit_paths(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(freeform, "_make_grid", capture_grid)
+    monkeypatch.setattr(last_mile, "build_cluster", cluster)
+    monkeypatch.setattr(last_mile, "solve_cluster", abort)
+    monkeypatch.setattr(freeform, "_commit_paths", next_commit)
+    monkeypatch.setattr(freeform, "RRR_MAX", 1)
+    if unexpected:
+        with pytest.raises(RuntimeError, match="cluster probe"):
+            _route_all(canvas, nets, 2001, 35, bounds)
+        after.append(state())
+    else:
+        _route_all(canvas, nets, 2001, 35, bounds)
+
+    # The final committer legitimately clears preparation reservations. Observe
+    # its ENTRY instead: the next route consumer sees the restored transaction.
+    assert before and after[-1] == before[0]
+    assert after[-1][4] == arrival.access
+    flags = cast(bytes, after[-1][5])
+    assert flags[grid[0].index(arrival.access)] == 0
+    assert flags[grid[0].index(unrelated.access)] == 0
+    assert flags[grid[0].index((3, 2, 0))] == 1
 
 
 def test_a_hostile_cluster_solution_never_raises_and_never_routes(

@@ -1,0 +1,51 @@
+{
+  "text": "original-composition-fixture-green: exited exit=0 uptime=4.0s restarts=0\nCommand: /usr/bin/timeout --kill-after=5 90 taskset -c 120-125 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-original/.venv/bin/python -m pytest -q tests/layout/hierarchy/test_compose.py --tb=short\nCwd: ~/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-original\nPTY: false; restart=no; persist=false; detached=false",
+  "details": {
+    "op": "describe",
+    "daemon": {
+      "name": "original-composition-fixture-green",
+      "id": "6235bd7b-9f6d-44de-9f5d-22f2dff7a255",
+      "state": "exited",
+      "createdAt": 1788880211789,
+      "startedAt": 1788880211793,
+      "readyAt": 1788880215355,
+      "exitedAt": 1788880215779,
+      "exitCode": 0,
+      "restartCount": 0,
+      "outputBytes": 80,
+      "owner": "01a07e04-630a-75c9-a268-070c59282100",
+      "readyMatch": "[",
+      "persist": false,
+      "detached": false
+    },
+    "spec": {
+      "name": "original-composition-fixture-green",
+      "application": "/usr/bin/timeout",
+      "args": [
+        "--kill-after=5",
+        "90",
+        "taskset",
+        "-c",
+        "120-125",
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-original/.venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/layout/hierarchy/test_compose.py",
+        "--tb=short"
+      ],
+      "env": {
+        "PYTHONPATH": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-original/src"
+      },
+      "cwd": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-original",
+      "pty": false,
+      "ready": {
+        "log": "\\[",
+        "timeoutMs": 30000
+      },
+      "restart": "no",
+      "persist": false,
+      "detached": false
+    }
+  }
+}

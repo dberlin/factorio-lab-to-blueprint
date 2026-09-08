@@ -277,23 +277,34 @@ def test_predecessor_of_is_none_for_zero_or_ambiguous_fan_in() -> None:
     assert index.predecessor_of(999_999) is None
 
 
-def test_splitter_successors_matches_by_input_obj() -> None:
-    """A splitter/piler names neither neighbour; its successors pick it up.
-
-    ``splitter_successors`` is what a caller reaches for by name; it must
-    agree with ``by_input_obj`` on the splitter's own index, which is the
-    link a downstream belt actually stores.
-    """
+@pytest.mark.parametrize("owner", [Buildings, MutableBuildings])
+def test_transport_edges_are_inverse_and_exclude_raw_nontransport_links(owner) -> None:
+    belt = catalog.item_id("conveyor-belt-1")
     records = (
-        PlacedBuilding(item_id=catalog.SPLITTER_ID, model_index=0, x=0, y=0),
-        PlacedBuilding(item_id=next(iter(catalog.BELT_IDS)), model_index=0, x=1, y=0, input_obj=0),
-        PlacedBuilding(item_id=next(iter(catalog.BELT_IDS)), model_index=0, x=1, y=1, input_obj=0),
-        PlacedBuilding(item_id=next(iter(catalog.BELT_IDS)), model_index=0, x=2, y=0),
+        PlacedBuilding(item_id=belt, model_index=35, x=0, y=0, output_obj=1),
+        PlacedBuilding(item_id=catalog.PILER_ID, model_index=0, x=1, y=0),
+        PlacedBuilding(item_id=belt, model_index=35, x=2, y=0, input_obj=1, output_obj=3),
+        PlacedBuilding(item_id=catalog.SPLITTER_ID, model_index=0, x=3, y=0),
+        PlacedBuilding(item_id=belt, model_index=35, x=4, y=0, input_obj=3),
+        PlacedBuilding(item_id=belt, model_index=35, x=5, y=0, input_obj=3, output_obj=4),
+        PlacedBuilding(
+            item_id=catalog.item_id("sorter-1"), model_index=0, x=6, y=0, input_obj=1, output_obj=4
+        ),
+        PlacedBuilding(item_id=belt, model_index=35, x=7, y=0, input_obj=0, output_obj=6),
+        PlacedBuilding(item_id=belt, model_index=35, x=8, y=0, output_obj=999),
     )
-    index = Buildings(records)
-    assert index.splitter_successors(0) == (1, 2)
-    assert index.splitter_successors(0) == index.by_input_obj(0)
-    assert index.splitter_successors(999_999) == ()
+    index = owner(records)
+    expected = {(0, 1), (1, 2), (2, 3), (3, 4), (3, 5), (5, 4)}
+    assert {(i, j) for i in range(len(records)) for j in index.transport_successors(i)} == expected
+    assert {
+        (j, i) for i in range(len(records)) for j in index.transport_predecessors(i)
+    } == expected
+    assert index.by_input_obj(1) == (2, 6)  # raw links retain sorter membership
+    assert index.transport_successors(3) == (4, 5)
+    assert index.transport_predecessors(4) == (3, 5)
+    for invalid in (-1, len(records), 999):
+        assert index.transport_successors(invalid) == ()
+        assert index.transport_predecessors(invalid) == ()
 
 
 def test_belt_run_crosses_splitters_and_pilers_and_terminates_on_cycles() -> None:
@@ -486,18 +497,27 @@ def test_setitem_may_change_z_and_at_tile_reflects_the_new_value() -> None:
     assert live.at_tile(5, 5) == (0, 1)
 
 
-def test_splitter_successors_is_live_within_the_same_append_pass() -> None:
-    """``canvas.add()`` grows the list inside the same commit pass that
-    queries a splitter's successors -- a memo keyed on the old sequence
-    would answer stale here, so this must be recomputed from the live
-    ``by_input_obj`` bucket on every call."""
-    belt = next(iter(catalog.BELT_IDS))
-    live = MutableBuildings([PlacedBuilding(item_id=catalog.SPLITTER_ID, model_index=0, x=0, y=0)])
-    assert live.splitter_successors(0) == ()
-    live.append(PlacedBuilding(item_id=belt, model_index=0, x=1, y=0, input_obj=0))
-    assert live.splitter_successors(0) == (1,)
-    live.append(PlacedBuilding(item_id=belt, model_index=0, x=1, y=1, input_obj=0))
-    assert live.splitter_successors(0) == (1, 2)
+def test_transport_edges_follow_live_relink_append_and_pop_order() -> None:
+    belt = catalog.item_id("conveyor-belt-1")
+    live = MutableBuildings(
+        [
+            PlacedBuilding(item_id=catalog.PILER_ID, model_index=0, x=0, y=0),
+            PlacedBuilding(item_id=belt, model_index=35, x=1, y=0),
+            PlacedBuilding(item_id=belt, model_index=35, x=2, y=0, input_obj=0),
+        ]
+    )
+    frozen = Buildings(tuple(live))
+    assert live.transport_successors(0) == (2,)
+    live.append(PlacedBuilding(item_id=belt, model_index=35, x=3, y=0, input_obj=0))
+    live[1] = replace(live[1], input_obj=0, output_obj=2)
+    assert live.transport_successors(0) == (1, 2, 3)
+    assert live.transport_predecessors(2) == (0, 1)
+    live.pop()
+    assert live.transport_successors(0) == (1, 2)
+    live[1] = replace(live[1], input_obj=None, output_obj=None)
+    assert live.transport_successors(0) == (2,)
+    assert live.transport_predecessors(2) == (0,)
+    assert frozen.transport_successors(0) == (2,)
 
 
 def test_relink_then_tail_pop_keeps_link_buckets_sorted() -> None:
@@ -559,7 +579,7 @@ def test_queries_match_a_rebuilt_index_after_a_mutation_sequence() -> None:
 
 def test_queries_match_a_rebuilt_index_on_spatial_link_and_count_methods() -> None:
     """Extends the staleness guard above to the methods its brief version
-    omits: ``at_tile``, ``in_box``, ``predecessor_of``, ``splitter_successors``,
+    omits: ``at_tile``, ``in_box``, ``predecessor_of``, transport adjacency,
     ``belt_run``, ``attached_to``, ``machines_for_strip`` and the counts."""
     live = MutableBuildings(_fixture())
     for n in range(20):
@@ -588,7 +608,8 @@ def test_queries_match_a_rebuilt_index_on_spatial_link_and_count_methods() -> No
     for i, b in enumerate(records):
         assert live.at_tile(b.x, b.y) == fresh.at_tile(b.x, b.y)
         assert live.predecessor_of(i) == fresh.predecessor_of(i)
-        assert live.splitter_successors(i) == fresh.splitter_successors(i)
+        assert live.transport_successors(i) == fresh.transport_successors(i)
+        assert live.transport_predecessors(i) == fresh.transport_predecessors(i)
         assert live.belt_run(i, forward=True) == fresh.belt_run(i, forward=True)
         assert live.belt_run(i, forward=False) == fresh.belt_run(i, forward=False)
         assert live.attached_to(i) == fresh.attached_to(i)

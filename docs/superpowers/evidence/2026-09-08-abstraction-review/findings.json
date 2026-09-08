@@ -1,0 +1,147 @@
+{
+  "source": "bbc8889d",
+  "scope": "Buildings and indexed-scans residual abstraction review; no production edits",
+  "reviewers": [
+    "BuildingsAbstractionReview",
+    "IndexedAbstractionReview"
+  ],
+  "overall": "No patch-introduced defect established. Two pre-existing transport-semantic defects reproduced on current source. Remaining ownership concerns are risks, not confirmed failures.",
+  "runtime_proof": "flab-abstraction-review-probe.log; process exit 0; logical transport graph fixtures only, not full physical paste validation",
+  "priorities": [
+    {
+      "priority": 1,
+      "severity": "P2",
+      "status": "confirmed current bug; pre-existing according to source comparison",
+      "title": "Piler-blind endpoint discovery loses hierarchical output supply",
+      "locations": [
+        "src/flab2bp/layout/markers.py:39-94",
+        "src/flab2bp/layout/hierarchy/contracts.py:178-213",
+        "src/flab2bp/layout/freeform.py:6637-6659"
+      ],
+      "observed": "Producer->sorter->belt2->Piler3->belt4: output_belt_tails=[]; input_belt_heads=[2,4]; hierarchy outputs=[], inputs=[4]. The actual transport output at belt4 is absent from cut supply and misidentified as input.",
+      "abstraction": "Canonical transport adjacency over Buildings plus an explicit boundary endpoint policy. Serial Piler transit must not terminate a producer trunk or manufacture an exposed input. Preserve intentional splitter-branch boundary policy rather than simply traversing every host everywhere.",
+      "migration": [
+        "marker input/output discovery",
+        "hierarchical boundary_lanes consumers",
+        "other output endpoint walks after references review"
+      ],
+      "regression_contract": "A piled producer output remains a rated hierarchy output; piler out-port belts are not exposed inputs. Include multiple serial pilers, ordinary belt chain, real external input, and splitter-branch policies."
+    },
+    {
+      "priority": 2,
+      "severity": "P2",
+      "status": "confirmed current bug; pre-existing according to source comparison",
+      "title": "Router and validator disagree on flow through a Piler",
+      "locations": [
+        "src/flab2bp/layout/freeform.py:13141-13306",
+        "src/flab2bp/layout/validate.py:3523-3539"
+      ],
+      "observed": "Belt0->Piler1->belt2->belt0: _leads_back(0,{2})=false and _committed_path_closes_cycle([0])=false; real belt.acyclic validator reports cycle [0,1,2].",
+      "abstraction": "One directed transport-successor query over the live Buildings owner, accounting for belt forward edges and reverse-input output belts of Splitters/Pilers. Reuse that adjacency in distinct reachability/Tarjan/validation algorithms; do not merge their algorithms or item-specific policies.",
+      "migration": [
+        "_leads_back",
+        "_committed_path_closes_cycle",
+        "_output_tail_nets",
+        "validator transport adjacency"
+      ],
+      "regression_contract": "Admission guard sees every transport cycle the validator sees, including Piler transit, while legal merges/shared prefixes remain acyclic."
+    },
+    {
+      "priority": 3,
+      "severity": "risk requiring mutation/rollback probe",
+      "status": "no current divergence reproduced",
+      "title": "Paths and StakedPaths retain separate mutable authority",
+      "locations": [
+        "src/flab2bp/layout/freeform.py:9532-9535",
+        "src/flab2bp/layout/freeform.py:10088-10127",
+        "src/flab2bp/layout/freeform.py:10931-10942",
+        "src/flab2bp/indexed/staked_paths.py:120-123"
+      ],
+      "risk": "Mutation paths must update both holders; rollback fingerprint uses dict equality while stake/scan order is observable. Equal mappings do not prove equal subsequent route tie behavior.",
+      "abstraction": "Promote existing StakedPaths to the ordered mapping/snapshot/restore owner instead of adding another graph wrapper. Migrate _stake/_unstake, endpoint readers and last-mile transactions together.",
+      "required_probe": "Fail a cluster transaction after unrelated stakes; compare ordered paths and indexed endpoint/linked-head/position answers before and after exact rollback. Prove a reachable mismatch before calling it a bug."
+    },
+    {
+      "priority": 4,
+      "severity": "risk requiring cancellation/rollback probe",
+      "status": "reviewed current writes appear synchronized",
+      "title": "Corridor ownership spans three mutation stores",
+      "locations": [
+        "src/flab2bp/layout/freeform.py:10014-10067",
+        "src/flab2bp/layout/freeform.py:11995-12032",
+        "src/flab2bp/layout/freeform.py:12321-12340",
+        "src/flab2bp/layout/freeform.py:12598-12602",
+        "src/flab2bp/indexed/port_reservations.py:34-77"
+      ],
+      "risk": "canvas.reserved, canvas.port_corridors and grid.reserved must retire and restore together; PortReservations correctly owns its reverse index but not the entire corridor transaction.",
+      "abstraction": "A call-local corridor reservation transaction owner with snapshot/retire/restore around existing stores, preserving demand-kind eligibility and first forward insertion precedence.",
+      "required_probe": "Cancel after one held corridor, then fail last-mile rerouting with two corridors for one port; compare membership and first_for ordering. Do not extract merely to shorten repeated loops."
+    }
+  ],
+  "lower_priority_contracts": [
+    "Nets snapshots keys while retaining mutable payloads; current code does not mutate those key fields after indexing. Establish an immutable row contract before changing behavior.",
+    "ReferenceGraph snapshots edges while retaining live graph mappings; current use is call-local. A frozen graph snapshot is a possible tighter contract, not evidence of a current failure.",
+    "Buildings.belt_run documents Splitter/Piler starting anchors but currently ignores a non-belt seed. The only production caller supplies belts. Narrow the documented contract or deliberately support junction starts; nonblocking."
+  ],
+  "preserve_distinctions": [
+    "Declared footprint index versus physical collision versus routing keepout; sorter/addon exclusions and fractional ramp altitude are deliberately different.",
+    "Unique all-building predecessor, last all-building writer, unique belt predecessor and last belt writer are different policies. Share storage, not accidental precedence.",
+    "Cycle-refusing stable topology order versus BlockGraph's deliberate cycle-breaking order.",
+    "Root-sensitive UnionFind policy; item/cargo-specific graph traversal; internal versus external endpoint allocation."
+  ],
+  "inspected_without_confirmed_defect": [
+    "MutableBuildings copying, indexed rewrite restrictions, relink buckets, live z reads and snapshot/clone lifetime",
+    "Stages append/replace count, frozen observations, solve-local identity positions, read-only flow maps and trace sequence ordering"
+  ],
+  "repair_dispositions": [
+    {
+      "finding": "Piler-blind endpoint discovery",
+      "task": 2,
+      "status": "confirmed bug repaired",
+      "commit": "f5a81faf",
+      "proof": "Nine-building explicit piled transfer, exact demand/supply1; full non-power validation and encode/decode."
+    },
+    {
+      "finding": "Router/validator Piler disagreement",
+      "task": 1,
+      "status": "confirmed bug repaired",
+      "commit": "f81382e9",
+      "proof": "Canonical transport edges consumed by distinct cycle/admission algorithms; retained causal red/green."
+    },
+    {
+      "finding": "Paths dual authority",
+      "task": 3,
+      "status": "reproduced order drift repaired",
+      "commit": "a3d04e68",
+      "proof": "One insertion-ordered snapshot owner; failed cluster preserves next-query/route behavior."
+    },
+    {
+      "finding": "Three-store corridor mutation",
+      "task": 4,
+      "status": "reproduced exceptional rollback loss repaired",
+      "commit": "f6e5133f",
+      "proof": "Ordered receipt coordinates stores and own-grid rollback; ordinary cancellation control was already passing."
+    },
+    {
+      "finding": "Nets key/live payload",
+      "task": 5,
+      "status": "preventative phase-contract enforcement",
+      "commit": "f6e5133f",
+      "proof": "Frozen keys and rebuilt phase input preserve payload identity; no reachable production stale-key writer found."
+    },
+    {
+      "finding": "ReferenceGraph mixed snapshot",
+      "task": 6,
+      "status": "reproduced constructor snapshot drift repaired",
+      "commit": "0afdf7ec",
+      "proof": "All query families use one snapshot; no production graph mutation claim."
+    },
+    {
+      "finding": "belt_run host-seed prose",
+      "task": 7,
+      "status": "contract clarified without behavior change",
+      "commit": "c37b20bf",
+      "proof": "Production consumer inventory supplies belts; through_any_host weighting preserved."
+    }
+  ]
+}

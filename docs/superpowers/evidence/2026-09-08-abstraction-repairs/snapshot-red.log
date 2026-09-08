@@ -1,0 +1,51 @@
+FFFFF                                                                    [100%]
+=================================== FAILURES ===================================
+_______ test_source_mutation_preserves_reachability_and_blocked_targets ________
+tests/indexed/test_reference_graph.py:138: in test_source_mutation_preserves_reachability_and_blocked_targets
+    assert index.reachable_from(["a.root"], block=["b"]) == frozenset({"a.root"})
+E   AssertionError: assert frozenset({'a...t', 'b.leaf'}) == frozenset({'a.root'})
+E     
+E     Extra items in the left set:
+E     'b.leaf'
+E     Use -v to get more diff
+________________ test_source_mutation_preserves_root_membership ________________
+tests/indexed/test_reference_graph.py:146: in test_source_mutation_preserves_root_membership
+    assert index.reachable_from(["b.leaf"], block=["b"]) == frozenset({"b.leaf"})
+E   AssertionError: assert frozenset() == frozenset({'b.leaf'})
+E     
+E     Extra items in the right set:
+E     'b.leaf'
+E     Use -v to get more diff
+________________ test_source_mutation_preserves_module_queries _________________
+tests/indexed/test_reference_graph.py:154: in test_source_mutation_preserves_module_queries
+    assert index.nodes_in("b") == frozenset({"b.leaf", "b.worker"})
+E   AssertionError: assert frozenset({'b.worker'}) == frozenset({'b..., 'b.worker'})
+E     
+E     Extra items in the right set:
+E     'b.leaf'
+E     Use -v to get more diff
+_____________ test_source_mutation_preserves_import_time_captures ______________
+tests/indexed/test_reference_graph.py:166: in test_source_mutation_preserves_import_time_captures
+    assert mutated_source_index.import_time_captures() == {
+E   AssertionError: assert {'b.leaf': fr...{'b.worker'})} == {'a.root': fr..., 'c.value'})}
+E     
+E     Differing items:
+E     {'a.called': frozenset({'b.worker'})} != {'a.called': frozenset({'b.worker', 'c.value'})}
+E     Left contains 1 more item:
+E     {'b.leaf': frozenset()}
+E     Right contains 1 more item:
+E     {'a.root': frozenset({'b.leaf'})}
+E     Use -v to get more diff
+____________________ test_source_mutation_preserves_holders ____________________
+tests/indexed/test_reference_graph.py:176: in test_source_mutation_preserves_holders
+    assert index.holders_of("b.leaf") == ("a.root",)
+E   AssertionError: assert () == ('a.root',)
+E     
+E     Right contains one more item: 'a.root'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED tests/indexed/test_reference_graph.py::test_source_mutation_preserves_reachability_and_blocked_targets
+FAILED tests/indexed/test_reference_graph.py::test_source_mutation_preserves_root_membership
+FAILED tests/indexed/test_reference_graph.py::test_source_mutation_preserves_module_queries
+FAILED tests/indexed/test_reference_graph.py::test_source_mutation_preserves_import_time_captures
+FAILED tests/indexed/test_reference_graph.py::test_source_mutation_preserves_holders

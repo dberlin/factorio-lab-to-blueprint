@@ -1,0 +1,34 @@
+{
+  "scope": "real emitted one-smelter strip; explicit legal piling; portable finalization; full validator without power; encoded/decode transfer",
+  "buildings": 9,
+  "piler": 6,
+  "output_tail": 7,
+  "external_input": 0,
+  "supply": [
+    [
+      7,
+      "iron-ingot",
+      "1"
+    ]
+  ],
+  "demand": [
+    [
+      0,
+      "iron-ore",
+      "1"
+    ]
+  ],
+  "blueprint_sha256": "68bcbf7b549617ace3c2b82281c0f8c94d4ae2bb6b79c26cdf78cc87addc0858",
+  "encoded_bytes": 348,
+  "frame": {
+    "width": 7,
+    "height": 5,
+    "primary_band": 4,
+    "certified_bands": [
+      4,
+      8,
+      16
+    ],
+    "rotated": false
+  }
+}

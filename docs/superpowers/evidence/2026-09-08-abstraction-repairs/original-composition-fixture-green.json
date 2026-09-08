@@ -1,0 +1,9 @@
+{
+  "text": ".........................................                                [100%]\n[original-composition-fixture-green: exited; cursor=80]",
+  "details": {
+    "op": "logs",
+    "cursor": 80,
+    "timedOut": false,
+    "state": "exited"
+  }
+}

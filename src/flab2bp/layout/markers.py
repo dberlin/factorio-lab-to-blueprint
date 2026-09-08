@@ -39,21 +39,15 @@ def _links_splitter(buildings: tuple[PlacedBuilding, ...], belt: PlacedBuilding)
 def input_belt_heads(placement: Placement) -> list[int]:
     """Indices of genuinely exposed belt entry points.
 
-    Belt chains are forward-linked (``output_obj`` names the next tile), so a
-    head has no belt predecessor. A belt whose other link names a Splitter is
-    anchored at that Splitter's port, not at the factory boundary.
+    Heads have no incoming transport edge, including a Piler/Splitter host
+    named by ``input_obj``. Splitter port belts remain internal boundaries.
     """
-    fed = {
-        b.output_obj
-        for b in placement.buildings
-        if b.output_obj is not None and catalog.is_belt(b.item_id)
-    }
+    buildings = Buildings.of(placement)
     return [
         i
-        for i, b in enumerate(placement.buildings)
-        if catalog.is_belt(b.item_id)
-        and i not in fed
-        and not _links_splitter(placement.buildings, b)
+        for i in buildings.belts()
+        if not buildings.transport_predecessors(i)
+        and not _links_splitter(placement.buildings, placement.buildings[i])
     ]
 
 
@@ -66,6 +60,7 @@ def output_belt_tails(placement: Placement) -> list[int]:
     at splitters and have no producer sorter of their own.
     """
     buildings = placement.buildings
+    building_index = Buildings.of(placement)
     starts = {
         b.output_obj
         for b in buildings
@@ -76,21 +71,20 @@ def output_belt_tails(placement: Placement) -> list[int]:
     }
     tails: set[int] = set()
     for start in starts:
-        cursor = start
+        pending = [start]
         seen: set[int] = set()
-        while cursor not in seen:
+        while pending:
+            cursor = pending.pop()
+            if cursor in seen:
+                continue
             seen.add(cursor)
-            if _links_splitter(buildings, buildings[cursor]):
-                break
-            following = buildings[cursor].output_obj
-            if following is None:
+            building = buildings[cursor]
+            if building.item_id == catalog.SPLITTER_ID or _links_splitter(buildings, building):
+                continue
+            if catalog.is_belt(building.item_id) and building.output_obj is None:
                 tails.add(cursor)
-                break
-            if not 0 <= following < len(buildings):
-                break
-            if not catalog.is_belt(buildings[following].item_id):
-                break
-            cursor = following
+                continue
+            pending.extend(building_index.transport_successors(cursor))
     return sorted(tails)
 
 

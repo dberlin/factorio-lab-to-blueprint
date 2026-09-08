@@ -1,34 +1,24 @@
-"""Staked router paths, with the endpoint-adjacency index kept in step.
+"""The ordered routing-path authority and its live endpoint/position indexes.
 
-`_leaning` (freeform.py:10289-10359) rebuilds `touch` and `sole` from every
-staked path on every call, once per stranded net inside `_repair`. The paths
-themselves are rewritten under it by `_stake` (freeform.py:9916-9938, the
-assignment at :9925) and `_unstake` (:9940-9966, the pop at :9962) in the same
-phase, which is precisely why the index has to be MAINTAINED rather than
-memoized. `into`/`refresh_predecessor` (freeform.py:12495-12511) is the model.
+Mapping reads expose immutable paths in stake insertion order. Only ``stake``
+and ``unstake`` mutate the live collection; ordered immutable snapshots restore
+all path-derived indexes together. World occupancy and route hints remain the
+enclosing route transaction's responsibility.
 
-Backend: plain dicts of sets, maintained on stake/unstake. The indexed domain
-owns write/read consistency; callers do not reproduce its adjacency scans.
-
-`sole_neighbours` deliberately takes `owner` per call rather than holding it:
-`owner` is the router's own cell->net map, rewritten by rip-up outside this
-type's knowledge, and a stale copy of it would be a wrong answer rather than a
-slow one.
-
-`stake` accepts an empty path without complaint (Ruling P-26): master's
-`paths[index] = path` at freeform.py:9925 accepts anything, and Task 26's
-conversion of `_stake` calls this with no guard.
+``sole_neighbours`` takes the router's current cell owner per query rather than
+holding a stale copy. Empty paths are staked entries, distinct from absent keys.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 
 Cell = tuple[int, int, int]
+type StakedPathSnapshot = tuple[tuple[int, tuple[Cell, ...], bool], ...]
 
 
-class StakedPaths:
-    """Nets currently staked, indexed by the cells beside their endpoints."""
+class StakedPaths(Mapping[int, tuple[Cell, ...]]):
+    """Nets currently staked, in insertion order, with indexed endpoint queries."""
 
     __slots__ = (
         "_beside",
@@ -49,6 +39,30 @@ class StakedPaths:
         self._next_order = 0
         self._linked_heads: dict[int, Cell] = {}
 
+    def __getitem__(self, net: int) -> tuple[Cell, ...]:
+        return self._paths[net]
+
+    def __iter__(self) -> Iterator[int]:
+        return iter(self._paths)
+
+    def __len__(self) -> int:
+        return len(self._paths)
+
+    def snapshot(self) -> StakedPathSnapshot:
+        """Freeze ordered paths and linked-head membership without copying cells."""
+        return tuple((net, path, net in self._linked_heads) for net, path in self._paths.items())
+
+    def restore(self, snapshot: StakedPathSnapshot) -> None:
+        """Replace the live state and every derived index with one saved order."""
+        self._paths.clear()
+        self._positions.clear()
+        self._beside.clear()
+        self._order.clear()
+        self._linked_heads.clear()
+        self._next_order = 0
+        for net, path, linked_head in snapshot:
+            self.stake(net, path, linked_head=linked_head)
+
     def _endpoint_neighbours(self, path: tuple[Cell, ...]) -> list[Cell]:
         if not path:
             return []
@@ -61,16 +75,16 @@ class StakedPaths:
     def stake(self, net: int, path: Sequence[Cell], *, linked_head: bool = False) -> None:
         """Record ``net`` on ``path``, replacing any path it already held.
 
-        Accepts an empty ``path`` -- master's own assignment does (Ruling P-26).
+        Replacing a stake retains its position; removing and reinserting it
+        appends it. An empty path remains a present mapping entry.
         """
-        order = self._order.get(net)
-        if net in self._paths:
-            self.unstake(net)
-        frozen = tuple(path)
-        if order is None:
-            order = self._next_order
+        previous = self._paths.get(net)
+        if previous is not None:
+            self._forget_indexes(net, previous)
+        else:
+            self._order[net] = self._next_order
             self._next_order += 1
-        self._order[net] = order
+        frozen = tuple(path)
         self._paths[net] = frozen
         positions: dict[Cell, int] = {}
         for position, cell in enumerate(frozen):
@@ -86,8 +100,11 @@ class StakedPaths:
         path = self._paths.pop(net, None)
         if path is None:
             return
+        del self._order[net]
+        self._forget_indexes(net, path)
+
+    def _forget_indexes(self, net: int, path: tuple[Cell, ...]) -> None:
         self._positions.pop(net, None)
-        self._order.pop(net, None)
         self._linked_heads.pop(net, None)
         for cell in self._endpoint_neighbours(path):
             holders = self._beside.get(cell)

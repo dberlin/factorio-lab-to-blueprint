@@ -155,3 +155,40 @@ def test_stable_net_ids_keep_role_and_payload_order() -> None:
     assert index.by_id(first) == "first"
     assert index.roles_of(first) == (((9, 0, 0), "src"), ((1, 0, 0), "dst"))
     assert index.payloads_in_role((1, 0, 0), "dst") == ("first", "second")
+
+
+def test_replacing_phase_endpoints_preserves_old_queries_and_payload_identity() -> None:
+    from dataclasses import FrozenInstanceError, replace
+
+    import pytest
+
+    from flab2bp.layout.freeform import _Net, _Port
+    from flab2bp.layout.route_feedback import NetId, NetRole
+
+    net_id = NetId(0, 1, "gear", NetRole.INTERNAL, 0)
+    first = _Net(_Port(0, 0, 0), _Port(1, 4, 0), "gear", net_id=net_id)
+
+    def phase(net: _Net) -> Nets[NetId]:
+        return Nets.of(
+            (net_id, net.item, kind, (port.x, port.y, port.z), role, net)
+            for port, kind, role in (
+                (net.source, "departure", "src"),
+                (net.dst, "arrival", "dst"),
+            )
+        )
+
+    old = phase(first)
+    with pytest.raises(FrozenInstanceError):
+        first.dst = _Port(2, 8, 0)  # type: ignore[misc]
+    replacement = replace(first, dst=_Port(2, 8, 0))
+    new = phase(replacement)
+
+    assert old.in_role((4, 0, 0), "dst") == (net_id,)
+    assert old.in_role((8, 0, 0), "dst") == ()
+    assert new.in_role((4, 0, 0), "dst") == ()
+    assert new.matching_demand("gear", "arrival", (8, 0, 0))[0] is replacement
+    assert old.by_id(net_id) is first
+    assert old.payloads_in_role((0, 0, 0), "src")[0] is first
+    assert old.payloads_in_role((4, 0, 0), "dst")[0] is first
+    assert new.payloads_in_role((0, 0, 0), "src")[0] is replacement
+    assert old.ids() == new.ids() == (net_id,)

@@ -1,0 +1,29 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_____ test_failed_cluster_restores_two_corridors_and_unrelated_grid[False] _____
+tests/layout/test_freeform.py:21499: in test_failed_cluster_restores_two_corridors_and_unrelated_grid
+    _route_all(canvas, nets, 2001, 35, bounds)
+src/flab2bp/layout/freeform.py:11749: in _route_all
+    stranded = _last_mile(stranded, it)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+src/flab2bp/layout/freeform.py:11213: in _last_mile
+    problem = last_mile.build_cluster(
+tests/layout/test_freeform.py:21482: in cluster
+    assert 0 in value.nets
+E   assert 0 in (1,)
+E    +  where (1,) = ClusterProblem(nets=(1,), stranded=(1,), truncated=False, sibling_closed=True, same_source_dropped=0).nets
+_____ test_failed_cluster_restores_two_corridors_and_unrelated_grid[True] ______
+tests/layout/test_freeform.py:21497: in test_failed_cluster_restores_two_corridors_and_unrelated_grid
+    _route_all(canvas, nets, 2001, 35, bounds)
+src/flab2bp/layout/freeform.py:11749: in _route_all
+    stranded = _last_mile(stranded, it)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+src/flab2bp/layout/freeform.py:11213: in _last_mile
+    problem = last_mile.build_cluster(
+tests/layout/test_freeform.py:21482: in cluster
+    assert 0 in value.nets
+E   assert 0 in (1,)
+E    +  where (1,) = ClusterProblem(nets=(1,), stranded=(1,), truncated=False, sibling_closed=True, same_source_dropped=0).nets
+=========================== short test summary info ============================
+FAILED tests/layout/test_freeform.py::test_failed_cluster_restores_two_corridors_and_unrelated_grid[False]
+FAILED tests/layout/test_freeform.py::test_failed_cluster_restores_two_corridors_and_unrelated_grid[True]

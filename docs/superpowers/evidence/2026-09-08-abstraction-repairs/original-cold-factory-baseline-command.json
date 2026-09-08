@@ -1,0 +1,51 @@
+{
+  "text": "original-cold-factory-baseline: failed exit=1 uptime=11.3s restarts=0\nCommand: /usr/bin/timeout --kill-after=5 40 taskset -c 112-119 /home/dannyb/sources/factorio-lab-to-blueprint/.venv/bin/python -m pytest -vv tests/layout/test_freeform.py::test_all_products_band_160_cold_proof_reaches_a_valid_layout --tb=short\nCwd: ~/sources/factorio-lab-to-blueprint\nPTY: false; restart=no; persist=false; detached=false",
+  "details": {
+    "op": "describe",
+    "daemon": {
+      "name": "original-cold-factory-baseline",
+      "id": "dd1f9097-bc44-4805-9c43-9f4200cd9e82",
+      "state": "failed",
+      "createdAt": 1788880211789,
+      "startedAt": 1788880211791,
+      "readyAt": 1788880219411,
+      "exitedAt": 1788880223139,
+      "exitCode": 1,
+      "restartCount": 0,
+      "outputBytes": 1689,
+      "owner": "01a07e04-630a-75c9-a268-070c59282100",
+      "readyMatch": "collected",
+      "persist": false,
+      "detached": false
+    },
+    "spec": {
+      "name": "original-cold-factory-baseline",
+      "application": "/usr/bin/timeout",
+      "args": [
+        "--kill-after=5",
+        "40",
+        "taskset",
+        "-c",
+        "112-119",
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.venv/bin/python",
+        "-m",
+        "pytest",
+        "-vv",
+        "tests/layout/test_freeform.py::test_all_products_band_160_cold_proof_reaches_a_valid_layout",
+        "--tb=short"
+      ],
+      "env": {
+        "PYTHONPATH": "/home/dannyb/sources/factorio-lab-to-blueprint/src"
+      },
+      "cwd": "/home/dannyb/sources/factorio-lab-to-blueprint",
+      "pty": false,
+      "ready": {
+        "log": "collected",
+        "timeoutMs": 20000
+      },
+      "restart": "no",
+      "persist": false,
+      "detached": false
+    }
+  }
+}
