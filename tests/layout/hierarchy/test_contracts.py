@@ -1,3 +1,4 @@
+from dataclasses import replace
 from fractions import Fraction
 
 import pytest
@@ -14,6 +15,7 @@ from flab2bp.layout.hierarchy.contracts import (
 from flab2bp.layout.hierarchy.partition import Cut
 from flab2bp.spec import BuildSpec
 from tests.layout.hierarchy.test_pressure import _chain, _chain_with_external
+from tests.layout.test_markers import _piler_output_placement
 
 BELT = next(iter(catalog.BELT_IDS))
 SORTER = next(iter(catalog.SORTER_IDS))
@@ -186,6 +188,35 @@ def test_boundary_lanes_rates_tails_and_heads_and_excludes_the_internal_lane():
     ]
     assert heads == [LaneEnd(block=0, building=4, item="ingredientB", rate=Fraction(5))]
     assert all(end.item != "ingredientC" for end in (*tails, *heads))
+
+
+def test_piler_transit_preserves_rated_producer_boundary():
+    placement = _piler_output_placement()
+    spec = BuildSpec(groups=(), outputs={"gear": Fraction(1)})
+    tails, heads = boundary_lanes(placement, spec, 0)
+    assert [(lane.building, lane.rate) for lane in tails] == [(4, Fraction(1))]
+    assert all(lane.building != 4 for lane in heads)
+
+
+def test_shared_piled_tail_is_counted_once_and_keeps_exact_machine_weight():
+    buildings = list(_piler_output_placement().buildings)
+    buildings.extend(
+        (
+            replace(buildings[0], x=5),
+            replace(buildings[1], x=6, input_obj=5, output_obj=7),
+            replace(buildings[2], x=7, output_obj=2),  # ordinary belt merge before Piler
+            replace(buildings[0], x=8),
+            replace(buildings[1], x=9, input_obj=8, output_obj=10),
+            replace(buildings[2], x=10, output_obj=None),
+        )
+    )
+    spec = BuildSpec(groups=(), outputs={"gear": Fraction(1)})
+    tails, heads = boundary_lanes(Placement(buildings=tuple(buildings)), spec, 0)
+    assert [(lane.building, lane.rate) for lane in tails] == [
+        (4, Fraction(2, 3)),
+        (10, Fraction(1, 3)),
+    ]
+    assert heads == []
 
 
 def _spec_with_output(item: str, rate: Fraction) -> BuildSpec:

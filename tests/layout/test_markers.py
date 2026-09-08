@@ -49,6 +49,54 @@ def _sorter(*, source: int, destination: int, item: str) -> PlacedBuilding:
     )
 
 
+def _piler_output_placement() -> Placement:
+    """Retained logical boundary regression; not a legal physical fixture."""
+
+    def building(name: str, x: int, **kwargs) -> PlacedBuilding:
+        item_id = catalog.item_id(name)
+        return PlacedBuilding(
+            item_id=item_id,
+            model_index=catalog.building(item_id).model_index,
+            x=x,
+            y=0,
+            **kwargs,
+        )
+
+    return Placement(
+        buildings=(
+            building("assembling-machine-1", 0, recipe_id=1),
+            building("sorter-1", 1, input_obj=0, output_obj=2, carries_item="gear"),
+            building("conveyor-belt-1", 2, output_obj=3, carries_item="gear"),
+            building("automatic-piler", 3),
+            building("conveyor-belt-1", 4, input_obj=3, carries_item="gear"),
+        )
+    )
+
+
+def test_piler_transit_preserves_producer_boundary() -> None:
+    placement = _piler_output_placement()
+    assert markers.output_belt_tails(placement) == [4]
+    assert 4 not in markers.input_belt_heads(placement)
+
+
+def test_serial_pilers_preserve_shared_tail_and_external_input() -> None:
+    buildings = list(_piler_output_placement().buildings)
+    buildings[4] = replace(buildings[4], output_obj=5)
+    buildings.extend(
+        (
+            replace(buildings[3], x=5),
+            replace(buildings[4], x=6, input_obj=5, output_obj=None),
+            replace(buildings[0], x=7),
+            replace(buildings[1], x=8, input_obj=7, output_obj=9),
+            replace(buildings[2], x=9, output_obj=2),
+            _belt(10, 0, item="iron-ingot", output=None),
+        )
+    )
+    placement = Placement(buildings=tuple(buildings))
+    assert markers.output_belt_tails(placement) == [6]
+    assert markers.input_belt_heads(placement) == [9, 10]
+
+
 def test_marks_external_input_heads_and_output_tails_without_touching_other_belts() -> None:
     placement = Placement(
         buildings=(
