@@ -3,10 +3,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import flab2bp.layout.freeform as freeform_module
-from flab2bp.layout import last_mile
-from flab2bp.layout.freeform import _astar, _Canvas, _PathSearchResult
+from flab2bp.layout import last_mile, routing_domain
 from flab2bp.layout.route_feedback import RouteFailureKind
+from flab2bp.layout.routing_domain import _astar, _Canvas, _PathSearchResult
 
 Cell = tuple[int, int, int]
 
@@ -456,7 +455,7 @@ def _gap_canvas() -> tuple[_Canvas, tuple[int, int, int, int]]:
     bounds = (0, 0, 4, 2)
     canvas = _Canvas(limit=bounds)
     for y in range(3):
-        for level in range(freeform_module.LEVELS):
+        for level in range(routing_domain.LEVELS):
             if (y, level) == (1, 0):
                 continue
             canvas.blocked[2, y, level] = 0

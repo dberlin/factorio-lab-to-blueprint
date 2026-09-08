@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 
-from flab2bp.layout import freeform, route_kernel, sequence_solver, strip_variants
+from flab2bp.layout import freeform, route_kernel, routing_domain, sequence_solver, strip_variants
 from flab2bp.layout.route_feedback import DetailedRouteResult, DetailedRouteStatus
 from flab2bp.rates import CandidatePolicy
 from scripts import route_profile
@@ -104,10 +104,10 @@ def test_tally_reads_iterations_from_detailed_route_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     result = DetailedRouteResult(DetailedRouteStatus.ROUTED, (), (), 7, 123)
-    monkeypatch.setattr(freeform, "_route_all", lambda *args, **kwargs: result)
+    monkeypatch.setattr(routing_domain, "_route_all", lambda *args, **kwargs: result)
     tally = route_profile.Tally()
     restore = route_profile.install(tally)
-    wrapped = cast(Callable[..., DetailedRouteResult], freeform._route_all)
+    wrapped = cast(Callable[..., DetailedRouteResult], routing_domain._route_all)
     try:
         assert wrapped(None, [], 1, 1, (0, 0, 0, 0)) is result
     finally:
@@ -119,22 +119,22 @@ def test_tally_reads_iterations_from_detailed_route_result(
 
 def test_install_wraps_preparation_phases_and_restores() -> None:
     tally = route_profile.Tally()
-    original = freeform._prepared_junction_ban
+    original = routing_domain._prepared_junction_ban
     restore = route_profile.install(tally)
     try:
-        assert freeform._prepared_junction_ban is not original
-        freeform._prepared_junction_ban((), ())
+        assert routing_domain._prepared_junction_ban is not original
+        routing_domain._prepared_junction_ban((), ())
     finally:
         restore()
-    assert freeform._prepared_junction_ban is original
+    assert routing_domain._prepared_junction_ban is original
     assert tally.n["junction_ban"] == 1
     assert tally.t["junction_ban"] >= 0.0
 
 
 def test_install_wraps_sequence_solvers_reimported_bindings_too() -> None:
-    # `sequence_solver` does `from flab2bp.layout.freeform import
-    # _prepare_routing_problem, plan_strips` and `from
-    # flab2bp.layout.strip_variants import generate_strip_families`, each
+    # `sequence_solver` imports `_prepare_routing_problem` from routing_domain,
+    # `plan_strips` from freeform, and `generate_strip_families` from
+    # strip_variants, each
     # binding the function under its own module -- a shim installed only on
     # the defining module misses every call sequence-pair makes through its
     # own binding. `plan_strips` is re-exported with an explicit `as
@@ -156,7 +156,7 @@ def test_install_wraps_sequence_solvers_reimported_bindings_too() -> None:
     restore = route_profile.install(tally)
     try:
         assert seq_prepare() is not originals["prepare"]
-        assert seq_prepare() is freeform._prepare_routing_problem
+        assert seq_prepare() is routing_domain._prepare_routing_problem
         assert sequence_solver.plan_strips is not originals["plan_strips"]
         assert sequence_solver.plan_strips is freeform.plan_strips
         assert seq_strip_families() is not originals["strip_families"]

@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING
 from flab2bp.layout.route_feedback import ClusterRelationNoGood, RouteFailureKind
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from flab2bp.layout.freeform import _PathSearchResult
+    from flab2bp.layout.routing_domain import _PathSearchResult
 
 Cell = tuple[int, int, int]
 

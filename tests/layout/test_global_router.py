@@ -11,19 +11,19 @@ import pytest
 from flab2bp import spec
 from flab2bp.layout import validate
 from flab2bp.layout.base import PlacedBuilding
-from flab2bp.layout.freeform import (
-    LEVELS,
-    _PreparedNet,
-    _PreparedPort,
-    _PreparedRoutingProblem,
-    _with_sibling_groups,
-)
 from flab2bp.layout.global_router import (
     GlobalRouteResult,
     route_global,
     route_global_once,
 )
 from flab2bp.layout.route_feedback import Cell, FeedbackState, NetId, NetRole
+from flab2bp.layout.routing_domain import (
+    LEVELS,
+    _PreparedNet,
+    _PreparedPort,
+    _PreparedRoutingProblem,
+    _with_sibling_groups,
+)
 
 NetSpec = tuple[
     NetId,

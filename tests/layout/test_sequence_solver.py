@@ -17,7 +17,7 @@ import flab2bp.layout.sequence_solver as sequence_solver
 import flab2bp.layout.sequence_solver as sequence_solver_module
 import flab2bp.layout.strip_variants as strip_variants_module
 from flab2bp.dsp import catalog, rules
-from flab2bp.layout import finalize, route_kernel, slots, validate
+from flab2bp.layout import finalize, route_kernel, routing_domain, slots, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     AreaFrame,
@@ -36,16 +36,12 @@ from flab2bp.layout.compact_seed import (
     VariantDirectInsertTarget,
 )
 from flab2bp.layout.freeform import (
-    _COATER_NODE_TILES,
     _COATER_WEST_CHANNEL,
-    _ENTRY_RING,
-    PreparedRoutingLowerBound,
     _box,
     _coarsen_saturated_strip_plan,
     _direct_net_candidates,
     _greedy_pack,
     _nets_between,
-    _prepare_routing_problem,
     plan_strips,
 )
 from flab2bp.layout.global_router import GlobalRouteResult
@@ -64,6 +60,12 @@ from flab2bp.layout.route_feedback import (
     select_lns_neighbourhood,
     select_split_candidate,
     update_feedback,
+)
+from flab2bp.layout.routing_domain import (
+    _COATER_NODE_TILES,
+    _ENTRY_RING,
+    PreparedRoutingLowerBound,
+    _prepare_routing_problem,
 )
 from flab2bp.layout.sequence_alns import (
     C_CONTEXT_FRACTION_STEPS,
@@ -3253,8 +3255,8 @@ def test_unseatable_prepared_candidate_remains_searchable_refusal(
 ) -> None:
     def refuse_preparation(
         _spec: BuildSpec,
-        _strips: list[freeform_module.Strip],
-        _pack: freeform_module._Pack,
+        _strips: list[routing_domain.Strip],
+        _pack: routing_domain._Pack,
         *,
         policy: BandPolicy,
         power: bool,
@@ -3262,7 +3264,7 @@ def test_unseatable_prepared_candidate_remains_searchable_refusal(
         _reserve_ports: bool = True,
     ) -> Never:
         del power, policy, ramped, _reserve_ports
-        raise freeform_module._Unseatable("positional coater collision")
+        raise routing_domain._Unseatable("positional coater collision")
 
     monkeypatch.setattr(
         sequence_solver_module,
@@ -3381,7 +3383,7 @@ def test_production_detailed_adapter_reports_charged_spend_when_unpowerable(
         **_kwargs: object,
     ) -> Never:
         budget["left"] -= 7
-        raise freeform_module._Unpowerable("no legal tower placement")
+        raise routing_domain._Unpowerable("no legal tower placement")
 
     monkeypatch.setattr(
         sequence_solver_module,
@@ -3523,9 +3525,9 @@ def _direct_flow_two_stage_spec() -> BuildSpec:
 
 def _direct_pack_adapter_scene() -> tuple[
     BuildSpec,
-    list[freeform_module.Strip],
+    list[routing_domain.Strip],
     dict[tuple[int, int], freeform_module._DirectCandidate],
-    freeform_module._Pack,
+    routing_domain._Pack,
     PlacementProblem,
 ]:
     spec = _direct_flow_two_stage_spec()
@@ -3797,9 +3799,9 @@ def test_production_exact_preparation_propagates_deadline_and_reuses_only_pure_c
         caches.append(staged_static_cache)
         checks.append(cancelled())
         deadlines.append(deadline)
-        demand = freeform_module.PortAccessDemand(
+        demand = routing_domain.PortAccessDemand(
             cell=(0, 0, 0),
-            kind=freeform_module.PortAccessKind.BOUNDARY_ARRIVAL,
+            kind=routing_domain.PortAccessKind.BOUNDARY_ARRIVAL,
             item="ore",
             belt=0,
             strip_index=0,
@@ -3809,15 +3811,15 @@ def test_production_exact_preparation_propagates_deadline_and_reuses_only_pure_c
 
         def expire_during_resolve(
             _assigned: Mapping[
-                freeform_module.PortAccessDemand,
-                freeform_module.PortAccessCorridor,
+                routing_domain.PortAccessDemand,
+                routing_domain.PortAccessCorridor,
             ],
-        ) -> tuple[freeform_module.PortAccessDemand, ...]:
+        ) -> tuple[routing_domain.PortAccessDemand, ...]:
             monkeypatch.setattr(freeform_module.time, "monotonic", lambda: deadline)
             return (demand,)
 
         try:
-            freeform_module._match_access_corridors(
+            routing_domain._match_access_corridors(
                 (demand,),
                 {demand: (((1, 0, 0), (2, 0, 0)), ((0, 1, 0), (0, 2, 0)))},
                 validate=expire_during_resolve,
@@ -3863,16 +3865,16 @@ def test_production_exact_preparation_propagates_deadline_and_reuses_only_pure_c
 def test_production_exact_preparation_reuses_realized_direct_insert(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    promised_direct: list[frozenset[freeform_module.DirectInsertId]] = []
+    promised_direct: list[frozenset[routing_domain.DirectInsertId]] = []
 
     def capture_prepare(
         _spec: BuildSpec,
-        _strips: list[freeform_module.Strip],
-        pack: freeform_module._Pack,
+        _strips: list[routing_domain.Strip],
+        pack: routing_domain._Pack,
         **_kwargs: object,
     ) -> Never:
         promised_direct.append(pack.direct)
-        raise freeform_module._PreparationDeadline
+        raise routing_domain._PreparationDeadline
 
     monkeypatch.setattr(
         sequence_solver_module,
@@ -3963,7 +3965,7 @@ def _forbidden_window_pack(strips: object, **kwargs: Any) -> Any:
     raise AssertionError("the window must not be solved here")
 
 
-def _window_outcome(pack: freeform_module._Pack) -> freeform_module._PackSolveOutcome:
+def _window_outcome(pack: routing_domain._Pack) -> freeform_module._PackSolveOutcome:
     return freeform_module._PackSolveOutcome(
         pack=pack,
         status="OPTIMAL",
@@ -5566,7 +5568,7 @@ def test_deadline_without_an_exact_incumbent_raises() -> None:
 
 def _two_stage_variant_problem() -> tuple[
     BuildSpec,
-    list[freeform_module.Strip],
+    list[routing_domain.Strip],
     PlacementProblem,
 ]:
     spec = _direct_flow_two_stage_spec()
@@ -5655,7 +5657,7 @@ def _three_stage_spec() -> BuildSpec:
 
 def _three_stage_variant_problem() -> tuple[
     BuildSpec,
-    list[freeform_module.Strip],
+    list[routing_domain.Strip],
     PlacementProblem,
 ]:
     spec = _three_stage_spec()
@@ -5927,9 +5929,9 @@ def test_variant_direct_eligibility_is_unchanged_by_the_candidate_memo(
     calls = 0
 
     def counting(
-        source: freeform_module.Strip,
-        destination: freeform_module.Strip,
-        groups: Mapping[str, freeform_module._Group],
+        source: routing_domain.Strip,
+        destination: routing_domain.Strip,
+        groups: Mapping[str, routing_domain._Group],
         eligible: frozenset[tuple[str, str]],
     ) -> freeform_module._DirectCandidate | None:
         nonlocal calls
@@ -5946,7 +5948,7 @@ def test_variant_direct_eligibility_is_unchanged_by_the_candidate_memo(
     memoized_calls = calls
 
     def without_memo(
-        selected: list[freeform_module.Strip],
+        selected: list[routing_domain.Strip],
         build_spec: BuildSpec,
         *,
         memo: freeform_module.DirectCandidateMemo | None = None,
@@ -5968,7 +5970,7 @@ def test_variant_direct_eligibility_is_unchanged_by_the_candidate_memo(
 
 
 def _selected_strips_split_fixture() -> tuple[
-    list[freeform_module.Strip],
+    list[routing_domain.Strip],
     PlacementProblem,
     tuple[int, ...],
     BandPolicy,
@@ -6011,7 +6013,7 @@ def _selected_strips_split_fixture() -> tuple[
 
 
 def _selected_strips_fixture() -> tuple[
-    list[freeform_module.Strip],
+    list[routing_domain.Strip],
     PlacementProblem,
     tuple[int, ...],
     BandPolicy,
@@ -6046,7 +6048,7 @@ def test_selected_strips_memo_returns_equal_strips_and_reuses_them() -> None:
     strips, problem, indices, policy = _selected_strips_fixture()
     memo: dict[
         tuple[int, StripInstanceId, StripVariant],
-        freeform_module.Strip,
+        routing_domain.Strip,
     ] = {}
 
     first = _selected_strips(strips, problem, indices, band_policy=policy, memo=memo)
@@ -6080,7 +6082,7 @@ def test_selected_strips_memo_keys_name_the_selected_variant() -> None:
     strips, problem, indices, policy = _selected_strips_fixture()
     memo: dict[
         tuple[int, StripInstanceId, StripVariant],
-        freeform_module.Strip,
+        routing_domain.Strip,
     ] = {}
 
     _selected_strips(strips, problem, indices, band_policy=policy, memo=memo)
@@ -6484,7 +6486,7 @@ def test_selected_variant_recomputes_its_own_staged_static_clearance(
     proof_policies: list[BandPolicy] = []
 
     def prove_relation(
-        relation: freeform_module.StagedStaticClearanceKey,
+        relation: routing_domain.StagedStaticClearanceKey,
         selected_policy: BandPolicy,
     ) -> bool:
         proof_policies.append(selected_policy)
@@ -7162,7 +7164,7 @@ def test_exact_projection_feedback_trials_stay_constant_for_many_strips(
 def _two_strip_stage() -> tuple[
     PlacementProblem,
     AnnealState,
-    freeform_module._Pack,
+    routing_domain._Pack,
     tuple[finalize.ProjectionGeometrySignature, ...],
     tuple[int, ...],
 ]:
@@ -8937,12 +8939,12 @@ def test_sequence_reuses_adaptive_coarse_strip_partition_before_problem_identity
         minimum_pitch_x: Mapping[StripPoseId, int] | None = None,
         families: Sequence[StripFamily] | None = None,
         minimum_staged_static_clearance: Mapping[
-            freeform_module.StagedStaticClearanceKey,
+            routing_domain.StagedStaticClearanceKey,
             int,
         ]
         | None = None,
         cancelled: Callable[[], bool] | None = None,
-    ) -> list[freeform_module.Strip]:
+    ) -> list[routing_domain.Strip]:
         coarse_replans.append((strip_len, band_policy))
         return real_plan_strips(
             selected_spec,
@@ -9260,15 +9262,15 @@ def test_sequence_preparation_consumes_elevated_machine_and_tesla_junction_bans(
         for building in prepared.building_templates
         if catalog.is_belt(building.item_id) or catalog.is_sorter(building.item_id)
     )
-    machine_ban = freeform_module._prepared_junction_ban(static_buildings, ())
-    tesla_ban = freeform_module._prepared_junction_ban((), prepared.power_sites)
+    machine_ban = routing_domain._prepared_junction_ban(static_buildings, ())
+    tesla_ban = routing_domain._prepared_junction_ban((), prepared.power_sites)
     expected_ban = machine_ban | tesla_ban
 
     assert machine_ban
     assert tesla_ban
     assert any(level > 0 for _x, _y, level in machine_ban)
     assert any(level > 0 for _x, _y, level in tesla_ban)
-    assert freeform_module._prepared_junction_ban(transport_buildings, ()) == frozenset()
+    assert routing_domain._prepared_junction_ban(transport_buildings, ()) == frozenset()
     assert prepared.junction_ban == expected_ban
     assert workspace.canvas.junction_geometry_prepared
     assert workspace.canvas.junction_ban == set(expected_ban)
@@ -9458,12 +9460,12 @@ def test_production_forwards_fixed_band_through_initial_compact_and_coarsen_plan
         minimum_pitch_x: Mapping[StripPoseId, int] | None = None,
         families: Sequence[StripFamily] | None = None,
         minimum_staged_static_clearance: Mapping[
-            freeform_module.StagedStaticClearanceKey,
+            routing_domain.StagedStaticClearanceKey,
             int,
         ]
         | None = None,
         cancelled: Callable[[], bool] | None = None,
-    ) -> list[freeform_module.Strip]:
+    ) -> list[routing_domain.Strip]:
         plan_calls.append((strip_len, band_policy))
         return real_plan_strips(
             spec,
@@ -9479,19 +9481,19 @@ def test_production_forwards_fixed_band_through_initial_compact_and_coarsen_plan
 
     def track_coarsen(
         spec: BuildSpec,
-        strips: list[freeform_module.Strip],
+        strips: list[routing_domain.Strip],
         *,
         strip_len: int,
         band_policy: BandPolicy = _PORTABLE_BAND_POLICY,
         minimum_pitch_x: Mapping[StripPoseId, int] | None = None,
         families: Sequence[StripFamily] | None = None,
         minimum_staged_static_clearance: Mapping[
-            freeform_module.StagedStaticClearanceKey,
+            routing_domain.StagedStaticClearanceKey,
             int,
         ]
         | None = None,
         cancelled: Callable[[], bool] | None = None,
-    ) -> tuple[list[freeform_module.Strip], int]:
+    ) -> tuple[list[routing_domain.Strip], int]:
         coarsen_calls.append(band_policy)
         return real_coarsen(
             spec,
@@ -9554,12 +9556,12 @@ def test_production_forwards_fixed_band_through_fallback_replan(
         minimum_pitch_x: Mapping[StripPoseId, int] | None = None,
         families: Sequence[StripFamily] | None = None,
         minimum_staged_static_clearance: Mapping[
-            freeform_module.StagedStaticClearanceKey,
+            routing_domain.StagedStaticClearanceKey,
             int,
         ]
         | None = None,
         cancelled: Callable[[], bool] | None = None,
-    ) -> list[freeform_module.Strip]:
+    ) -> list[routing_domain.Strip]:
         plan_calls.append((strip_len, band_policy))
         if len(plan_calls) == 1:
             raise ValueError("force production fallback")
@@ -9770,7 +9772,7 @@ def test_sequence_band_policy_height_derives_shared_pack_role_after_substitution
     )
 
     def capture_shared_pack(
-        _strips: list[freeform_module.Strip],
+        _strips: list[routing_domain.Strip],
         *,
         height: int,
         **_kwargs: object,
@@ -9835,12 +9837,12 @@ def test_sequence_extent_gate_stops_before_preparation_and_detailed_routing(
         lambda _strips: [19, 18, 17, 16, 15, 14, 13, 595],
     )
     monkeypatch.setattr(
-        freeform_module,
+        routing_domain,
         "_power_plan",
         lambda *_args, **_kwargs: pytest.fail("infeasible extent reached power planning"),
     )
     monkeypatch.setattr(
-        freeform_module,
+        routing_domain,
         "_core_bounds",
         lambda _canvas: (0, 0, core_width - 1, core_height - 1),
     )
@@ -10953,7 +10955,7 @@ def test_variant_direct_eligibility_polls_its_cancel_more_than_once() -> None:
 
 def _expected_eligibility_polls(
     spec: BuildSpec,
-    strips: list[freeform_module.Strip],
+    strips: list[routing_domain.Strip],
     problem: PlacementProblem,
     policy: BandPolicy,
 ) -> int:
@@ -11409,12 +11411,14 @@ def test_the_portable_band_core_boundary_is_the_number_the_helper_is_given() -> 
     gives the identical value, and this test reads it off `freeform` because
     that is where the perimeter is authored.
     """
-    from flab2bp.layout import freeform
+    from flab2bp.layout import routing_domain
     from flab2bp.layout.finalize import band_policy_search_envelope
 
-    envelope = band_policy_search_envelope(BandPolicy("portable"), perimeter=freeform._ENTRY_RING)
+    envelope = band_policy_search_envelope(
+        BandPolicy("portable"), perimeter=routing_domain._ENTRY_RING
+    )
 
-    assert freeform._ENTRY_RING == 3
+    assert routing_domain._ENTRY_RING == 3
     assert envelope.boundary_core_height == 154
     assert (
         max(

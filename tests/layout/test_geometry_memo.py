@@ -7,13 +7,8 @@ import pytest
 
 from flab2bp.layout import geometry_memo
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.freeform import (
-    _greedy_pack,
-    _height_seed,
-    _prepare_routing_problem,
-    _StagedStaticCache,
-    plan_strips,
-)
+from flab2bp.layout.freeform import _greedy_pack, _height_seed, plan_strips
+from flab2bp.layout.routing_domain import _prepare_routing_problem, _StagedStaticCache
 from flab2bp.spec import BuildSpec
 from tests.layout.test_freeform import (
     captured_output_products_spec,

@@ -20,12 +20,8 @@ from flab2bp.lab.data import load_vendored  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout import geometry_memo  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
-from flab2bp.layout.freeform import (  # noqa: E402
-    _greedy_pack,
-    _height_seed,
-    _prepare_routing_problem,
-    plan_strips,
-)
+from flab2bp.layout.freeform import _greedy_pack, _height_seed, plan_strips  # noqa: E402
+from flab2bp.layout.routing_domain import _prepare_routing_problem  # noqa: E402
 from flab2bp.rates.candidates import DEFAULT_CANDIDATE_POLICIES, build_candidates  # noqa: E402
 
 

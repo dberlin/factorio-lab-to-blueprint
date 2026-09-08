@@ -7,18 +7,10 @@ from typing import NamedTuple
 import pytest
 
 from flab2bp.dsp import catalog
-from flab2bp.layout import finalize, freeform, junction, slots
+from flab2bp.layout import finalize, junction, routing_domain, slots
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import Facing, PlacedBuilding, Placement
 from flab2bp.layout.buildings import Buildings
-from flab2bp.layout.freeform import (
-    PortAccessCorridor,
-    PortAccessDemand,
-    PortAccessEvidence,
-    PortAccessKind,
-    PortAccessReservation,
-    _Canvas,
-)
 from flab2bp.layout.hierarchy import compose
 from flab2bp.layout.hierarchy.contracts import LaneFlow
 from flab2bp.layout.route_feedback import (
@@ -28,6 +20,14 @@ from flab2bp.layout.route_feedback import (
     NetId,
     NetRole,
     RouteFailureKind,
+)
+from flab2bp.layout.routing_domain import (
+    PortAccessCorridor,
+    PortAccessDemand,
+    PortAccessEvidence,
+    PortAccessKind,
+    PortAccessReservation,
+    _Canvas,
 )
 from flab2bp.spec import BuildSpec
 from tests.layout.hierarchy.conftest import chain_build_spec
@@ -295,14 +295,14 @@ def test_composed_cut_respects_copied_coater_projected_clearance(
         )
     )
     canvas = compose.canvas_for(spec, buildings, ramped=False, margin=2)
-    source = freeform._Port(belt=1, x=5, y=source_y, x0=5, x1=5, tiles=(1,), z=2)
-    destination = freeform._Port(belt=3, x=5, y=24, x0=5, x1=5, tiles=(3,), z=2)
+    source = routing_domain._Port(belt=1, x=5, y=source_y, x0=5, x1=5, tiles=(1,), z=2)
+    destination = routing_domain._Port(belt=3, x=5, y=24, x0=5, x1=5, tiles=(3,), z=2)
     packed = compose.PackedCanvas(
         buildings=buildings,
         blocks=[],
         canvas=canvas,
         nets=[
-            freeform._Net(
+            routing_domain._Net(
                 src=source,
                 dst=destination,
                 item="iron-ingot",
@@ -330,7 +330,7 @@ def test_composed_cut_respects_copied_coater_projected_clearance(
         assert splitters or result.unrouted_cuts == 1
 
     bounds = result.placement.bounds
-    frames = freeform._junction_projection_frames(bounds, bounds, BandPolicy("portable"))
+    frames = routing_domain._junction_projection_frames(bounds, bounds, BandPolicy("portable"))
     assert frames
     failures = []
     for frame in frames:
@@ -344,10 +344,10 @@ def test_composed_cut_respects_copied_coater_projected_clearance(
                 for projection in frame.projections
                 if (
                     failure := finalize.projected_coater_splitter_failure(
-                        (4, freeform._collision_pose(materialized_coater)),
+                        (4, routing_domain._collision_pose(materialized_coater)),
                         (
                             index,
-                            freeform._collision_pose(
+                            routing_domain._collision_pose(
                                 finalize.materialize_frame_building(
                                     splitter, bounds=frame.bounds, candidate=frame.candidate
                                 )

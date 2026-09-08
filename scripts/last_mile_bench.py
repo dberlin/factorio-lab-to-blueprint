@@ -25,7 +25,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from flab2bp.layout import last_mile  # noqa: E402
-from flab2bp.layout.freeform import _astar  # noqa: E402
+from flab2bp.layout.routing_domain import _astar  # noqa: E402
 
 
 def _environment(case: dict[str, Any], budget: dict[str, int]) -> last_mile.ClusterEnvironment:

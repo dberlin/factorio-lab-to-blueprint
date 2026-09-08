@@ -14,7 +14,7 @@ import pytest
 
 from flab2bp.dsp import catalog, codec, colliders, planet, rules
 from flab2bp.dsp.records import BlueprintBuilding
-from flab2bp.layout import finalize, freeform, validate
+from flab2bp.layout import finalize, freeform, routing_domain, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
 from tests.layout.test_freeform import two_stage_spec
@@ -3633,7 +3633,7 @@ def test_frame_candidates_are_monotone_in_width_at_a_fixed_height() -> None:
     than assumed.
     """
     envelope = finalize.band_policy_search_envelope(
-        BandPolicy.parse("portable"), perimeter=freeform._ENTRY_RING
+        BandPolicy.parse("portable"), perimeter=routing_domain._ENTRY_RING
     )
     for height in (40, 131):
         fitting_seen = False
@@ -3651,7 +3651,7 @@ def test_frame_candidates_are_monotone_in_width_at_a_fixed_height() -> None:
 
 def _portable_envelope() -> finalize.BandPolicySearchEnvelope:
     return finalize.band_policy_search_envelope(
-        BandPolicy.parse("portable"), perimeter=freeform._ENTRY_RING
+        BandPolicy.parse("portable"), perimeter=routing_domain._ENTRY_RING
     )
 
 

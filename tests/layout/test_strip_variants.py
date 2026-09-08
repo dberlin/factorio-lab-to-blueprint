@@ -13,7 +13,7 @@ import pytest
 
 import flab2bp.layout.strip_variants as strip_variants_module
 from flab2bp.dsp import catalog
-from flab2bp.layout import freeform, slots
+from flab2bp.layout import freeform, routing_domain, slots
 from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.finalize import ProjectionFailure
 from flab2bp.layout.freeform import plan_strips
@@ -263,7 +263,7 @@ def test_a_lane_is_never_seated_on_a_row_no_sorter_tier_can_serve() -> None:
     family = next(
         f for f in generate_strip_families(spec) if f.recipe_id == "casimir-crystal-advanced"
     )
-    group = freeform._adapt(spec)[family.group_key]
+    group = routing_domain._adapt(spec)[family.group_key]
     variant = default_strip_variant(family)
     overloaded = [
         (attachment.item, attachment.span, group.inputs[attachment.item])
@@ -1876,7 +1876,7 @@ def _two_ingredient_flanked_spec() -> BuildSpec:
     )
 
 
-def _flanked_strip_for(spec: BuildSpec) -> freeform.Strip:
+def _flanked_strip_for(spec: BuildSpec) -> routing_domain.Strip:
     return next(strip for strip in plan_strips(spec, strip_len=6) if strip.flank_outputs)
 
 
@@ -2044,7 +2044,7 @@ def test_every_both_fed_ingredient_is_seated_on_its_side_s_outermost_row() -> No
     from flab2bp.bench.corpus import URL_CORPUS
     from flab2bp.lab.data import load_vendored
     from flab2bp.lab.url import parse_url
-    from flab2bp.layout.freeform import _adapt
+    from flab2bp.layout.routing_domain import _adapt
     from flab2bp.layout.strip_variants import _logical_strip_plans
     from flab2bp.rates.candidates import DEFAULT_CANDIDATE_POLICIES, build_candidates
 
@@ -2095,7 +2095,7 @@ def test_a_spec_with_no_both_fed_ingredient_keeps_its_alphabetical_lane_order() 
       `test_an_ingredient_fed_from_outside_and_inside_takes_the_outermost_lane_row`
       red, which is exactly the pair spec section 5.1 test 4 asks for.
     """
-    from flab2bp.layout.freeform import _adapt
+    from flab2bp.layout.routing_domain import _adapt
     from flab2bp.layout.strip_variants import _logical_strip_plans
     from flab2bp.rates.candidates import CandidatePolicy
 
@@ -2332,7 +2332,7 @@ def test_a_single_machine_belt_port_host_folds_its_sinks_onto_one_lane() -> None
     item, dest, _domain = charge[0].out_lanes[0]
     assert item == "accumulator-full"
     assert dest == "|accumulator-discharge#1"
-    assert freeform._dests(dest) == ("", "accumulator-discharge#1")
+    assert routing_domain._dests(dest) == ("", "accumulator-discharge#1")
 
 
 def test_several_machines_shard_instead_of_folding_and_still_take_one_lane() -> None:

@@ -24,7 +24,7 @@ from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import canonicalize_dataset, canonicalize_request
 from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
-from flab2bp.layout import finalize, freeform, strategy_race, validate
+from flab2bp.layout import finalize, routing_domain, strategy_race, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     ATOMIC_COMPLETION_GRACE_S,
@@ -914,13 +914,13 @@ def test_all_products_sequence_pair_honours_the_exact_layout_deadline(
     # that `except` via isinstance, with no need to touch sequence_solver's copy.
     preparation_deadline_fires = 0
 
-    class _CountingPreparationDeadline(freeform._PreparationDeadline):
+    class _CountingPreparationDeadline(routing_domain._PreparationDeadline):
         def __init__(self, *args: object, **kwargs: object) -> None:
             super().__init__(*args, **kwargs)
             nonlocal preparation_deadline_fires
             preparation_deadline_fires += 1
 
-    monkeypatch.setattr(freeform, "_PreparationDeadline", _CountingPreparationDeadline)
+    monkeypatch.setattr(routing_domain, "_PreparationDeadline", _CountingPreparationDeadline)
 
     started = time.monotonic()
 

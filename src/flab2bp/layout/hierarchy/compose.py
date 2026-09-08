@@ -4,8 +4,8 @@ The prototype
 (``docs/superpowers/evidence/2026-09-06-exp-hierarchical/proto/compose.py``)
 wired the cuts with its own corridor Dijkstra, on the reading that
 ``freeform._route_all`` "is not callable standalone".  That reading is wrong:
-``_route_all`` takes a prepared :class:`~flab2bp.layout.freeform._Canvas` and a
-list of :class:`~flab2bp.layout.freeform._Net`, and ``tests/layout/
+``_route_all`` takes a prepared :class:`~flab2bp.layout.routing_domain._Canvas` and a
+list of :class:`~flab2bp.layout.routing_domain._Net`, and ``tests/layout/
 test_freeform.py`` already calls it that way.  What the prototype had to invent
 to compensate -- a collider halo, a soft moat, an altitude toll to stop a
 ground-level corridor walling in somebody else's entry lane -- is exactly what
@@ -35,7 +35,9 @@ from flab2bp.layout import junction, slots
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.buildings import Buildings
-from flab2bp.layout.freeform import (
+from flab2bp.layout.hierarchy.contracts import LaneFlow
+from flab2bp.layout.route_feedback import Cell, DetailedRouteStatus, NetId, NetRole
+from flab2bp.layout.routing_domain import (
     PortAccessDemand,
     PortAccessEvidence,
     PortAccessReservation,
@@ -56,8 +58,6 @@ from flab2bp.layout.freeform import (
     _Unpowerable,
     plan_power_infill,
 )
-from flab2bp.layout.hierarchy.contracts import LaneFlow
-from flab2bp.layout.route_feedback import Cell, DetailedRouteStatus, NetId, NetRole
 from flab2bp.layout.strip_variants import CargoDomain
 from flab2bp.spec import BuildSpec
 

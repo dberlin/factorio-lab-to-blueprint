@@ -9,7 +9,8 @@ from types import MappingProxyType
 from typing import cast
 
 from flab2bp.layout import route_kernel
-from flab2bp.layout.freeform import (
+from flab2bp.layout.route_feedback import Cell, FeedbackState, NetId, NetRole
+from flab2bp.layout.routing_domain import (
     _STEPS,
     LEVELS,
     _canvas_span,
@@ -22,7 +23,6 @@ from flab2bp.layout.freeform import (
     _routing_flags,
     _routing_transitions,
 )
-from flab2bp.layout.route_feedback import Cell, FeedbackState, NetId, NetRole
 
 _PRESENT_COST = 1.0
 _MAX_ROUNDS = 5

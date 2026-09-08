@@ -24,7 +24,7 @@ from dataclasses import replace
 from fractions import Fraction
 
 from flab2bp.dsp import catalog, rules
-from flab2bp.layout import freeform, geometry, junction, piling, slots
+from flab2bp.layout import geometry, junction, piling, routing_domain, slots
 from flab2bp.layout.base import PlacedBuilding
 
 #: Item ids with real colliders, slot poses and footprints, picked once so the
@@ -153,7 +153,12 @@ def _legal_links() -> list[tuple[str, int, bool, bool]]:
     """
     steps = [Fraction(n, 2) for n in range(-4, 5)]
     return [
-        (str(dz), dx, ramped, freeform._legal_link(0, 0, Fraction(0), dx, 0, dz, ramped=ramped))
+        (
+            str(dz),
+            dx,
+            ramped,
+            routing_domain._legal_link(0, 0, Fraction(0), dx, 0, dz, ramped=ramped),
+        )
         for ramped in (True, False)
         for dx in (0, 1, 2)
         for dz in steps
@@ -169,7 +174,7 @@ def _altitude_profiles() -> list[list[str] | None]:
     out: list[list[str] | None] = []
     for path in paths:
         for ramped in (True, False):
-            got = freeform._altitude_profile(path, ramped=ramped)
+            got = routing_domain._altitude_profile(path, ramped=ramped)
             out.append(None if got is None else [str(z) for z in got])
     return out
 

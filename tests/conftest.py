@@ -24,7 +24,7 @@ import pytest
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import flow_from_text, pin_request
 from flab2bp.lab.url import parse_url
-from flab2bp.layout import freeform, geometry_memo
+from flab2bp.layout import freeform, geometry_memo, routing_domain
 from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.rates.candidates import build_candidates
@@ -171,8 +171,8 @@ def _reset_junction_ban_offset_cache() -> None:
     same pose -- or leave a real answer behind for a later test to patch
     around unknowingly.
     """
-    freeform._JUNCTION_BAN_OFFSET_CACHE.clear()
-    freeform._junction_ban_offsets.cache_clear()
+    routing_domain._JUNCTION_BAN_OFFSET_CACHE.clear()
+    routing_domain._junction_ban_offsets.cache_clear()
     geometry_memo.clear()
 
 
@@ -192,7 +192,7 @@ def _cross_test_geometry_memos_start_clean() -> None:
     from flab2bp.layout import sequence_solver
 
     freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
-    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
+    routing_domain._STAGED_CLEARANCE_KEYS_MEMO.clear()
     sequence_solver._REFINED_TARGET_MEMO.clear()
 
 

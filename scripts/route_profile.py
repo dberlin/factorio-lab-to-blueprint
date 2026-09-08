@@ -44,6 +44,7 @@ from flab2bp.layout import (  # noqa: E402
     global_router,
     last_mile,
     route_kernel,
+    routing_domain,
     sequence_solver,
     strip_variants,
     validate,
@@ -167,18 +168,18 @@ class Tally:
 
 def install(tally: Tally) -> Callable[[], None]:
     """Patch the module's routing entry points with timing shims."""
-    orig_astar = freeform._astar
-    orig_route_all = freeform._route_all
-    orig_commit = freeform._commit_paths
-    orig_make_grid = freeform._make_grid
-    orig_refresh = freeform._Grid.refresh_history
-    orig_landmarks = freeform._Grid.build_landmarks
-    orig_reserve = freeform._reserve_port_access
-    orig_merge = freeform._merge_frontier
+    orig_astar = routing_domain._astar
+    orig_route_all = routing_domain._route_all
+    orig_commit = routing_domain._commit_paths
+    orig_make_grid = routing_domain._make_grid
+    orig_refresh = routing_domain._Grid.refresh_history
+    orig_landmarks = routing_domain._Grid.build_landmarks
+    orig_reserve = routing_domain._reserve_port_access
+    orig_merge = routing_domain._merge_frontier
     orig_last_mile = last_mile.solve_cluster
 
     def astar(
-        canvas: freeform._Canvas,
+        canvas: routing_domain._Canvas,
         starts: list[Cell],
         goals: set[Cell],
         history: dict[Cell, float],
@@ -187,12 +188,12 @@ def install(tally: Tally) -> Callable[[], None]:
         budget: dict[str, int] | None = None,
         deadline: float | None = None,
         blame: dict[Cell, float] | None = None,
-        grid: freeform._Grid | None = None,
+        grid: routing_domain._Grid | None = None,
         owned_starts: Collection[Cell] = (),
         released_starts: Collection[Cell] = (),
         forbidden: Collection[Cell] = (),
         blocking_owners: Mapping[Cell, int] | None = None,
-    ) -> freeform._PathSearchResult:
+    ) -> routing_domain._PathSearchResult:
         t0 = time.perf_counter()
         out = orig_astar(
             canvas,
@@ -222,8 +223,8 @@ def install(tally: Tally) -> Callable[[], None]:
         return out
 
     def route_all(
-        canvas: freeform._Canvas,
-        nets: list[freeform._Net],
+        canvas: routing_domain._Canvas,
+        nets: list[routing_domain._Net],
         belt_id: int,
         belt_model: int,
         bounds: tuple[int, int, int, int],
@@ -253,8 +254,8 @@ def install(tally: Tally) -> Callable[[], None]:
         return out
 
     def commit(
-        canvas: freeform._Canvas,
-        nets: list[freeform._Net],
+        canvas: routing_domain._Canvas,
+        nets: list[routing_domain._Net],
         paths: Mapping[int, Sequence[Cell]],
         belt_id: int,
         belt_model: int,
@@ -263,7 +264,7 @@ def install(tally: Tally) -> Callable[[], None]:
         *,
         source_hints: Mapping[int, Cell] | None = None,
         sink_hints: Mapping[int, Cell] | None = None,
-        failure_details: dict[int, freeform._CommitFailure] | None = None,
+        failure_details: dict[int, routing_domain._CommitFailure] | None = None,
     ) -> tuple[int, ...]:
         t0 = time.perf_counter()
         out = orig_commit(
@@ -282,22 +283,22 @@ def install(tally: Tally) -> Callable[[], None]:
         return out
 
     def make_grid(
-        canvas: freeform._Canvas,
+        canvas: routing_domain._Canvas,
         box: tuple[int, int, int, int],
         span: tuple[int, int, int, int],
         history: Mapping[Cell, float],
-    ) -> freeform._Grid:
+    ) -> routing_domain._Grid:
         t0 = time.perf_counter()
         out = orig_make_grid(canvas, box, span, history)
         tally.add("make_grid", time.perf_counter() - t0)
         return out
 
-    def refresh(self: freeform._Grid, history: Mapping[Cell, float]) -> None:
+    def refresh(self: routing_domain._Grid, history: Mapping[Cell, float]) -> None:
         t0 = time.perf_counter()
         orig_refresh(self, history)
         tally.add("refresh_history", time.perf_counter() - t0)
 
-    def landmarks(self: freeform._Grid, count: int) -> None:
+    def landmarks(self: routing_domain._Grid, count: int) -> None:
         t0 = time.perf_counter()
         orig_landmarks(self, count)
         tally.add("build_landmarks", time.perf_counter() - t0)
@@ -312,7 +313,7 @@ def install(tally: Tally) -> Callable[[], None]:
         return out
 
     def merge(
-        canvas: freeform._Canvas,
+        canvas: routing_domain._Canvas,
         paths: Mapping[int, Sequence[Cell]],
         siblings: tuple[int, ...],
         junctionable: Callable[[int, int, int], bool] | None = None,
@@ -382,23 +383,23 @@ def install(tally: Tally) -> Callable[[], None]:
         timed(
             "prepare",
             [
-                (freeform, "_prepare_routing_problem"),
+                (routing_domain, "_prepare_routing_problem"),
                 (sequence_solver, "_prepare_routing_problem"),
             ],
         ),
-        timed("place_coaters", [(freeform, "_place_coaters")]),
+        timed("place_coaters", [(routing_domain, "_place_coaters")]),
         timed(
             "coater_frame_bans",
             [
-                (freeform, "_projected_coater_junction_bans_by_frame"),
+                (routing_domain, "_projected_coater_junction_bans_by_frame"),
             ],
         ),
-        timed("junction_ban", [(freeform, "_prepared_junction_ban")]),
-        timed("power_plan", [(freeform, "_power_plan")]),
+        timed("junction_ban", [(routing_domain, "_prepared_junction_ban")]),
+        timed("power_plan", [(routing_domain, "_power_plan")]),
         timed(
             "static_risks",
             [
-                (freeform, "_staged_static_relation_projection_risks_uncached"),
+                (routing_domain, "_staged_static_relation_projection_risks_uncached"),
             ],
         ),
         timed(
@@ -420,25 +421,25 @@ def install(tally: Tally) -> Callable[[], None]:
         timed("validate", [(validate, "validate")]),
     ]
 
-    freeform._astar = astar
-    freeform._route_all = route_all
-    freeform._commit_paths = commit
-    freeform._make_grid = make_grid
-    type.__setattr__(freeform._Grid, "refresh_history", refresh)
-    type.__setattr__(freeform._Grid, "build_landmarks", landmarks)
-    freeform._reserve_port_access = reserve
-    freeform._merge_frontier = merge
+    routing_domain._astar = astar
+    routing_domain._route_all = route_all
+    routing_domain._commit_paths = commit
+    routing_domain._make_grid = make_grid
+    type.__setattr__(routing_domain._Grid, "refresh_history", refresh)
+    type.__setattr__(routing_domain._Grid, "build_landmarks", landmarks)
+    routing_domain._reserve_port_access = reserve
+    routing_domain._merge_frontier = merge
     last_mile.solve_cluster = timed_last_mile
 
     def restore() -> None:
-        freeform._astar = orig_astar
-        freeform._route_all = orig_route_all
-        freeform._commit_paths = orig_commit
-        freeform._make_grid = orig_make_grid
-        type.__setattr__(freeform._Grid, "refresh_history", orig_refresh)
-        type.__setattr__(freeform._Grid, "build_landmarks", orig_landmarks)
-        freeform._reserve_port_access = orig_reserve
-        freeform._merge_frontier = orig_merge
+        routing_domain._astar = orig_astar
+        routing_domain._route_all = orig_route_all
+        routing_domain._commit_paths = orig_commit
+        routing_domain._make_grid = orig_make_grid
+        type.__setattr__(routing_domain._Grid, "refresh_history", orig_refresh)
+        type.__setattr__(routing_domain._Grid, "build_landmarks", orig_landmarks)
+        routing_domain._reserve_port_access = orig_reserve
+        routing_domain._merge_frontier = orig_merge
         last_mile.solve_cluster = orig_last_mile
         for undo in phase_undo:
             undo()
@@ -472,8 +473,8 @@ def heights(
     # carries the height and the width, so one shim covers both strategies.
     def build(
         spec: BuildSpec,
-        strips: list[freeform.Strip],
-        pack: freeform._Pack,
+        strips: list[routing_domain.Strip],
+        pack: routing_domain._Pack,
         *,
         power: bool,
         route: bool,
@@ -481,7 +482,7 @@ def heights(
         ramped: bool = False,
         deadline: float | None = None,
         budget: dict[str, int] | None = None,
-        staged_static_cache: freeform._StagedStaticCache | None = None,
+        staged_static_cache: routing_domain._StagedStaticCache | None = None,
     ) -> freeform._BuildResult:
         t0 = time.perf_counter()
         row = _HeightRow(
