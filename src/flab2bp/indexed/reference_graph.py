@@ -20,8 +20,9 @@ as a seed, never as someone else's target -- still ends up in the result.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from functools import cached_property
+from types import MappingProxyType
 
 import networkx as nx
 
@@ -31,21 +32,29 @@ _IMPORT_TIME_KINDS = frozenset({"const", "default"})
 
 
 class ReferenceGraph:
-    """Reachability over dotted definition names, with the walks precomputed."""
+    """Reachability over one immutable construction-time graph snapshot.
+
+    Source mapping changes after construction cannot affect adjacency, root
+    membership, ownership or the metadata consumed by lazy query indexes.
+    """
 
     def __init__(self, graph: Graph) -> None:
-        self._graph = graph
+        self._graph = Graph(
+            edges=MappingProxyType(dict(graph.edges)),
+            owner=MappingProxyType(dict(graph.owner)),
+            kind=MappingProxyType(dict(graph.kind)),
+            calls=MappingProxyType(dict(graph.calls)),
+        )
         digraph: nx.DiGraph = nx.DiGraph()
-        digraph.add_nodes_from(graph.edges)
-        for node, targets in graph.edges.items():
+        digraph.add_nodes_from(self._graph.edges)
+        for node, targets in self._graph.edges.items():
             for target in targets:
                 digraph.add_edge(node, target)
         self._digraph = digraph
-        self._owner: Mapping[str, str] = graph.owner
 
     @classmethod
     def of(cls, graph: Graph) -> ReferenceGraph:
-        """Index one provenance graph."""
+        """Index a snapshot of one provenance graph."""
         return cls(graph)
 
     def reachable_from(
@@ -72,7 +81,7 @@ class ReferenceGraph:
             return frozenset(seen)
         banned = frozenset(blocked)
         allowed = self._digraph.edge_subgraph(
-            [(u, v) for u, v in self._digraph.edges if self._owner.get(v, "") not in banned]
+            [(u, v) for u, v in self._digraph.edges if self._graph.owner.get(v, "") not in banned]
         )
         seen = set(seeds)
         for seed in seeds:
@@ -87,7 +96,7 @@ class ReferenceGraph:
     @cached_property
     def _nodes_by_module(self) -> dict[str, frozenset[str]]:
         buckets: dict[str, set[str]] = {}
-        for node, module in self._owner.items():
+        for node, module in self._graph.owner.items():
             buckets.setdefault(module, set()).add(node)
         return {module: frozenset(nodes) for module, nodes in buckets.items()}
 
