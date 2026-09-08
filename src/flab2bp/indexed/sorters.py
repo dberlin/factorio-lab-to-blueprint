@@ -1,40 +1,12 @@
-"""Sorters, indexed by what they draw from, feed, and carry.
+"""Sorters queried by shared placement links and context-resolved cargo.
 
-Four separate places rebuild this same map ad hoc from `ctx.of_kind(SORTER)`
-(real source read at HEAD, `layout/validate.py`): `_belt_reaches_any`'s
-inline filter (~4608-4627, run once per BFS step), `_unsprayed_belts`'s
-`hops` (~4977-4988), `_sprayed_cargo_reaches_machines`'s `feeds`
-(~5048-5057), and the flow-rate loop inside `_lane_balance` (~5314-5340).
-`ctx.cache.sorter_items` / `_sorter_items` (~5860) resolves the third key,
-the item each sorter carries, once per `Context` -- this type takes that
-resolved value as input rather than recomputing it, so it stays free of
-`validate` (importing it would be a cycle).
+``Buildings`` owns input/output link indexes. This collection retains only
+the littletable resolved-item index: cargo attribution belongs to the
+validation context and can differ from a building's ``carries_item``.
 
-Backend: littletable. The collection is frozen (`Context.of_kind` is a
-memoized tuple on a frozen `Context`) but it is queried on THREE keys --
-`input_obj`, `output_obj`, and the resolved item -- by at least four
-consumers. Hand-kept dicts, one per consumer, is the duplication being
-removed; one table with three indexes is one backend for one collection.
-
-Rows are wrapped in `_SorterRecord` rather than inserted directly:
-littletable rebinds attributes on the objects it holds and `PlacedBuilding`
-is `@dataclass(frozen=True, slots=True)`, which cannot take one.
-
-ORDER IS PART OF THE CONTRACT. `Context.of_kind` always hands its rows to
-`Sorters.of` already in placement order (ascending building index), and
-callers extend a BFS frontier with these results, so every accessor returns
-that same order. littletable's `by.field[value]` was checked directly and
-returns records in TABLE INSERTION order, not any order derived from a key's
-value -- so accessors resort explicitly by each row's position in the
-`rows` `Sorters.of` was given, rather than trusting that coincidence to
-hold across littletable versions.
-
-Ruling I-7 / the `Buildings` question: a sibling branch may later land a
-`Buildings` type covering `Placement.buildings`, at which point
-`input_obj`/`output_obj` resolution here could delegate to it. That type
-does not exist on this branch. The two link accessors below (`drawing_from`,
-`feeding`) are kept thin and self-contained so that delegation, when it
-lands, is a small edit rather than a rewrite.
+Every answer follows the supplied rows' order, even for a reordered subset
+of the placement. Shared link buckets contain original positional identities;
+intersecting with the rows and applying their rank preserves that contract.
 """
 
 from __future__ import annotations
@@ -50,23 +22,22 @@ from flab2bp.indexed._record import IndexRecord
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from flab2bp.layout.base import PlacedBuilding
+    from flab2bp.layout.buildings import Buildings
 
 
 @dataclass
 class _SorterRecord(IndexRecord):
     index: int = -1
-    input_obj: int | None = None
-    output_obj: int | None = None
     item: str | None = None
 
 
 class Sorters:
     """One placement's sorters, answered by key instead of by scan."""
 
-    def __init__(self, rows: Iterable[tuple[int, PlacedBuilding, str | None]]) -> None:
+    def __init__(
+        self, buildings: Buildings, rows: Iterable[tuple[int, PlacedBuilding, str | None]]
+    ) -> None:
         table: littletable.Table = littletable.Table("sorters")
-        table.create_index("input_obj")
-        table.create_index("output_obj")
         table.create_index("item")
         order: list[int] = []
         payloads: dict[int, PlacedBuilding] = {}
@@ -76,8 +47,6 @@ class Sorters:
                 _SorterRecord(
                     payload=building,
                     index=index,
-                    input_obj=building.input_obj,
-                    output_obj=building.output_obj,
                     item=item,
                 )
             )
@@ -85,26 +54,37 @@ class Sorters:
             payloads[index] = building
             items[index] = item
         self._table = table
+        self._buildings = buildings
         self._order = tuple(order)
         self._payloads = payloads
         self._items = items
         self._rank = {index: rank for rank, index in enumerate(order)}
 
     @classmethod
-    def of(cls, rows: Iterable[tuple[int, PlacedBuilding, str | None]]) -> Sorters:
-        """Index the sorters of one placement."""
-        return cls(rows)
+    def of(
+        cls, buildings: Buildings, rows: Iterable[tuple[int, PlacedBuilding, str | None]]
+    ) -> Sorters:
+        """Index rows whose indices identify sorters in ``buildings``.
+
+        Pass the placement's shared immutable Buildings index; rows may be a
+        reordered subset, with each payload belonging to its original position.
+        Resolved items remain specific to this collection's validation context.
+        """
+        return cls(buildings, rows)
 
     def _ordered(self, records: Iterable[_SorterRecord]) -> tuple[int, ...]:
         return tuple(sorted((r.index for r in records), key=self._rank.__getitem__))
 
+    def _ordered_links(self, indices: Iterable[int]) -> tuple[int, ...]:
+        return tuple(sorted((i for i in indices if i in self._rank), key=self._rank.__getitem__))
+
     def drawing_from(self, source: int) -> tuple[int, ...]:
         """Sorters whose ``input_obj`` is ``source``, in placement order."""
-        return self._ordered(self._table.by.input_obj[source])
+        return self._ordered_links(self._buildings.sorters_out_of(source))
 
     def feeding(self, destination: int) -> tuple[int, ...]:
         """Sorters whose ``output_obj`` is ``destination``, in placement order."""
-        return self._ordered(self._table.by.output_obj[destination])
+        return self._ordered_links(self._buildings.sorters_into(destination))
 
     def carrying(self, item: str) -> tuple[int, ...]:
         """Sorters resolved to ``item``, in placement order."""

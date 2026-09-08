@@ -36,6 +36,7 @@ from flab2bp.dsp import colliders as dsp_colliders
 from flab2bp.indexed import Sorters
 from flab2bp.layout import slots
 from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.buildings import Buildings
 from flab2bp.spec import BuildSpec, MachineGroup
 
 __all__ = [
@@ -415,7 +416,11 @@ class Context:
         if got is None:
             items = _sorter_items(self)
             got = Sorters.of(
-                (index, building, items.get(index)) for index, building in self.of_kind(Kind.SORTER)
+                Buildings.of(self.placement),
+                (
+                    (index, building, items.get(index))
+                    for index, building in self.of_kind(Kind.SORTER)
+                ),
             )
             self.cache.sorters = got
         return got

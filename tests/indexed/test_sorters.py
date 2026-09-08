@@ -1,89 +1,62 @@
-"""Every `Sorters` answer equals the brute-force scan it replaces.
-
-The scan being replaced is validate.py's `_belt_reaches_any` (real source read
-at HEAD, ~4608-4627): `for sorter_index, sorter in ctx.of_kind(Kind.SORTER) if
-sorter.input_obj == index`, run once per BFS step. The proof obligation is
-equality with that filter, including order, because the caller extends a BFS
-frontier with the result and a different order is a different traversal.
-
-`ctx.of_kind` (`Context.of_kind`, `layout/validate.py:391-404`) always hands
-its rows to `Sorters.of` already in placement order (ascending building
-index, via `enumerate(self.placement.buildings)`), so every fixture below
-builds rows the same way. One extra test
-(`test_order_follows_the_rows_given_not_littletable_internals`) inserts rows
-out of index order on purpose, to prove the accessors follow the order `rows`
-was given in rather than littletable's own by-key bucket order or a sort by
-the numeric index -- measured directly against a live littletable table,
-`by.field[value]` returns records in TABLE INSERTION order, which happens to
-equal ascending index order in every other fixture here only because those
-fixtures insert ascending. That coincidence is exactly what this test does
-not rely on.
-"""
+"""Sorter queries retain row order and resolved cargo over a shared placement."""
 
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
-from typing import cast
+from dataclasses import replace
 
+from flab2bp.dsp import catalog
 from flab2bp.indexed import Sorters
-from flab2bp.layout.base import PlacedBuilding
+from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.buildings import Buildings
 
 
-@dataclass(frozen=True, slots=True)
-class _FakeBuilding:
-    """Stands in for `PlacedBuilding`: slotted and frozen, exactly as it is.
-
-    Cast to `PlacedBuilding` at every call site below: `Sorters` only ever
-    reads `.input_obj`/`.output_obj` off what it is given, so the stand-in is
-    behaviorally exact, but it is not `PlacedBuilding` itself (deliberately --
-    building one for real drags in the DSP catalog for no reason a sorter
-    index needs), and `mypy --strict` holds `Sorters.of`'s real, nominal
-    signature over this file same as anywhere else.
-    """
-
-    input_obj: int | None
-    output_obj: int | None
+def _sorter(source: int | None, destination: int | None) -> PlacedBuilding:
+    item_id = min(catalog.SORTER_IDS)
+    return PlacedBuilding(
+        item_id=item_id,
+        model_index=catalog.building(item_id).model_index,
+        x=0,
+        y=0,
+        input_obj=source,
+        output_obj=destination,
+    )
 
 
-def _fixture(seed: int, count: int) -> list[tuple[int, PlacedBuilding, str | None]]:
+def _fixture(
+    seed: int, count: int
+) -> tuple[Buildings, list[tuple[int, PlacedBuilding, str | None]]]:
     rng = random.Random(seed)
     items = ("iron-ingot", "copper-ingot", "gear", None)
-    return [
-        (
-            i,
-            cast(
-                PlacedBuilding,
-                _FakeBuilding(
-                    input_obj=rng.choice([None, *range(count)]),
-                    output_obj=rng.choice([None, *range(count)]),
-                ),
-            ),
-            rng.choice(items),
+    records = tuple(
+        _sorter(
+            rng.choice([None, *range(count)]),
+            rng.choice([None, *range(count)]),
         )
-        for i in range(count)
-    ]
+        for _ in range(count)
+    )
+    return Buildings(records), [(i, b, rng.choice(items)) for i, b in enumerate(records)]
 
 
 def test_drawing_from_equals_the_brute_force_filter_in_placement_order() -> None:
-    rows = _fixture(seed=11, count=200)
-    index = Sorters.of(rows)
+    buildings, rows = _fixture(seed=11, count=200)
+    index = Sorters.of(buildings, rows)
     for probe in range(-1, 200):
         brute = tuple(i for i, b, _item in rows if b.input_obj == probe)
         assert index.drawing_from(probe) == brute, probe
 
 
 def test_feeding_equals_the_brute_force_filter_in_placement_order() -> None:
-    rows = _fixture(seed=12, count=200)
-    index = Sorters.of(rows)
+    buildings, rows = _fixture(seed=12, count=200)
+    index = Sorters.of(buildings, rows)
     for probe in range(-1, 200):
         brute = tuple(i for i, b, _item in rows if b.output_obj == probe)
         assert index.feeding(probe) == brute, probe
 
 
 def test_drawing_from_carrying_equals_the_two_predicate_filter() -> None:
-    rows = _fixture(seed=13, count=200)
-    index = Sorters.of(rows)
+    buildings, rows = _fixture(seed=13, count=200)
+    index = Sorters.of(buildings, rows)
     for probe in range(0, 60):
         for item in ("iron-ingot", "copper-ingot", "gear", "absent"):
             brute = tuple(i for i, b, it in rows if b.input_obj == probe and it == item)
@@ -91,8 +64,8 @@ def test_drawing_from_carrying_equals_the_two_predicate_filter() -> None:
 
 
 def test_feeding_carrying_equals_the_two_predicate_filter() -> None:
-    rows = _fixture(seed=14, count=200)
-    index = Sorters.of(rows)
+    buildings, rows = _fixture(seed=14, count=200)
+    index = Sorters.of(buildings, rows)
     for probe in range(0, 60):
         for item in ("iron-ingot", "gear", "absent"):
             brute = tuple(i for i, b, it in rows if b.output_obj == probe and it == item)
@@ -100,60 +73,78 @@ def test_feeding_carrying_equals_the_two_predicate_filter() -> None:
 
 
 def test_carrying_equals_the_item_filter() -> None:
-    rows = _fixture(seed=15, count=200)
-    index = Sorters.of(rows)
+    buildings, rows = _fixture(seed=15, count=200)
+    index = Sorters.of(buildings, rows)
     for item in ("iron-ingot", "copper-ingot", "gear", "absent"):
         brute = tuple(i for i, _b, it in rows if it == item)
         assert index.carrying(item) == brute, item
 
 
-def test_a_none_item_is_never_returned_by_carrying() -> None:
-    rows = _fixture(seed=16, count=80)
-    index = Sorters.of(rows)
-    assert all(index.item(i) is not None for i in index.carrying("gear"))
-
-
-def test_building_and_item_hand_back_the_payload_unchanged() -> None:
-    rows = _fixture(seed=17, count=40)
-    index = Sorters.of(rows)
-    for i, building, item in rows:
-        assert index.building(i) is building
-        assert index.item(i) == item
-
-
 def test_an_empty_collection_answers_empty_rather_than_raising() -> None:
-    index = Sorters.of(())
+    index = Sorters.of(Buildings(()), ())
     assert index.indices() == ()
     assert index.drawing_from(0) == ()
+    assert index.feeding(0) == ()
     assert index.carrying("gear") == ()
+    assert index.carrying_or_unknown("gear") == ()
 
 
-def test_order_follows_the_rows_given_not_littletable_internals() -> None:
-    """Rows arrive out of index order; the answer must still match that order.
-
-    Every fixture above builds `rows` with `i` ascending, so none of them can
-    tell "return the order `rows` was given" apart from "return littletable's
-    own `by.field[value]` order" or "sort by the numeric index" -- a direct
-    probe of littletable (`table.by.input_obj[value]` after inserting shuffled
-    rows) shows it returns records in TABLE INSERTION order, which for every
-    fixture above happens to equal ascending index order because insertion
-    order equals `rows` order equals ascending index order there. This test
-    breaks that three-way coincidence: `rows` is handed in an order that is
-    neither ascending nor descending by index, so an implementation that
-    quietly sorted by the numeric `index` field, or that returned
-    `by.field[value]` raw and got lucky, would answer wrong here.
-    """
-    rows = [
-        (30, cast(PlacedBuilding, _FakeBuilding(input_obj=1, output_obj=None)), None),
-        (5, cast(PlacedBuilding, _FakeBuilding(input_obj=1, output_obj=None)), None),
-        (100, cast(PlacedBuilding, _FakeBuilding(input_obj=2, output_obj=None)), "gear"),
-        (17, cast(PlacedBuilding, _FakeBuilding(input_obj=1, output_obj=None)), None),
-        (2, cast(PlacedBuilding, _FakeBuilding(input_obj=2, output_obj=None)), "gear"),
+def test_order_and_subset_follow_rows_not_shared_link_bucket_order() -> None:
+    belt_id = min(catalog.BELT_IDS)
+    records = (
+        _sorter(1, 2),
+        PlacedBuilding(
+            item_id=belt_id,
+            model_index=catalog.building(belt_id).model_index,
+            x=1,
+            y=0,
+            input_obj=1,
+            output_obj=2,
+        ),
+        _sorter(1, 2),  # A real sorter excluded from this row collection.
+        _sorter(2, 1),
+        _sorter(1, 2),
+        _sorter(2, 1),
+    )
+    rows: list[tuple[int, PlacedBuilding, str | None]] = [
+        (4, records[4], None),
+        (3, records[3], "gear"),
+        (0, records[0], None),
+        (5, records[5], "gear"),
     ]
-    index = Sorters.of(rows)
-    assert index.indices() == (30, 5, 100, 17, 2)
-    assert index.drawing_from(1) == (30, 5, 17)
-    assert index.drawing_from_carrying(2, "gear") == (100, 2)
-    assert index.carrying("gear") == (100, 2)
-    assert index.carrying_or_unknown("gear") == (30, 5, 100, 17, 2)
-    assert index.carrying_or_unknown("absent") == (30, 5, 17)
+    index = Sorters.of(Buildings(records), rows)
+    assert index.indices() == (4, 3, 0, 5)
+    assert index.drawing_from(1) == (4, 0)
+    assert index.feeding(2) == (4, 0)
+    assert index.drawing_from_carrying(2, "gear") == (3, 5)
+    assert index.feeding_carrying(1, "gear") == (3, 5)
+    assert index.carrying("gear") == (3, 5)
+    assert index.carrying_or_unknown("gear") == (4, 3, 0, 5)
+    assert index.carrying_or_unknown("absent") == (4, 0)
+
+
+def test_resolved_items_override_building_annotations_without_admitting_unknowns() -> None:
+    records = (
+        replace(_sorter(0, 1), carries_item="copper-ingot"),
+        replace(_sorter(0, 1), carries_item="gear"),
+        _sorter(0, 1),
+    )
+    index = Sorters.of(
+        Buildings(records),
+        ((0, records[0], "gear"), (1, records[1], None), (2, records[2], "copper-ingot")),
+    )
+    assert index.drawing_from_carrying(0, "gear") == (0,)
+    assert index.feeding_carrying(1, "gear") == (0,)
+    assert index.carrying("copper-ingot") == (2,)
+    assert index.carrying_or_unknown("gear") == (0, 1)
+
+
+def test_replaced_placement_gets_new_links_without_changing_old_queries() -> None:
+    placement = Placement(buildings=(_sorter(0, 1),))
+    old = Sorters.of(Buildings.of(placement), ((0, placement.buildings[0], "gear"),))
+    changed = replace(placement, buildings=(replace(placement.buildings[0], input_obj=2),))
+    new = Sorters.of(Buildings.of(changed), ((0, changed.buildings[0], "gear"),))
+    assert old.drawing_from_carrying(0, "gear") == (0,)
+    assert old.drawing_from(2) == ()
+    assert new.drawing_from(0) == ()
+    assert new.drawing_from_carrying(2, "gear") == (0,)

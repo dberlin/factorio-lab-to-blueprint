@@ -1,0 +1,9 @@
+{
+  "candidate": "1ca2495f",
+  "candidate_checkout": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/indexed-scans",
+  "baseline": "2e861af0",
+  "baseline_evidence": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/buildings-index/docs/superpowers/evidence/2026-09-07-buildings-index/parallel-correctness-AWM9wmPE/before",
+  "controls": "12 URLs, shipped CLI freeform,workers1,budget60,default policies,fixed dotnet_ticks=0",
+  "corpus": "72 cells,budget30,strategyboth,jobs1,max_seconds7200",
+  "source_frozen": true
+}
