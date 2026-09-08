@@ -12,9 +12,9 @@
 # anything.  Task 1 puts the strategy's whole `PlacementStats` on the CLI's own
 # stderr, so the wrapper parses that line.  See its module docstring.
 #
-# STRICTLY SEQUENTIAL: one layout build at a time, per the plan's box discipline.
+# Each round runs its cells sequentially; independent rounds may overlap.
 #
-# Usage: run_large.sh <round>   (1 or 2)
+# Usage: run_large.sh <round> (1/2: eight cells; 3/4: titanium60 reliability)
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 DIR=docs/superpowers/evidence/2026-09-07-hierarchical-v4
