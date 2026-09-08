@@ -1,0 +1,74 @@
+{
+  "inherited_test_exit": 1,
+  "serial_corpus": [
+    {
+      "side": "before",
+      "directory": "0",
+      "exit": 1
+    },
+    {
+      "side": "before",
+      "directory": "1",
+      "exit": 1
+    },
+    {
+      "side": "before",
+      "directory": "2",
+      "exit": 1
+    },
+    {
+      "side": "before",
+      "directory": "3",
+      "exit": 1
+    },
+    {
+      "side": "before",
+      "directory": "4",
+      "exit": 1
+    },
+    {
+      "side": "before",
+      "directory": "5",
+      "exit": 1
+    },
+    {
+      "side": "after",
+      "directory": "6",
+      "exit": 1
+    },
+    {
+      "side": "after",
+      "directory": "7",
+      "exit": 1
+    },
+    {
+      "side": "after",
+      "directory": "8",
+      "exit": 1
+    },
+    {
+      "side": "after",
+      "directory": "9",
+      "exit": 1
+    },
+    {
+      "side": "after",
+      "directory": "10",
+      "exit": 1
+    },
+    {
+      "side": "after",
+      "directory": "11",
+      "exit": 1
+    }
+  ],
+  "serial_controls": {
+    "universe-matrix": {
+      "exits": [
+        3,
+        3
+      ],
+      "full_bytes_match": false
+    }
+  }
+}

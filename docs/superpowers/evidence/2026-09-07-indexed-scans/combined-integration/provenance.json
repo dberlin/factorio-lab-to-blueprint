@@ -1,0 +1,23 @@
+{
+  "baseline": "f863ee79",
+  "candidate": "916ea738",
+  "baseline_checkout": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto",
+  "candidate_checkout": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/indexed-scans",
+  "affinity": {
+    "before": "0-47",
+    "after": "48-95"
+  },
+  "controls": {
+    "strategy": "freeform",
+    "workers": 1,
+    "budget": 60,
+    "dotnet_ticks": 0
+  },
+  "corpus": {
+    "strategy": "both",
+    "budget": 30,
+    "jobs": 4,
+    "max_seconds": 3600
+  },
+  "original_preintegration_evidence_unchanged": true
+}

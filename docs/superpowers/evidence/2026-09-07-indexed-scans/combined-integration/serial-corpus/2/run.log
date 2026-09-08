@@ -1,0 +1,5 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+REFUSED universe-matrix freeform output-products attempt_wall_s= None wall_overshoot_s= None
+no pack was ever routed: 5 lane heads could not obtain the belt approaches they need (information-matrix into universe-matrix#37 at (211, 35, 0) (wants 1, held 0, 2 free side(s)), information-matrix into universe-matrix#37 at (211, 61, 0) (wants 1, held 0, 2 free side(s)), information-matrix into universe-matrix#37 at (181, 9, 0) (wants 1, held 0, 2 free side(s))); this is a PORT-SEATING defect independent of the packing -- the failure count varied by candidate height
+
+EXIT=1

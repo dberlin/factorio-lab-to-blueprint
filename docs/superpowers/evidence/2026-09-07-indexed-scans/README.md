@@ -4,11 +4,11 @@
 
 **NO — the original strict byte/area-identity bar is not met: original controls are 11/12 MATCH and the paired corpus has 12 area differences; the separate serial quantum-chip pair MATCHES.**
 
-This completes the prescribed **report**, not a clean final integration gate. Final corpus/control evidence describes frozen preintegration candidate **`1ca2495f6c86f96bf13053dbac6dbb134e57a2ab`** versus pinned **`2e861af02b6a5062792f8d21fca009b64aee5ab6`**. Earlier diagnostic timings below retain their actual earlier SHAs; they are not remeasurements at `1ca2495f`. Nothing here measures the later Buildings delegation or final combined master.
+Sections 1–10 report frozen preintegration candidate **`1ca2495f6c86f96bf13053dbac6dbb134e57a2ab`** versus pinned **`2e861af02b6a5062792f8d21fca009b64aee5ab6`**. Earlier diagnostic timings retain their actual earlier SHAs; they are not remeasurements at `1ca2495f`. The later Buildings delegation and final combined master are measured separately in **§11**.
 
 The original I-5/I-6 policy required measured improvement or documented de-duplication and rejected neutrality differences. The user's later ruling superseded marginal timing/retention queues, restored Task22, and allowed Tasks24/26/28 without waiting for Tasks25/27/29 microbenchmark decisions. **UNMEASURED is not “zero cost” or “did not move the clock.”** Historical rejections and failed comparisons remain evidence. Actual correctness, ordering/RNG, default-contract and deadline failures remain gates; this report neither dismisses differences as noise nor requests new marginal keep/revert measurements.
 
-Evidence notation: **L** means this worktree's `.superpowers/sdd/2026-09-07-indexed-scans/`; **C** means [`final-correctness-VsyHfZ3l/`](final-correctness-VsyHfZ3l/). **B** is the repository-root-relative `.claude/worktrees/buildings-index/docs/superpowers/evidence/2026-09-07-buildings-index/parallel-correctness-AWM9wmPE/before/`, reused at the matching pinned baseline/operating point. `C/provenance.json` records both boundaries. The older `master-baseline.{jsonl,log}` remains archived but is not silently substituted for B.
+Evidence notation: **L** means the original `.superpowers/sdd/2026-09-07-indexed-scans/` ledger, archived under `~/handoff-agents/recovered/indexed-scans/complete-superpowers/` when its worktree is removed; **C** means [`final-correctness-VsyHfZ3l/`](final-correctness-VsyHfZ3l/). **B** is [`../2026-09-07-buildings-index/parallel-correctness-AWM9wmPE/before/`](../2026-09-07-buildings-index/parallel-correctness-AWM9wmPE/before/), reused at the matching pinned baseline/operating point. `C/provenance.json` records both boundaries. The older `master-baseline.{jsonl,log}` remains archived but is not silently substituted for B.
 
 ## 2. What moved the numbers
 
@@ -100,9 +100,9 @@ The post-cutover JSON's historical `networkx_heap` and `networkx_vs_inline` slot
 
 Other backend ownership: ReferenceGraph uses networkx; Cells/Nets/Sorters use littletable for their indexed queries at the measured freeze; Stages uses an ordered list plus maintained count; StripPositions and BeltOverlap use keyed maps; UnionFind uses arrays. New Sorters delegates building links to canonical Buildings and retains its item index, but that change is outside this measured boundary.
 
-## 6. Still pending buildings-index integration
+## 6. Buildings-index integration
 
-Canonical Buildings is already on master `f162d9e1`. Main must preserve its existing freeform/hierarchy traversals when merging the old-based indexed branch; their temporary absence here is an expected integration dependency, not a newly discovered source defect.
+Canonical Buildings landed on master `f162d9e1`. The final merge `916ea738` preserves its existing freeform/hierarchy traversals and adds the reviewed Sorters delegation; §11 records the subsequent integrated verification. These later changes remain outside the older `1ca2495f` measurements.
 
 | Original request / site | Required canonical contract and integration status |
 |---|---|
@@ -110,10 +110,10 @@ Canonical Buildings is already on master `f162d9e1`. Main must preserve its exis
 | #12 hierarchy compose._lane | `Buildings.predecessor_of(index)` supplies ordered reverse-link ownership; preserve master's integration. |
 | #13 hierarchy contracts._belt_run | `Buildings.belt_run(index, forward=...)` crosses the proper splitter/piler boundaries; preserve master's integration. |
 | Three _tap_source fallback rebuilds, scout freeform.py:13294/13319/13355 | Canonical predecessor/splitter/belt traversal queries, not new local indexes. Preserve master's existing freeform traversal cutover. |
-| Request 4: Placement.buildings as well as Canvas.buildings | **Implemented, source-reviewed, untested/unmerged:** new Sorters constructor accepts canonical Buildings, validator constructs it from placement, links delegate to sorters_into/sorters_out_of while the resolved item index stays validator-owned. Three files: src/flab2bp/indexed/sorters.py, src/flab2bp/layout/validate.py, tests/indexed/test_sorters.py. |
+| Request 4: Placement.buildings as well as Canvas.buildings | **Integrated and verified at `916ea738`:** Sorters accepts canonical Buildings, validator constructs it from placement, and links delegate to sorters_into/sorters_out_of while the resolved item index stays validator-owned. Three files: src/flab2bp/indexed/sorters.py, src/flab2bp/layout/validate.py, tests/indexed/test_sorters.py. |
 | #32 finalize._certified_side_fallback, scout finalize.py:3719-3752 | A buildings-sequence scan omitted from the plan's claimed 49-row accounting. Outside this indexed source/report integration scope; no indexed-scans conversion or measurement claimed. Main owns its Buildings/finalization integration accounting. |
 
-ScansDelegationReview independently reports source/spec PASS and quality PASS, no findings, for the frozen three-file delegation diff against canonical `f162d9e1`. It checked constructor callers, four validator consumers, position/subset order, named/unknown cargo, cross-kind exclusion and replacement lifetime. **Read-only review is not runtime proof.** Main owns final combined source, merge-last resolution and integrated verification. The saved `1ca2495f` corpus cannot certify the subsequently changed constructor.
+ScansDelegationReview independently reported source/spec PASS and quality PASS, no findings, for the frozen three-file delegation diff against canonical `f162d9e1`. It checked constructor callers, four validator consumers, position/subset order, named/unknown cargo, cross-kind exclusion and replacement lifetime. **Read-only review is not runtime proof.** The subsequent combined source review and runtime results are in §11; the saved `1ca2495f` corpus does not certify the later constructor.
 
 ## 7. Where this plan disagreed with the scout
 
@@ -177,7 +177,7 @@ Other recorded pressures: setup 4.2; initial archived master baseline 195s wall 
 
 The five mypy baseline files are scripts/extract_dsp_colliders.py, scripts/extract_dsp_power.py, scripts/extract_dsp_slot_poses.py, scripts/extract_dsp_tables.py and scripts/trace_overhead.py. Direct log inspection counts 53 diagnostics in exactly those files, consistent with P32; no suppression or clean-src+scripts claim.
 
-Main reports the three final source-review slices PASS after corrections. Earlier immutable review packages and rulings are in L/progress.md and L/recovery-report.md; that recovery handoff's older “pending” state is superseded here only where later evidence exists. The distinct new Buildings delegation also received read-only PASS/PASS (§6), but has not run or merged.
+The three preintegration source-review slices passed after corrections. Earlier immutable review packages and rulings are in L/progress.md and L/recovery-report.md. The distinct Buildings delegation received read-only PASS/PASS (§6), followed by the combined integration review and executable evidence in §11.
 
 ### Replay and router controls
 
@@ -221,6 +221,82 @@ See [deterministic-controls.md](deterministic-controls.md) for complete-file byt
 - Task16 and Task29 polars build/read/materialization numbers: **unavailable/not measured**. No polars performance conclusion is supported.
 - Paired geometry-cache report timings and stranded-cluster/last-mile digest replay: **unavailable**; a shared certified Placement+BuildSpec capture and separate replayable stranded-cluster capture are not established by ordinary route cases.
 - A settled green whole-suite run, the brief's exact budget-30 twelve-CLI control recipe, and per-invocation import confirmation for every final process are not saved. The actual failed suite, focused/module corrections, serial deadline and budget-60 controls are reported instead.
-- New three-file Buildings delegation is source-reviewed but **untested/unmerged**; final combined source/merge/runtime proof remains Main-owned and is outside every saved final corpus/control figure.
+- The preintegration corpus/control figures exclude the later three-file Buildings delegation. Its subsequent integrated measurements are explicitly separated in §11.
 
 Report review used the prescribed brief, scout/plan disagreement table, recovery reports and ledger, complete saved blueprint files, parsed corpus/control JSON, actual pstats and saved log/serial outcomes. It made **only documentation/ledger changes** and ran no tests, builds, lint, formatters, benchmarks or source changes. It does not replace Main's final source review, correctness adjudication or merge-last integrated verification.
+
+## 11. Final combined source and failure-only serial adjudication
+
+All six source branches are merged on master at **`916ea738`**, in the required
+order. This section compares the immediate integrated parent **`f863ee79`**
+(the first five branches) with **`916ea738`** (indexed-scans last).
+Raw evidence is in [`combined-integration/`](combined-integration/), abbreviated
+**I**; `provenance.json` records checkout paths and operating points.
+Later report/evidence commits do not change measured source.
+
+### Source and executable verification
+
+- Three independent combined reviews pass: routing/sequence/hierarchy,
+  validator/Buildings, and data/pipeline/audit. Review caught a missing local
+  `researched` binding in the technology merge; it was restored before checks.
+- Canonical graph traversal and immutable full-seed closure caching coexist;
+  Sorters delegates physical links while retaining resolved-item attribution;
+  canvas clones independently own both live Buildings and PortReservations.
+- Combined Ruff, formatting and mypy-src pass. The affected Python modules
+  (`indexed`, `layout`, `lab`, `dsp`, `bench`, pipeline and audit) fail only the
+  inherited band160 cold-proof and two-stage-alignment cases. Both still fail
+  when rerun serially. The additional complete `tests/web` and `tests/scripts`
+  run exits0. This is not a green whole-suite claim.
+- Frozen routing replay matches digest `1722e54fa17970f9` and368077 expansions
+  in all three rounds. Actual installed master CLI with both `up-to` and
+  `wireless` emits a valid freeform iron-ingot blueprint: one machine,
+  70 tiles, 15 buildings.
+- Full logs and the guarded serial runner are retained in
+  `~/handoff-agents/recovered/indexed-scans/complete-superpowers/`.
+
+### Complete paired gates
+
+Corpora: `--strategy both --budget 30 --jobs 4 --max-seconds 3600`.
+Before uses CPUs0–47, after48–95; each audit cell has12 CP-SAT workers.
+Controls use the same disjoint arm affinities, freeform, workers1, budget60,
+default policies and fixed `dotnet_ticks=0`. Independent controls/corpora ran
+concurrently; only failed cases were rerun serially after those jobs settled.
+
+| Measure | Before | After | Adjudication |
+|---|---:|---:|---|
+| Complete corpus cells | 72 | 72 | Same72 keys |
+| CLEAN / REFUSED / INVALID / CRASH | 66 / 6 / 0 / 0 | 66 / 6 / 0 / 0 | No status disagreement; **coverage FAIL** |
+| Completion-grace overruns | 0 | 0 | None in either saved arm |
+| Successful deterministic controls | 11 | 11 | All11 complete blueprint files byte-identical |
+| Universe-matrix control | REFUSED, exit3 | REFUSED, exit3 | Still REFUSED/exit3 in the serial pair |
+
+The six corpus refusals on each side are universe-matrix under all three
+policies and both strategies. All12 failed side/cell runs were repeated
+serially at the same source, affinity and12-worker operating point: all
+remain REFUSED. The successful11 controls were not rerun.
+
+Seven CLEAN paired cells change area; no neutrality claim:
+
+| Cell | Before | After |
+|---|---:|---:|
+| magnetic-coil / freeform / output-products | 342 | 340 |
+| plastic / freeform / all-products | 880 | 840 |
+| processor / freeform / output-products | 950 | 980 |
+| super-magnetic-ring / freeform / all-products | 1890 | 1960 |
+| super-magnetic-ring / freeform / output-products | 2120 | 2132 |
+| super-magnetic-ring / freeform / no-proliferator | 2320 | 2220 |
+| super-magnetic-ring / sequence-pair / all-products | 1932 | 1887 |
+
+Original evidence is unchanged. Initial audit invocations used the invalid
+`--jsonl` flag and exited2 without running cells; those logs remain separately
+named `corpus-invalid-argument.log`. The actual audit uses `--json`.
+The first custom serial runner lacked a multiprocessing entry guard, causing
+six sequence-run harness CRASH records. Those records/logs are retained,
+explicitly **not product crash evidence**, and all six were repeated with
+the guard in `serial-corpus-guarded/`; each correctly reports REFUSED.
+`serial-runner-correction.json` names the invalid runs and their replacements.
+
+Final verdict: source integration and bounded correctness checks are complete;
+the all-CLEAN/all-twelve-output/area-neutral gates remain **FAIL**, not waived
+into PASS. The later design-retention ruling permits retaining indexed code;
+it does not turn the surviving factory refusals into valid layouts.

@@ -1,0 +1,5 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+REFUSED universe-matrix sequence-pair no-proliferator attempt_wall_s= None wall_overshoot_s= None
+all 3 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an exact layout
+
+EXIT=1

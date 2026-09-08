@@ -1,0 +1,35 @@
+{
+  "reason": "Original custom serial runner lacked multiprocessing __main__ guard; those six CRASH records are invalid harness executions, not product crash evidence. Original logs retained; guarded reruns use identical source and Job inputs.",
+  "corrected": [
+    {
+      "side": "before",
+      "original_directory": "3",
+      "exit": 1
+    },
+    {
+      "side": "before",
+      "original_directory": "4",
+      "exit": 1
+    },
+    {
+      "side": "before",
+      "original_directory": "5",
+      "exit": 1
+    },
+    {
+      "side": "after",
+      "original_directory": "9",
+      "exit": 1
+    },
+    {
+      "side": "after",
+      "original_directory": "10",
+      "exit": 1
+    },
+    {
+      "side": "after",
+      "original_directory": "11",
+      "exit": 1
+    }
+  ]
+}

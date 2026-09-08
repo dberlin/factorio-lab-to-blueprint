@@ -50,8 +50,11 @@ were rendered; this is not a claim that this input exercises a tier substitution
 The earlier movement evidence below remains separate.
 
 Combined Ruff, mypy-src, web typecheck and production build pass; all405 web
-tests pass. Full Python integration-suite adjudication is recorded in Main's
-integration ledger. These checks do not erase the earlier measured FAIL gates.
+tests pass. The Python integration run exceeded its original240-second process
+limit (exit-9); the identical group then passed serially with exit0. Both logs
+are archived under `~/handoff-agents/recovered/machine-upto/integration-f863ee79/`.
+The source was integrated on master at `f863ee79`. These checks do not erase
+the earlier measured FAIL gates.
 
 ## Gate (a): base versus exact — FAIL
 

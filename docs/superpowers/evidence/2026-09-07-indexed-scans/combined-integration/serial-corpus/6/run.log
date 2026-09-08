@@ -1,0 +1,5 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+REFUSED universe-matrix freeform all-products attempt_wall_s= None wall_overshoot_s= None
+every packing that wired was rejected by our own validator (prolif.sprayed_cargo_reaches_machines); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run
+
+EXIT=1

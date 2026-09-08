@@ -1,0 +1,12 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+usage: audit.py [-h] [--tier {trivial,small,mid,large,stress}]
+                [--budget BUDGET] [--candidate-policy POLICY[,POLICY...]]
+                [--power-tower {tesla,substation,wireless}]
+                [--machine-rank {exact,up-to}]
+                [--strategy {both,all,freeform,sequence-pair,best}]
+                [--jobs JOBS] [--max-seconds MAX_SECONDS] [--only ONLY]
+                [--skip SKIP] [--arrangements ARRANGEMENTS] [--quiet]
+                [--json JSON]
+audit.py: error: unrecognized arguments: --jsonl /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/indexed-scans/docs/superpowers/evidence/2026-09-07-indexed-scans/combined-integration/after/corpus.jsonl
+
+EXIT=2
