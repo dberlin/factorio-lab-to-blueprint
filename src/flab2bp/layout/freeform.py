@@ -92,6 +92,7 @@ import numpy as np
 from ortools.sat.python import cp_model
 
 from flab2bp.dsp import catalog, codec, colliders, params, planet, rules, splitter_ports
+from flab2bp.indexed import Nets, PortReservations, StakedPaths, UnionFind
 from flab2bp.layout import finalize, junction, last_mile, route_kernel, slots, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
@@ -5809,7 +5810,7 @@ class _Canvas:
     #: conflict for the history term to price.  Measured on the magnetic-ring
     #: spec: 48 of 128 searches failed at zero expansions, at every candidate
     #: height, with two thirds of the routing budget still unspent.
-    reserved: dict[tuple[int, int, int], tuple[int, int, int]] = field(default_factory=dict)
+    reserved: PortReservations = field(default_factory=PortReservations)
     #: Ports the net currently being routed owns; it may use their reservations.
     routing_ports: frozenset[tuple[int, int, int]] = frozenset()
     #: Complete corridors still held for each port. Routing retires one corridor
@@ -5998,12 +5999,8 @@ class _Canvas:
         ``universe-matrix``) although nothing ever mutates one -- links are
         re-pointed with ``replace``.  Only the containers need to be fresh.
         ``belt_ban`` holds mutable sets, so those are copied one level down;
-        every other value is immutable and shared.  Listing every field by
-        name is deliberate: a field added to ``_Canvas`` without a matching
-        keyword here fails the structural guard,
-        ``TestCanvasClone.test_clone_passes_a_keyword_for_every_declared_field``,
-        which reads this method's own source rather than relying on some
-        test happening to populate and mutate the new field.
+        every other value is immutable and shared. The clone keeps each mutable
+        container independent, including both directions of port reservations.
         """
         return _Canvas(
             ramped=self.ramped,
@@ -6014,7 +6011,7 @@ class _Canvas:
             blocked=dict(self.blocked),
             world_taken=set(self.world_taken),
             solid=set(self.solid),
-            reserved=dict(self.reserved),
+            reserved=PortReservations(self.reserved),
             routing_ports=self.routing_ports,
             port_corridors=dict(self.port_corridors),
             limit=self.limit,
@@ -8848,7 +8845,7 @@ class _PreparedRoutingProblem:
             blocked=dict(self.blocked),
             world_taken=set(self.world_taken),
             solid=set(self.solid),
-            reserved=dict(self.reserved),
+            reserved=PortReservations(self.reserved),
             routing_ports=frozenset(),
             port_corridors=dict(self.port_corridors),
             limit=self.limit,
@@ -8953,25 +8950,18 @@ def _prepared_routing_lower_bound(
     protected = _protected_template_belt_indices(problem)
 
     nets = tuple(net for net in (*problem.nets, *problem.external_output_nets) if not net.prelinked)
-    net_by_id = {net.net_id: net for net in nets}
-    parent = {net_id: net_id for net_id in net_by_id}
-
-    def find(net_id: NetId) -> NetId:
-        while parent[net_id] != net_id:
-            parent[net_id] = parent[parent[net_id]]
-            net_id = parent[net_id]
-        return net_id
-
-    def union(left: NetId, right: NetId) -> None:
-        left_root = find(left)
-        right_root = find(right)
-        if left_root != right_root:
-            parent[right_root] = left_root
+    net_index = Nets.of(
+        (net.net_id, net.net_id.item, "", (net.dst.x, net.dst.y, net.dst.z), "", net)
+        for net in nets
+    )
+    components = UnionFind()
+    for net_id in net_index.ids():
+        components.find(net_id)
 
     for net in nets:
         for sibling in (*net.src_group, *net.dst_group):
-            if sibling in net_by_id:
-                union(net.net_id, sibling)
+            if net_index.by_id(sibling) is not None:
+                components.union(net.net_id, sibling)
 
     def adjacent(port: _PreparedPort) -> tuple[tuple[int, int], ...]:
         return tuple((port.x + dx, port.y + dy) for dx, dy in _STEPS)
@@ -8990,13 +8980,13 @@ def _prepared_routing_lower_bound(
         legal_starts = tuple(
             cell
             for net_id in (net.net_id, *net.src_group)
-            if (sibling := net_by_id.get(net_id)) is not None
+            if (sibling := net_index.by_id(net_id)) is not None
             for cell in starts(sibling)
         )
         legal_goals = tuple(
             cell
             for net_id in (net.net_id, *net.dst_group)
-            if (sibling := net_by_id.get(net_id)) is not None
+            if (sibling := net_index.by_id(net_id)) is not None
             for cell in goals(sibling)
         )
         return min(
@@ -9006,7 +8996,7 @@ def _prepared_routing_lower_bound(
 
     component_floors: dict[NetId, int] = {}
     for net in nets:
-        root = find(net.net_id)
+        root = cast(NetId, components.find(net.net_id))
         component_floors[root] = max(component_floors.get(root, 0), route_floor(net))
     route_total = sum(component_floors.values())
     return PreparedRoutingLowerBound(
@@ -9363,17 +9353,8 @@ def _route_all(
     #: because `canvas.blocked`, `grid.occ` and `owner` disagreeing is a router
     #: that quietly routes through a committed belt.
     paths: dict[int, tuple[Cell, ...]] = {}
+    staked_paths = StakedPaths(_STEPS)
     owner: dict[Cell, int] = {}
-    roles_by_net: dict[int, tuple[tuple[Cell, str, bool], ...]] = {}
-    role_members: dict[tuple[Cell, str], set[int]] = defaultdict(set)
-    for index, net in enumerate(nets):
-        roles: list[tuple[Cell, str, bool]] = []
-        if net.src is not None:
-            roles.append(((net.src.x, net.src.y, net.src.z), "src", True))
-        roles.append(((net.dst.x, net.dst.y, net.dst.z), "dst", False))
-        roles_by_net[index] = tuple(roles)
-        for key, role, _source in roles:
-            role_members[key, role].add(index)
     retired_roles: dict[tuple[Cell, str], PortAccessCorridor] = {}
     iterations = 0
     expansions = 0
@@ -9429,13 +9410,24 @@ def _route_all(
         source = None if net.src is None else (net.src.x, net.src.y, net.src.z)
         return source, (net.dst.x, net.dst.y, net.dst.z)
 
-    net_by_id = {_net_id(index): net for index, net in enumerate(nets)}
+    def role_rows() -> Iterator[tuple[NetId, str, str, Cell, str, tuple[int, _Net]]]:
+        for index, net in enumerate(nets):
+            net_id = _net_id(index)
+            if net.src is not None:
+                yield (
+                    net_id, net.item, "", (net.src.x, net.src.y, net.src.z), "src", (index, net)
+                )
+            yield net_id, net.item, "", (net.dst.x, net.dst.y, net.dst.z), "dst", (index, net)
+
+    net_index = Nets.of(role_rows())
 
     def _blocking_endpoint_cells(
         blocking_nets: tuple[NetId, ...],
     ) -> tuple[tuple[Cell | None, Cell | None], ...]:
         return tuple(
-            _endpoint_cells(net_by_id[blocker]) if blocker in net_by_id else (None, None)
+            _endpoint_cells(record[1])
+            if (record := net_index.by_id(blocker)) is not None
+            else (None, None)
             for blocker in blocking_nets
         )
 
@@ -9853,7 +9845,8 @@ def _route_all(
             path_guards[index] = claimed
 
     def _retire_served_roles(index: int, path: tuple[Cell, ...]) -> None:
-        for key, role, source in roles_by_net[index]:
+        for key, role in net_index.roles_of(_net_id(index)):
+            source = role == "src"
             token = (key, role)
             if token in retired_roles:
                 continue
@@ -9881,12 +9874,15 @@ def _route_all(
             )
 
     def _restore_unserved_roles(index: int) -> None:
-        for key, role, _source in roles_by_net[index]:
+        for key, role in net_index.roles_of(_net_id(index)):
             token = (key, role)
             retired = retired_roles.get(token)
             if retired is None:
                 continue
-            if any(member != index and member in paths for member in role_members[token]):
+            if any(
+                member != index and member in paths
+                for member, _net in net_index.payloads_in_role(key, role)
+            ):
                 continue
             _restore_port_corridor(canvas, key, retired)
             del retired_roles[token]
@@ -9923,6 +9919,9 @@ def _route_all(
         """Put a path down with the exact sibling endpoints it selected."""
         selected = hints
         paths[index] = path
+        staked_paths.stake(
+            index, path, linked_head=selected[2] is not None or index in path_tap
+        )
         if selected[0] is not None:
             source_hint[index] = selected[0]
         else:
@@ -9959,6 +9958,7 @@ def _route_all(
                 grid.restore(cell)
         source_hint.pop(index, None)
         sink_hint.pop(index, None)
+        staked_paths.unstake(index)
         for cell in paths.pop(index):
             if canvas.blocked.get(cell, -1) == _TENTATIVE:
                 del canvas.blocked[cell]
@@ -10188,9 +10188,7 @@ def _route_all(
             else ()
         )
         owned_source_starts[index] = frozenset(set(starts) & owned_guard.keys())
-        reverse_link_guard = frozenset(
-            paths[owner_index][0] for owner_index in path_tap if owner_index in paths
-        )
+        reverse_link_guard = staked_paths.linked_heads()
 
         destination_access = tuple((net.dst.x + dx, net.dst.y + dy, net.dst.z) for dx, dy in _STEPS)
         sink_provenance: dict[Cell, Cell] = {}
@@ -10328,32 +10326,18 @@ def _route_all(
             Two narrow tests rather than one broad one: `unlinked` goes back to
             zero and the victim sets stay small.
             """
-            touch: dict[tuple[int, int, int], set[int]] = {}
-            #: Paths that are somebody's ONLY neighbour at one of their ends.
-            sole: dict[int, set[int]] = {}
-            for other, path in paths.items():
-                for end in (path[0], path[-1]):
-                    near: set[int] = set()
-                    for dx, dy in _STEPS:
-                        beside = (end[0] + dx, end[1] + dy, end[2])
-                        touch.setdefault(beside, set()).add(other)
-                        held = owner.get(beside)
-                        if held is not None and held != other:
-                            near.add(held)
-                    if len(near) == 1:
-                        sole.setdefault(other, set()).update(near)
             grown = set(on)
             queue = list(on)
             while queue and len(grown) <= _REPAIR_MAX_VICTIMS:
                 leant_on = queue.pop()
                 for cell in paths[leant_on]:
-                    for other in touch.get(cell, ()):
+                    for other in staked_paths.beside_in_scan_order(cell):
                         if other in grown:
                             continue
                         if (
                             leant_on in src_group.get(other, ())
                             or leant_on in dst_group.get(other, ())
-                            or leant_on in sole.get(other, ())
+                            or leant_on in staked_paths.sole_neighbours(other, owner)
                         ):
                             grown.add(other)
                             queue.append(other)
@@ -10439,18 +10423,18 @@ def _route_all(
             junction_victims: set[int] = set()
             selected_tap = through_offers[2].get(through_path[0])
             if selected_tap is not None:
-                tapped_sibling = next(
+                tapped = next(
                     (
-                        sibling
+                        (sibling, position)
                         for sibling in src_group.get(index, ())
-                        if selected_tap in paths.get(sibling, ())
+                        if (position := staked_paths.position_in(sibling, selected_tap)) is not None
                     ),
                     None,
                 )
                 excused: set[Cell] = set()
-                if tapped_sibling is not None:
-                    sibling_path = paths[tapped_sibling]
-                    tap_at = sibling_path.index(selected_tap)
+                if tapped is not None:
+                    sibling, tap_at = tapped
+                    sibling_path = paths[sibling]
                     excused.update(sibling_path[max(0, tap_at - 2) : tap_at + 3])
                 stack = _splitter_stack_geometry(*selected_tap)
                 for offset, stack_member in enumerate(stack):
@@ -13663,10 +13647,7 @@ def _route_boundary_nets(
                 ),
             )
             if retired is None:
-                mine = next(
-                    (cell for cell, key in canvas.reserved.items() if key == port_key),
-                    None,
-                )
+                mine = canvas.reserved.first_for(port_key)
                 if mine is not None:
                     del canvas.reserved[mine]
 
@@ -16043,29 +16024,20 @@ def _connect_short_cuts(
     if out_rate <= 0 or in_rate <= 0 or len(srcs) < 2 or len(sinks) < 2:
         return []
 
-    parent: dict[tuple[str, int], tuple[str, int]] = {}
-
-    def find(k: tuple[str, int]) -> tuple[str, int]:
-        parent.setdefault(k, k)
-        while parent[k] != k:
-            parent[k] = parent[parent[k]]
-            k = parent[k]
-        return k
+    components = UnionFind()
 
     for i in range(len(srcs)):
-        find(("s", i))
+        components.find(("s", i))
     for j in range(len(sinks)):
-        find(("d", j))
+        components.find(("d", j))
     for i, j in pairs:
-        a, b = find(("s", i)), find(("d", j))
-        if a != b:
-            parent[a] = b
+        components.union(("s", i), ("d", j), keep_right=True)
 
     islands: dict[tuple[str, int], tuple[list[int], list[int]]] = defaultdict(lambda: ([], []))
     for i in range(len(srcs)):
-        islands[find(("s", i))][0].append(i)
+        islands[cast(tuple[str, int], components.find(("s", i)))][0].append(i)
     for j in range(len(sinks)):
-        islands[find(("d", j))][1].append(j)
+        islands[cast(tuple[str, int], components.find(("d", j)))][1].append(j)
 
     # Chained in DESCENDING BALANCE, so every edge runs surplus -> deficit.
     #
@@ -16167,19 +16139,7 @@ def _join_shard_islands(
     is the one global rate the player belts in.  It may be allocated among all
     entry lanes, but it is not independently available to every island.
     """
-    parent: dict[int, int] = {}
-
-    def find(k: int) -> int:
-        parent.setdefault(k, k)
-        while parent[k] != k:
-            parent[k] = parent[parent[k]]
-            k = parent[k]
-        return k
-
-    def union(a: int, b: int) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
+    components = UnionFind()
 
     # How many nets already meet each lane. A producer lane end becomes a
     # junction under `_tap_source` and a junction has four sides, so the extra
@@ -16187,16 +16147,16 @@ def _join_shard_islands(
     # whichever one sorts first.
     taps: dict[int, int] = defaultdict(int)
     for a, b in pairs:
-        union(a, b)
+        components.union(a, b, keep_right=True)
         taps[a] += 1
         taps[b] += 1
 
     srcs: dict[int, list[int]] = defaultdict(list)
     sinks: dict[int, list[int]] = defaultdict(list)
     for belt in sorted(supply):
-        srcs[find(belt)].append(belt)
+        srcs[cast(int, components.find(belt))].append(belt)
     for belt in sorted(demand):
-        sinks[find(belt)].append(belt)
+        sinks[cast(int, components.find(belt))].append(belt)
     roots = sorted(set(srcs) | set(sinks))
     if len(roots) < 2:
         return []
@@ -16764,17 +16724,14 @@ def _prepare_routing_problem(
     # physical strips and consume its contiguous groups before choosing sink
     # lanes; pairing each producer independently would turn {0,1,2}/{3} into
     # the old cyclic {0,2}/{1,3}.
+    merge_sources: dict[tuple[str, CargoDomain], list[tuple[str, list[_Port]]]] = defaultdict(list)
+    for (_src_key, item, destinations, cargo_domain), sources in out_ports.items():
+        merge_sources[item, cargo_domain].append((destinations, sources))
+
     boundary_output_belts: set[int] = set()
     for (item, dest, cargo_domain), merge_plan in merge_plans.items():
         sources_by_lane: dict[str, _Port] = {}
-        for (
-            _src_key,
-            output_item,
-            destinations,
-            output_domain,
-        ), sources in out_ports.items():
-            if output_item != item or output_domain is not cargo_domain:
-                continue
+        for destinations, sources in merge_sources.get((item, cargo_domain), ()):
             if dest not in (_dests(destinations) or ("",)):
                 continue
             for source in sources:
@@ -17247,7 +17204,33 @@ def _prepare_routing_problem(
     all_prepared_nets = tuple(
         prepared for prepared in (*prepared_nets, *prepared_output_nets) if not prepared.prelinked
     )
-    net_by_id = {prepared.net_id: prepared for prepared in all_prepared_nets}
+    def demand_rows() -> Iterator[tuple[NetId, str, str, Cell, str, _PreparedNet]]:
+        for prepared in all_prepared_nets:
+            source, destination = prepared_endpoints(prepared)
+            net_id = prepared.net_id
+            if net_id.role is NetRole.EXTERNAL:
+                yield (
+                    net_id, net_id.item, PortAccessKind.BOUNDARY_ARRIVAL.value,
+                    destination, "dst", prepared,
+                )
+            elif net_id.role is NetRole.EXTERNAL_OUTPUT:
+                yield (
+                    net_id, net_id.item,
+                    PortAccessKind.EARLY_BOUNDARY_DEPARTURE.value if source is not None else "",
+                    source if source is not None else destination, "src", prepared,
+                )
+            else:
+                if source is not None:
+                    yield (
+                        net_id, net_id.item, PortAccessKind.INTERNAL_DEPARTURE.value,
+                        source, "src", prepared,
+                    )
+                yield (
+                    net_id, net_id.item, PortAccessKind.INTERNAL_ARRIVAL.value,
+                    destination, "dst", prepared,
+                )
+
+    net_index = Nets.of(demand_rows())
 
     def static_access_failure(
         prepared: _PreparedNet,
@@ -17288,37 +17271,17 @@ def _prepare_routing_problem(
             source=prepared_endpoints(prepared)[0],
             destination=prepared_endpoints(prepared)[1],
             blocking_endpoints=tuple(
-                prepared_endpoints(net_by_id[blocker]) for blocker in blocking_nets
+                prepared_endpoints(cast(_PreparedNet, net_index.by_id(blocker)))
+                for blocker in blocking_nets
             ),
         )
 
-    def matches_demand(prepared: _PreparedNet, demand: PortAccessDemand) -> bool:
-        source, destination = prepared_endpoints(prepared)
-        if prepared.net_id.item != demand.item:
-            return False
-        if demand.kind is PortAccessKind.BOUNDARY_ARRIVAL:
-            return prepared.net_id.role is NetRole.EXTERNAL and destination == demand.cell
-        if demand.kind is PortAccessKind.EARLY_BOUNDARY_DEPARTURE:
-            return prepared.net_id.role is NetRole.EXTERNAL_OUTPUT and source == demand.cell
-        if demand.kind is PortAccessKind.INTERNAL_DEPARTURE:
-            return (
-                prepared.net_id.role not in (NetRole.EXTERNAL, NetRole.EXTERNAL_OUTPUT)
-                and source == demand.cell
-            )
-        return (
-            demand.kind is PortAccessKind.INTERNAL_ARRIVAL
-            and prepared.net_id.role not in (NetRole.EXTERNAL, NetRole.EXTERNAL_OUTPUT)
-            and destination == demand.cell
-        )
 
     preparation_failures = tuple(
         static_access_failure(prepared, demand.cell)
         for demand in access_reservation.missing
         for prepared in (
-            next(
-                (candidate for candidate in all_prepared_nets if matches_demand(candidate, demand)),
-                None,
-            ),
+            next(iter(net_index.matching_demand(demand.item, demand.kind.value, demand.cell)), None),
         )
         if prepared is not None
     )
@@ -20980,8 +20943,17 @@ class FreeformLayout:
             except ValueError:
                 return width
 
+        def index_strips() -> dict[tuple[StripFamilyId | None, int, int], Strip]:
+            return {
+                (strip.family_id, strip.machine_start, strip.machines): strip
+                for strip in reversed(strips)
+            }
+
+        strips_by_instance = index_strips()
+
         def replan_strips_for_learned_geometry() -> None:
             nonlocal strips, greedy, bound, direct_candidate_snapshot, net_candidates, seeds
+            nonlocal strips_by_instance
 
             replan_strip_len = max(strip.machines for strip in strips)
             strips = plan_strips(
@@ -20992,6 +20964,7 @@ class FreeformLayout:
                 minimum_staged_static_clearance=(minimum_staged_static_clearance),
                 cancelled=cancelled,
             )
+            strips_by_instance = index_strips()
             greedy = greedy_seed(_height_seed(strips))
             bound = max(
                 greedy.width,
@@ -21627,15 +21600,12 @@ class FreeformLayout:
                     clearance_exhausted = False
                     requirement = exc.clearance_requirement
                     if requirement is not None:
-                        selected_strip = next(
+                        selected_strip = strips_by_instance.get(
                             (
-                                strip
-                                for strip in strips
-                                if strip.family_id == requirement.instance_id.family_id
-                                and strip.machine_start == requirement.instance_id.machine_start
-                                and strip.machines == requirement.instance_id.machine_count
-                            ),
-                            None,
+                                requirement.instance_id.family_id,
+                                requirement.instance_id.machine_start,
+                                requirement.instance_id.machine_count,
+                            )
                         )
                         if (
                             selected_strip is not None

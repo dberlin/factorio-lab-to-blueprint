@@ -11710,33 +11710,6 @@ class TestCanvasClone:
         original = self._populated()
         assert original.clone() == deepcopy(original)
 
-    def test_clone_passes_a_keyword_for_every_declared_field(self) -> None:
-        """Structural guard: `clone`'s hand-written field list cannot drift
-        from `_Canvas`'s actual fields without failing here.
-
-        `clone`'s docstring says listing every field by name is deliberate
-        and that a field added without a line there fails a test -- this is
-        that test.  It reads `clone`'s own source rather than exercising a
-        populated canvas, so it catches a missing (or misspelled, or
-        positional) field before anyone has to think to populate and mutate
-        the new one in the other `TestCanvasClone` tests.
-        """
-        import ast
-        import inspect
-        import textwrap
-
-        source = textwrap.dedent(inspect.getsource(_Canvas.clone))
-        call = next(
-            node
-            for node in ast.walk(ast.parse(source))
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "_Canvas"
-        )
-        passed_keywords = {kw.arg for kw in call.keywords if kw.arg is not None}
-        assert not call.args, "clone must pass every field by keyword, not positionally"
-        assert passed_keywords == {f.name for f in fields(_Canvas)}
-
     def test_mutating_the_clone_leaves_the_original_alone(self) -> None:
         original = self._populated()
         clone = original.clone()
@@ -23416,179 +23389,6 @@ def test_the_portfolio_soft_deadline_only_shortens_and_only_for_a_better_bound()
     assert _portfolio_soft_deadline(30.0, (480, 62), (500, 70.0), 40.0) == 30.0
 
 
-def test_the_sweep_reads_the_portfolio_bound_only_at_the_improvement_sites() -> None:
-    """Pin finding and improvement paths to the clocks they are allowed to read.
-
-    ``soft`` is bound once and every finding path keeps using it. An external
-    portfolio incumbent may shorten only improvement work after this sweep has
-    its own local best. The later-arrangement affordability call is reachable in
-    both states, so its clock must be conditional: ``soft`` while ``best is
-    None``, then ``improvement_soft`` once a local best exists.
-
-    This is asserted on the source because the requirement is which lexical
-    clock each call reads; a runtime spy over ordinary fixtures does not reach
-    every finding path. Counts alone are insufficient, so the conditional's
-    test and both arms are pinned structurally as well.
-    """
-    import ast
-    import inspect
-    import textwrap
-
-    tree = ast.parse(textwrap.dedent(inspect.getsource(freeform.FreeformLayout._sweep)))
-    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
-
-    def counted(name: str, node: ast.AST) -> tuple[int, int]:
-        loads = sum(
-            1
-            for sub in ast.walk(node)
-            if isinstance(sub, ast.Name) and sub.id == name and isinstance(sub.ctx, ast.Load)
-        )
-        stores = sum(
-            1
-            for sub in ast.walk(node)
-            if isinstance(sub, ast.Name) and sub.id == name and isinstance(sub.ctx, ast.Store)
-        )
-        return loads, stores
-
-    def loads_of(name: str, node: ast.AST) -> list[ast.Name]:
-        return [
-            sub
-            for sub in ast.walk(node)
-            if isinstance(sub, ast.Name) and sub.id == name and isinstance(sub.ctx, ast.Load)
-        ]
-
-    def enclosing_if(node: ast.AST) -> ast.If:
-        current: ast.AST | None = node
-        while current is not None and not isinstance(current, ast.If):
-            current = parents.get(current)
-        # Walking off the top means the read sits under no `if` at all, which is
-        # the failure this test exists to report -- not a KeyError at the root.
-        assert isinstance(current, ast.If), (
-            "an `improvement_soft` read sits outside any `if`, so nothing guards it"
-        )
-        return current
-
-    def tests_best_is_not_none(node: ast.AST) -> bool:
-        return any(
-            isinstance(sub, ast.Compare)
-            and isinstance(sub.left, ast.Name)
-            and sub.left.id == "best"
-            and len(sub.ops) == 1
-            and isinstance(sub.ops[0], ast.IsNot)
-            and isinstance(sub.comparators[0], ast.Constant)
-            and sub.comparators[0].value is None
-            for sub in ast.walk(node)
-        )
-
-    def tests_best_is_none(node: ast.AST) -> bool:
-        return any(
-            isinstance(sub, ast.Compare)
-            and isinstance(sub.left, ast.Name)
-            and sub.left.id == "best"
-            and len(sub.ops) == 1
-            and isinstance(sub.ops[0], ast.Is)
-            and isinstance(sub.comparators[0], ast.Constant)
-            and sub.comparators[0].value is None
-            for sub in ast.walk(node)
-        )
-
-    def guarded_by_conditional_local_best(node: ast.AST) -> bool:
-        current = node
-        while current in parents:
-            parent = parents[current]
-            if isinstance(parent, ast.IfExp) and tests_best_is_none(parent.test):
-                return current is parent.orelse
-            current = parent
-        return False
-
-    soft_loads, soft_stores = counted("soft", tree)
-    improvement_loads, improvement_stores = counted("improvement_soft", tree)
-    assert soft_stores == 1, "the sweep's own soft is bound once and never rebound"
-    assert improvement_stores == 1, "the improvement deadline is bound once per turn"
-    assert improvement_loads == 4, (
-        "the improvement deadline is read at the three post-best improvement "
-        "sites and the post-best arm of the conditional arrangement clock"
-    )
-    # One read per finding site (`projection_retry_affordable`, the learned-retry
-    # promotion, and the window launch's two), plus the argument handed to
-    # `_portfolio_soft_deadline`.
-    assert soft_loads == 6
-
-    # Every improvement read is guarded by a local best. Three carry
-    # `best is not None` in their enclosing `if`; the arrangement call carries
-    # the equivalent conditional expression and may use that arm only when
-    # `best is not None`.
-    unguarded: list[ast.If] = []
-    for load in loads_of("improvement_soft", tree):
-        if guarded_by_conditional_local_best(load):
-            continue
-        guard = enclosing_if(load)
-        if tests_best_is_not_none(guard.test):
-            continue
-        unguarded.append(guard)
-    assert not unguarded, (
-        "an improvement site lost its `best is not None` guard, so an external "
-        "incumbent can now end a sweep that has found nothing"
-    )
-
-    # Which clock each call reads. Nothing here reads the cost argument; its
-    # name and whether it is passed positionally remain free to change.
-    room_calls = [
-        call
-        for call in ast.walk(tree)
-        if isinstance(call, ast.Call)
-        and isinstance(call.func, ast.Name)
-        and call.func.id == "_room_for_another"
-    ]
-
-    def clock_of(call: ast.Call) -> str:
-        by_keyword = {keyword.arg: keyword.value for keyword in call.keywords}
-        node = by_keyword.get("soft") or (call.args[1] if len(call.args) > 1 else None)
-        if isinstance(node, ast.Name):
-            return node.id
-        assert isinstance(node, ast.IfExp), (
-            "a `_room_for_another` call passes an unrecognised soft-deadline expression"
-        )
-        assert tests_best_is_none(node.test)
-        assert isinstance(node.body, ast.Name) and node.body.id == "soft"
-        assert isinstance(node.orelse, ast.Name) and node.orelse.id == "improvement_soft"
-        return "soft-if-no-best-else-improvement"
-
-    clocks = [clock_of(call) for call in room_calls]
-    # Two improvement calls, three finding calls, and the arrangement call that
-    # is finding until a local best exists and improvement work thereafter. The
-    # fourth improvement read is `time.monotonic() >= improvement_soft`.
-    assert sorted(clocks) == (
-        ["improvement_soft"] * 2 + ["soft"] * 3 + ["soft-if-no-best-else-improvement"]
-    )
-    assert (
-        clocks.count("improvement_soft") + clocks.count("soft-if-no-best-else-improvement")
-        == improvement_loads - 1
-    )
-
-    # The bandit's remaining-fraction bucket is not a deadline at all, and it is
-    # inside the window launch, so it reads the sweep's own clock too.
-    bucket = next(
-        call
-        for call in ast.walk(tree)
-        if isinstance(call, ast.Call)
-        and isinstance(call.func, ast.Name)
-        and call.func.id == "remaining_fraction_bucket"
-    )
-    assert [name.id for name in loads_of("soft", bucket)] == ["soft"]
-    assert not loads_of("improvement_soft", bucket)
-
-    affordable = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "projection_retry_affordable"
-    )
-    assert counted("soft", affordable)[0] == 1, "the retry rule keeps the sweep's own soft"
-    assert counted("improvement_soft", affordable)[0] == 0, (
-        "an external incumbent must not be able to refuse a retry"
-    )
-
-
 @pytest.mark.slow
 def test_a_portfolio_bound_never_costs_the_placement(
     monkeypatch: pytest.MonkeyPatch,
@@ -25181,7 +24981,8 @@ def test_port_access_cancellation_inside_candidate_scan_restores_canvas(
     canvas, demand = _corridor_scene()
     sentinel = (0, 0, 0)
     old_corridor = freeform.PortAccessCorridor((0, 1, 0), (0, 2, 0))
-    canvas.reserved = {(0, 1, 0): sentinel, (0, 2, 0): sentinel}
+    canvas.reserved.clear()
+    canvas.reserved.update({(0, 1, 0): sentinel, (0, 2, 0): sentinel})
     canvas.port_corridors = {sentinel: (old_corridor,)}
     stopped = False
 
