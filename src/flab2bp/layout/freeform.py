@@ -106,7 +106,8 @@ from flab2bp.layout.base import (
     ProjectionFailureRecord,
 )
 from flab2bp.layout.belt_tiers import retier_belts
-from flab2bp.layout.buildings import Buildings, Kind as BuildingKind, MutableBuildings, bounds_of
+from flab2bp.layout.buildings import Buildings, MutableBuildings, bounds_of
+from flab2bp.layout.buildings import Kind as BuildingKind
 from flab2bp.layout.coater_mode import coater_mode
 from flab2bp.layout.finalize import ProjectionNoGood
 from flab2bp.layout.observe import SearchEvent, SearchObserver, SearchPhase, stranded_endpoints
@@ -5977,16 +5978,18 @@ class _Canvas:
                 # A diagonal bounds every rotation of a standing Splitter.
                 # The exact collider check still decides legality.
                 splitter_span = math.hypot(*catalog.collider_span(catalog.SPLITTER_ID, 0.0))
-                radius = (
-                    _static_collider_span(stack_member) + splitter_span
-                ) / (2.0 * colliders.GRID_ARC) + 3.0
+                radius = (_static_collider_span(stack_member) + splitter_span) / (
+                    2.0 * colliders.GRID_ARC
+                ) + 3.0
                 centre_x = stack_member.x + (stack_member.width - 1) / 2.0
                 centre_y = stack_member.y + (stack_member.height - 1) / 2.0
                 indices = tuple(
                     index
                     for index in self.buildings.in_box(
-                        math.floor(centre_x - radius), math.floor(centre_y - radius),
-                        math.ceil(centre_x + radius), math.ceil(centre_y + radius),
+                        math.floor(centre_x - radius),
+                        math.floor(centre_y - radius),
+                        math.ceil(centre_x + radius),
+                        math.ceil(centre_y + radius),
                     )
                     if self.buildings[index].item_id == catalog.SPLITTER_ID
                 )
@@ -8959,7 +8962,12 @@ def _prepared_candidate_area_lower_bound(problem: _PreparedRoutingProblem) -> in
     survivors = tuple(
         problem.building_templates[index]
         for index in sorted(
-            (*protected, *indexed.machines(), *indexed.sorters(), *indexed.by_kind(BuildingKind.OTHER))
+            (
+                *protected,
+                *indexed.machines(),
+                *indexed.sorters(),
+                *indexed.by_kind(BuildingKind.OTHER),
+            )
         )
     )
     if not survivors:
@@ -10075,7 +10083,7 @@ def _route_all(
         direct_ports: set[int] = set()
         direct_ports_valid = True
         source_belt = canvas.buildings[source.belt]
-        incoming = building_predecessors[source.belt]
+        incoming = canvas.buildings.belts_into(source.belt)
         mixed_height = needs_junction and bool(source.z % 2)
         carry_direction: tuple[int, int] | None = None
         if mixed_height:
@@ -12784,24 +12792,23 @@ def _source_for(
             and other is not None
             and who not in own
             and who != net.dst.belt
-        ):
-            if (
-                catalog.is_belt(other.item_id)
-                and other.carries_item == net.item
-                and (
-                    _legal_link(
-                        other.x,
-                        other.y,
-                        other.z,
-                        head.x,
-                        head.y,
-                        head.z,
-                        ramped=canvas.ramped,
-                    )
-                    or _mixed_height_branch_endpoint(hint, head)
+        ) and (
+            catalog.is_belt(other.item_id)
+            and other.carries_item == net.item
+            and (
+                _legal_link(
+                    other.x,
+                    other.y,
+                    other.z,
+                    head.x,
+                    head.y,
+                    head.z,
+                    ramped=canvas.ramped,
                 )
-            ):
-                return who
+                or _mixed_height_branch_endpoint(hint, head)
+            )
+        ):
+            return who
         # A selected frontier hint may be overwritten with the committed
         # branch head when a path is restaked.  Ownership is not authoritative:
         # another co-located attachment may replace ``blocked[hint]`` before
@@ -13146,8 +13153,12 @@ def _sink_for(
             return None
         who = canvas.blocked.get(hint)
         other = canvas.buildings.by_index(who)
-        if hint in kin and who is not None and other is not None and who not in own:
-            if (
+        if (
+            hint in kin
+            and who is not None
+            and other is not None
+            and who not in own
+            and (
                 catalog.is_belt(other.item_id)
                 and _legal_link(
                     tail.x,
@@ -13159,8 +13170,9 @@ def _sink_for(
                     ramped=canvas.ramped,
                 )
                 and not _leads_back(canvas, who, own)
-            ):
-                return who
+            )
+        ):
+            return who
         return None
     # `tail` rests on a level, so it has a lattice cell; a ramp tile would
     # not, and `_lattice_cell` says so rather than rounding it onto one.
@@ -13222,7 +13234,11 @@ def _run_cells(
         for idx in frontier:
             b = canvas.buildings[idx]
             onward = b.output_obj
-            if onward is not None and canvas.buildings.by_index(onward) is not None and onward not in seen:
+            if (
+                onward is not None
+                and canvas.buildings.by_index(onward) is not None
+                and onward not in seen
+            ):
                 seen.add(onward)
                 nxt.append(onward)
             for j in into(idx):
@@ -15446,8 +15462,11 @@ def _power_plan(
         if 0 <= gx < shape[0] and 0 <= gy < shape[1]:
             dark[gx, gy] = True
     for index in sorted(
-        (*canvas.buildings.machines(), *canvas.buildings.sorters(),
-         *canvas.buildings.by_kind(BuildingKind.OTHER))
+        (
+            *canvas.buildings.machines(),
+            *canvas.buildings.sorters(),
+            *canvas.buildings.by_kind(BuildingKind.OTHER),
+        )
     ):
         b = canvas.buildings[index]
         if cancelled is not None and cancelled():
@@ -18234,15 +18253,13 @@ def _bridge(
         buildings[target].x
         for target in source_tiles
         for sorter_index in buildings.sorters_into(target)
-        if (origin := buildings[sorter_index].input_obj) is not None
-        and is_machine(origin)
+        if (origin := buildings[sorter_index].input_obj) is not None and is_machine(origin)
     ]
     destination_pickups = [
         buildings[source].x
         for source in destination_tiles
         for sorter_index in buildings.sorters_out_of(source)
-        if (target := buildings[sorter_index].output_obj) is not None
-        and is_machine(target)
+        if (target := buildings[sorter_index].output_obj) is not None and is_machine(target)
     ]
     # Port-driven machines attach directly to a belt rather than through a
     # sorter.  Direct candidates currently exclude port-driven sources, but
@@ -18718,8 +18735,7 @@ def _place_coaters(
         cancelled=cancelled,
     )
     splitter_buildings = tuple(
-        (index, canvas.buildings[index])
-        for index in canvas.buildings.by_item(catalog.SPLITTER_ID)
+        (index, canvas.buildings[index]) for index in canvas.buildings.by_item(catalog.SPLITTER_ID)
     )
     projected_capacity = (
         canvas.limit or _grow(_core_bounds(canvas), _ENTRY_RING) if splitter_buildings else None

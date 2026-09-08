@@ -411,9 +411,7 @@ class Context:
             else:
                 candidates = self.buildings_index.machines()
             got = tuple(
-                (i, self.placement.buildings[i])
-                for i in candidates
-                if self.kinds[i] is kind
+                (i, self.placement.buildings[i]) for i in candidates if self.kinds[i] is kind
             )
             self.cache.of_kind[kind] = got
         return iter(got)

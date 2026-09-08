@@ -711,8 +711,7 @@ def _pack_at(
     building_index = Buildings(buildings)
 
     fallback_machine_counts = [
-        sum(building.recipe_id != 0 for building in block.placement.buildings)
-        for block in blocks
+        sum(building.recipe_id != 0 for building in block.placement.buildings) for block in blocks
     ]
     canvas = canvas_for(spec, buildings, ramped=ramped, margin=margin)
 
@@ -728,14 +727,20 @@ def _pack_at(
                     building_index,
                     src_index,
                     _machines_behind(
-                        building_index, src_block, src_index, fallback_machine_counts[flow.src.block]
+                        building_index,
+                        src_block,
+                        src_index,
+                        fallback_machine_counts[flow.src.block],
                     ),
                 ),
                 dst=_port(
                     building_index,
                     dst_index,
                     _machines_behind(
-                        building_index, dst_block, dst_index, fallback_machine_counts[flow.dst.block]
+                        building_index,
+                        dst_block,
+                        dst_index,
+                        fallback_machine_counts[flow.dst.block],
                     ),
                 ),
                 item=flow.item,

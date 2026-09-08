@@ -370,18 +370,27 @@ def test_port_host_boundary_lane_receives_its_share_of_assigned_supply():
     b = PlacedBuilding
     placement = Placement(
         buildings=(
-            b(item_id=BELT, model_index=belt.model_index, x=0, y=0,
-              output_obj=1, carries_item="ingredientB"),
-            b(item_id=host.item_id, model_index=host.model_index, x=1, y=0,
-              width=host.width, height=host.height),
+            b(
+                item_id=BELT,
+                model_index=belt.model_index,
+                x=0,
+                y=0,
+                output_obj=1,
+                carries_item="ingredientB",
+            ),
+            b(
+                item_id=host.item_id,
+                model_index=host.model_index,
+                x=1,
+                y=0,
+                width=host.width,
+                height=host.height,
+            ),
             b(item_id=BELT, model_index=belt.model_index, x=10, y=0, input_obj=1),
-            b(item_id=SORTER, model_index=sorter.model_index, x=10, y=0,
-              input_obj=2, output_obj=4),
+            b(item_id=SORTER, model_index=sorter.model_index, x=10, y=0, input_obj=2, output_obj=4),
             b(item_id=2303, model_index=assembler.model_index, x=10, y=2, recipe_id=100),
-            b(item_id=BELT, model_index=belt.model_index, x=20, y=0,
-              carries_item="ingredientB"),
-            b(item_id=SORTER, model_index=sorter.model_index, x=20, y=0,
-              input_obj=5, output_obj=7),
+            b(item_id=BELT, model_index=belt.model_index, x=20, y=0, carries_item="ingredientB"),
+            b(item_id=SORTER, model_index=sorter.model_index, x=20, y=0, input_obj=5, output_obj=7),
             b(item_id=2303, model_index=assembler.model_index, x=20, y=2, recipe_id=100),
         )
     )
