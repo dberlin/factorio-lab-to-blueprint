@@ -538,6 +538,20 @@ class TestBoundaryRule:
         assert unsupplied_inputs(pristine, data, inputs) == ("proliferator-3",)
         assert unsupplied_inputs(pristine, data, inputs, exempt=frozenset({"proliferator-3"})) == ()
 
+    def test_partial_supplied_crafted_item_does_not_authorize_a_stray_input(
+        self, pristine: FlowSelection, data: Dataset
+    ) -> None:
+        """A crafted row hides the declared supply, not permission for other belts."""
+        inputs = {
+            "fire-ice": Fraction(1),
+            "graphene": Fraction(1, 2),
+            "stone": Fraction(1),
+        }
+        assert unsupplied_inputs(pristine, data, inputs) == ("graphene", "stone")
+        assert unsupplied_inputs(pristine, data, inputs, exempt=frozenset({"graphene"})) == (
+            "stone",
+        )
+
     def test_an_explicit_empty_external_map_does_not_restore_flow_inputs(
         self, pristine: FlowSelection, data: Dataset
     ) -> None:

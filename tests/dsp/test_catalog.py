@@ -491,10 +491,32 @@ def test_recipe_aliases_resolve(factoriolab_id: str, dsp_recipe_id: int) -> None
         # with no item id gets no marker icon.
         ("optical-grating-crystal", 1014),
         ("spiniform-stalagmite-crystal", 1015),
+        ("df-negentropy-smelter", 2319),
+        ("df-recomposing-assembler", 2318),
+        ("df-self-evolution-lab", 2902),
+        ("df-plasma-turret-sr", 3010),
     ],
 )
 def test_item_aliases_resolve(factoriolab_id: str, dsp_item_id: int) -> None:
     assert catalog.get_item_id(factoriolab_id) == dsp_item_id
+
+
+def test_dark_fog_physical_aliases_reach_building_geometry() -> None:
+    assert catalog.footprint(catalog.item_id("df-negentropy-smelter")) == (3, 3)
+    assert catalog.footprint(catalog.item_id("df-recomposing-assembler")) == (3, 3)
+    assert catalog.building(catalog.item_id("df-plasma-turret-sr")).item_id == 3010
+
+
+def test_canonical_recipe_identity_keeps_its_own_membership_guard() -> None:
+    assert catalog.canonical_recipe_id("df-recomposing-assembler") == "re-composing-assembler"
+    # A known item is not automatically a crafting recipe: photons are a mode.
+    assert catalog.canonical_item_id("df-critical-photon") == "critical-photon"
+    assert catalog.canonical_recipe_id("df-critical-photon") == "df-critical-photon"
+    assert catalog.canonical_recipe_id("df-future-craft") == "df-future-craft"
+    assert catalog.canonical_item_id("df-future-machine") == "df-future-machine"
+    assert catalog.get_item_id("df-future-machine") is None
+    with pytest.raises(KeyError, match="df-future-machine"):
+        catalog.item_id("df-future-machine")
 
 
 def test_every_dsp_recipe_is_reachable_by_its_factoriolab_id() -> None:
