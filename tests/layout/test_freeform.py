@@ -18066,7 +18066,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         monkeypatch.setattr(
             freeform,
             "_coater_keepout_hits",
-            lambda _buildings, _candidate: (),
+            lambda _buildings, _candidate, *, max_obstacle_span=None: (),
         )
         monkeypatch.setattr(
             freeform,
@@ -18124,7 +18124,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         monkeypatch.setattr(
             freeform,
             "_coater_keepout_hits",
-            lambda _buildings, _candidate: (),
+            lambda _buildings, _candidate, *, max_obstacle_span=None: (),
         )
         monkeypatch.setattr(
             freeform,
@@ -18168,6 +18168,8 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         def keepout_hits(
             _buildings: Sequence[PlacedBuilding],
             candidate: PlacedBuilding,
+            *,
+            max_obstacle_span: float | None = None,
         ) -> tuple[int, ...]:
             keepout.append(candidate.x)
             return (obstacle_index,) if candidate.x == 2 else ()
