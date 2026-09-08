@@ -25684,7 +25684,9 @@ class TestALargePowerBuildingClaimsItsWholeFootprint:
             for bx, by, bw, bh, item in boxes:
                 if item == self.SUBSTATION_ID and (bx, by) == (px, py):
                     continue
-                overlaps = px - 1 < bx + bw and bx < px + pw + 1 and py - 1 < by + bh and by < py + ph + 1
+                overlaps = (
+                    px - 1 < bx + bw and bx < px + pw + 1 and py - 1 < by + bh and by < py + ph + 1
+                )
                 assert not overlaps, f"substation at {(px, py)} overlaps item {item} at {(bx, by)}"
 
     def test_two_planned_substations_never_land_on_each_other(self) -> None:
@@ -25803,7 +25805,9 @@ class TestALargePowerBuildingClaimsItsWholeFootprint:
         ]
         for sx, sy, sw, sh in subs:
             for cx, cy, cw, ch in carriers:
-                overlaps = sx - 1 < cx + cw and cx < sx + sw + 1 and sy - 1 < cy + ch and cy < sy + sh + 1
+                overlaps = (
+                    sx - 1 < cx + cw and cx < sx + sw + 1 and sy - 1 < cy + ch and cy < sy + sh + 1
+                )
                 assert not overlaps, (
                     f"belt/sorter at {(cx, cy)} {(cw, ch)} inside substation at {(sx, sy)}"
                 )
@@ -25825,7 +25829,9 @@ class TestALargePowerBuildingClaimsItsWholeFootprint:
         ]
         for sx, sy, sw, sh in subs:
             for bx, by, bw, bh in others:
-                overlaps = sx - 1 < bx + bw and bx < sx + sw + 1 and sy - 1 < by + bh and by < sy + sh + 1
+                overlaps = (
+                    sx - 1 < bx + bw and bx < sx + sw + 1 and sy - 1 < by + bh and by < sy + sh + 1
+                )
                 assert not overlaps, f"substation at {(sx, sy)} overlaps a building at {(bx, by)}"
 
     def test_a_substation_build_certifies_clean(

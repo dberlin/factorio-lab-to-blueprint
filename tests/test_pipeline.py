@@ -299,8 +299,11 @@ def completed_layout(monkeypatch: pytest.MonkeyPatch) -> Placement:
     [
         (None, None, "tesla-tower"),
         (None, ["arc-smelter"], "tesla-tower"),
-        (None, ["arc-smelter", "wireless-power-tower", "satellite-substation"],
-         "wireless-power-tower"),
+        (
+            None,
+            ["arc-smelter", "wireless-power-tower", "satellite-substation"],
+            "wireless-power-tower",
+        ),
         (None, ["satellite-substation", "wireless-power-tower"], "satellite-substation"),
         ("tesla", ["satellite-substation"], "tesla-tower"),
         ("substation", ["wireless-power-tower"], "satellite-substation"),
@@ -327,8 +330,11 @@ def test_hashed_url_power_choice_reaches_the_blueprint_description(
     inner = f"o={item}*60&mmr={tower}&v=11"
     url = f"https://factoriolab.github.io/dsp/flow?z={P.deflate(inner)}&v=11"
     result = pipeline.build(
-        url, strategy="freeform", candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
-        workers=1, time_budget_s=0.5,
+        url,
+        strategy="freeform",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        workers=1,
+        time_budget_s=0.5,
     )
     assert result.spec.power_tower_item_id == "satellite-substation"
     assert "; power: Satellite Substation" in codec.decode(result.blueprint).header.description
@@ -337,12 +343,19 @@ def test_hashed_url_power_choice_reaches_the_blueprint_description(
 
 def test_explicit_tesla_keeps_default_blueprint_bytes(completed_layout: Placement) -> None:
     implicit = pipeline.build(
-        SMALL_URL, strategy="freeform",
-        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,), workers=1, time_budget_s=0.5,
+        SMALL_URL,
+        strategy="freeform",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        workers=1,
+        time_budget_s=0.5,
     )
     explicit = pipeline.build(
-        SMALL_URL, strategy="freeform", power_tower="tesla",
-        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,), workers=1, time_budget_s=0.5,
+        SMALL_URL,
+        strategy="freeform",
+        power_tower="tesla",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        workers=1,
+        time_budget_s=0.5,
     )
     assert implicit.placement.description == explicit.placement.description
     assert codec.encode(implicit.placement, timestamp=0) == codec.encode(

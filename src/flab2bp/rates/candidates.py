@@ -540,9 +540,7 @@ def _build_candidates_canonical(
         mode_policy=ProliferatorMode.NONE,
         time_limit_s=time_limit_s,
     )
-    baseline_spec = _to_build_spec(
-        data, request, baseline, "no-proliferator", power_tower_item_id
-    )
+    baseline_spec = _to_build_spec(data, request, baseline, "no-proliferator", power_tower_item_id)
     _refuse_derived_dark_fog(baseline_spec)
     baseline_machines = baseline_spec.machine_count
     specs: list[BuildSpec] = []

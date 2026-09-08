@@ -167,8 +167,12 @@ def tower(x: int, y: int) -> PlacedBuilding:
 def power_node(item_id: int, x: int, y: int) -> PlacedBuilding:
     info = catalog.building(item_id)
     return PlacedBuilding(
-        item_id=item_id, model_index=info.model_index, x=x, y=y,
-        width=info.width, height=info.height,
+        item_id=item_id,
+        model_index=info.model_index,
+        x=x,
+        y=y,
+        width=info.width,
+        height=info.height,
     )
 
 

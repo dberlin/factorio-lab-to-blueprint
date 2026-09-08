@@ -44,6 +44,7 @@ from flab2bp.layout.freeform import (
     _Net,
     _Port,
     _port_access_inventory,
+    _power_reservation,
     _PreparationDeadline,
     _reserve_port_access,
     _reserve_staged_coater_belt_ban,
@@ -401,9 +402,11 @@ def canvas_for(
     Each kind is registered the way the pass that BUILDS it registers it, and
     the differences are not cosmetic:
 
-    * machines and Tesla towers are ``solid=True`` (``_emit_strip`` ~6575,
+    * machines and power buildings are ``solid=True`` (``_emit_strip`` ~6575,
       ``_place_power`` ~15705), so ``_crossing_ban_levels`` writes the band
       from the ground to their collider's top into ``blocked``;
+    * non-Tesla power buildings retain their planned collider-clearance halo,
+      so cut routes cannot occupy ground outside the copied footprint;
     * belts, Splitters and Pilers are ``solid=False``, holding only their own
       level -- but a Splitter ALSO stakes ``canvas.guard`` with its collider
       cross (``_place_junctions`` ~13269), which ``_Canvas.free`` treats as a
@@ -419,12 +422,15 @@ def canvas_for(
     Index order is the composed buildings list's own, because every ``_Port``
     and ``_Net`` indexes into ``canvas.buildings``.
     """
+    tower = catalog.power_tower_building(spec.power_tower_item_id)
     canvas = _Canvas(
         ramped=ramped,
         sorter_tiers=_sorter_tiers_for(spec),
         sorter_stacks=_sorter_stacks_for(spec),
         lane_stacks=_lane_stacks_for(spec),
+        power_building=tower,
     )
+    power_halo = _power_reservation(tower) if tower.item_id != catalog.TESLA_TOWER_ID else None
     coaters: list[int] = []
     for b in buildings:
         if catalog.is_sorter(b.item_id):
@@ -448,6 +454,11 @@ def canvas_for(
                 )
         else:
             canvas.add(b, solid=True)
+            if power_halo is not None and b.item_id == tower.item_id:
+                x0, y0, x1, y1 = power_halo
+                canvas.keep_out.update(
+                    (b.x + dx, b.y + dy) for dx in range(x0, x1) for dy in range(y0, y1)
+                )
     if coaters:
         belt_model = _belt_model_for(spec)
         for index in coaters:
