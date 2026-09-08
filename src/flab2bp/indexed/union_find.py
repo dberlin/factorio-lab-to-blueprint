@@ -17,10 +17,8 @@ freeform.py writes this structure from scratch three times, at HEAD:
   balance ties ("root order as the deterministic tie-breaker" -- freeform.py
   near :16162). That is the one place root *identity*, not just set
   membership, can reach output, and it is unreachable by rank-based union
-  standing in for their unranked one except by coincidence. Both closures'
-  own comments call this an "implementation artefact" already tolerated
-  today; Task 26 must not rely on `find()`'s return value for that
-  tie-break and should re-derive it from `groups()`'s member order instead.
+  standing in for their unranked one except by coincidence. Those callers use
+  ``union(..., keep_right=True)`` to preserve their exact historical roots.
 
 Backend: plain dict-backed arrays, not `networkx.utils.UnionFind` -- that
 pulls a graph library into freeform's hot path for a structure with no query
@@ -61,12 +59,16 @@ class UnionFind:
             parent[node], node = root, parent[node]
         return root
 
-    def union(self, left: Hashable, right: Hashable) -> bool:
-        """Merge two sets. Returns whether they were distinct."""
+    def union(self, left: Hashable, right: Hashable, *, keep_right: bool = False) -> bool:
+        """Merge sets, optionally retaining the right root for ordered consumers."""
         left_root = self.find(left)
         right_root = self.find(right)
         if left_root == right_root:
             return False
+        if keep_right:
+            self._parent[left_root] = right_root
+            self._rank[right_root] = max(self._rank[right_root], self._rank[left_root] + 1)
+            return True
         if self._rank[left_root] < self._rank[right_root]:
             left_root, right_root = right_root, left_root
         self._parent[right_root] = left_root

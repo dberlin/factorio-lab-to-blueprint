@@ -68,3 +68,15 @@ def test_an_untouched_node_is_its_own_group() -> None:
     uf = UnionFind()
     assert uf.find("x") == "x"
     assert uf.groups() == (("x",),)
+
+
+def test_right_root_policy_survives_rank_imbalance_and_later_merges() -> None:
+    uf = UnionFind()
+    uf.union(1, 2)
+    uf.union(3, 4)
+    uf.union(1, 3)
+    uf.union(1, 9, keep_right=True)
+    assert all(uf.find(node) == 9 for node in (1, 2, 3, 4, 9))
+    uf.union(9, 7, keep_right=True)
+    assert all(uf.find(node) == 7 for node in (1, 2, 3, 4, 9, 7))
+    assert not uf.union(2, 3, keep_right=True)
