@@ -129,6 +129,8 @@ export function BuildReportPanel({
             </ul>
           )}
         </dd>
+        <dt>Power</dt>
+        <dd>{result.power_building}</dd>
         <dt>Area</dt>
         <dd>{area} tiles</dd>
         <dt>primary_band</dt>

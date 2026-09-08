@@ -28,6 +28,24 @@ from flab2bp.web.server import serve
 URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
 
 
+def test_web_power_override_reaches_pipeline_and_is_echoed(
+    monkeypatch: pytest.MonkeyPatch, small_build: pipeline.Build
+) -> None:
+    def solve(url: str, **kwargs: object) -> pipeline.Build:
+        assert kwargs["power_tower"] == "substation"
+        return small_build
+
+    monkeypatch.setattr(pipeline, "build", solve)
+    builder = Builder()
+    try:
+        job = builder.submit(parse_options({"url": URL, "power_tower": "substation"}))
+        snapshot = _settled(builder, job.id)
+        assert snapshot["state"] == "done"
+        assert _object(snapshot["options"])["power_tower"] == "substation"
+    finally:
+        builder.shutdown()
+
+
 @pytest.mark.parametrize("legacy_power", [False, True])
 def test_server_rejects_legacy_power_payload(
     legacy_power: bool,

@@ -1,0 +1,348 @@
+{
+  "request": {
+    "url": "https://factoriolab.github.io/dsp/flow?z=eJzLt3Uq0jIzUMvNLbINVyuzNTQEADLjBTI_&v=11",
+    "strategy": "freeform",
+    "candidate_policies": [
+      "no-proliferator"
+    ],
+    "budget_s": 30,
+    "proliferator_tier": "auto",
+    "power_tower": "wireless",
+    "band": "portable",
+    "name": "",
+    "allow_invalid": false,
+    "fetch_flow": false,
+    "flow": "",
+    "trace": false
+  },
+  "job": {
+    "id": "547251c42b52",
+    "state": "done",
+    "elapsed_s": 3.04,
+    "solver_ceiling_s": 30,
+    "warning": null,
+    "options": {
+      "url": "https://factoriolab.github.io/dsp/flow?z=eJzLt3Uq0jIzUMvNLbINVyuzNTQEADLjBTI_&v=11",
+      "strategy": "freeform",
+      "band": "portable",
+      "candidate_policies": [
+        "no-proliferator"
+      ],
+      "budget_s": 30,
+      "power_tower": "wireless",
+      "proliferator_tier": "auto",
+      "allow_invalid": false,
+      "name": "",
+      "flow_supplied": false,
+      "trace": false
+    },
+    "result": {
+      "blueprint": "BLUEPRINT:1,10,0,0,0,0,0,0,639244227239611264,0.10.34.28529,electromagnetic-matrix%2060%2Fmin,flab2bp,,,flab2bp%20freeform%20layout%2C%20no-proliferator%20candidate%2C%209%20machines%2C%20609%20tiles%3B%20power%3A%20Wireless%20Power%20Tower\"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\"4E25FE3596F663B63CE9DA2A29BD592E",
+      "valid": true,
+      "strategy": "freeform",
+      "candidate": "no-proliferator",
+      "machines": 9,
+      "power_building": "Wireless Power Tower",
+      "pilers": 0,
+      "area": 609,
+      "primary_band": 100,
+      "certified_bands": [
+        100,
+        120,
+        160
+      ],
+      "buildings": 211,
+      "title": "electromagnetic-matrix 60/min",
+      "description": "flab2bp freeform layout, no-proliferator candidate, 9 machines, 609 tiles; power: Wireless Power Tower",
+      "outputs": {
+        "electromagnetic-matrix": {
+          "exact": "1",
+          "per_minute": 60
+        }
+      },
+      "external_inputs": {
+        "copper-ore": {
+          "exact": "1",
+          "per_minute": 60
+        },
+        "iron-ore": {
+          "exact": "2",
+          "per_minute": 120
+        }
+      },
+      "self_loop_seeds": {},
+      "input_markers": 3,
+      "unmarked_inputs": [],
+      "flow_pinned": false,
+      "flow_findings": [],
+      "belt_rules": {
+        "max_z": 26.55,
+        "lab_level": 9,
+        "vertical_construction": true,
+        "from_url": false
+      },
+      "belt_tiers": {
+        "floor": "conveyor-belt-1",
+        "ceiling": "conveyor-belt-3",
+        "stack": 1,
+        "runs_upgraded": 0,
+        "upgrade_tiers": [],
+        "entry_lanes": [
+          {
+            "item": "iron-ore",
+            "lanes": 2,
+            "lanes_needed": 1
+          }
+        ]
+      },
+      "refused": [],
+      "report": {
+        "ok": true,
+        "checks_run": [
+          "geom.footprint",
+          "geom.overlap",
+          "geom.collide",
+          "game.sorter_collide",
+          "geom.belt_single_occupancy",
+          "geom.machine_ground",
+          "geom.altitude_range",
+          "geom.altitude_step",
+          "geom.bounds",
+          "sorter.anchors_present",
+          "sorter.reach",
+          "sorter.endpoints",
+          "sorter.endpoint_pair",
+          "sorter.own_slots",
+          "sorter.peer_slots",
+          "game.inserter_data",
+          "game.slot_occupancy",
+          "game.inserter_paste",
+          "game.inserter_skew",
+          "game.addon_supply",
+          "game.addon_facing",
+          "game.addon_corner",
+          "game.belt_crossing",
+          "game.belt_collide",
+          "sorter.filter",
+          "sorter.output_filter",
+          "belt.continuity",
+          "junction.stack_support",
+          "junction.ports",
+          "junction.colocated",
+          "junction.port_pose",
+          "junction.records_no_links",
+          "piler.ports",
+          "belt.link_adjacent",
+          "belt.port_dock",
+          "belt.acyclic",
+          "belt.termination",
+          "power.coverage",
+          "game.power_too_close",
+          "power.connectivity",
+          "machine.recipe_valid",
+          "machine.group_resolved",
+          "machine.inputs_supplied",
+          "flow.lane_sourced",
+          "flow.external_entry_reachable",
+          "flow.external_entry_points",
+          "machine.output_removed",
+          "flow.coproduct_buffer",
+          "flow.self_loop_primed",
+          "spec.machine_counts",
+          "spec.proliferator_input",
+          "prolif.belt_required_edges_not_direct_inserted",
+          "prolif.coaters_are_supplied",
+          "prolif.coater_rides_one_run",
+          "prolif.sprayed_cargo_reaches_machines",
+          "flow.conservation",
+          "flow.belt_capacity",
+          "piler.input_rate",
+          "flow.stack_pickable",
+          "flow.sorter_capacity",
+          "belt.tier_allowed",
+          "sorter.tier_allowed",
+          "piler.tier_allowed",
+          "flow.lane_attribution",
+          "flow.lane_single_item",
+          "flow.headroom"
+        ],
+        "skipped": [],
+        "errors": [],
+        "warnings": [
+          {
+            "check": "belt.termination",
+            "message": "belt run 3 (head building 51 at (8,18), carrying 'electromagnetic-matrix') runs 7 of its 21 tiles past its last tap and then stops; those tiles serve nothing"
+          },
+          {
+            "check": "flow.external_entry_points",
+            "message": "'iron-ore' is belted in at 2 separate lanes ((0,10), (20,0)); the player must connect a supply to every one of them"
+          }
+        ]
+      },
+      "attempts": [
+        {
+          "candidate": "no-proliferator",
+          "strategy": "freeform",
+          "area": 609,
+          "ok": true,
+          "errors": 0,
+          "chosen": true,
+          "blueprint": "BLUEPRINT:1,10,0,0,0,0,0,0,639244227239611264,0.10.34.28529,electromagnetic-matrix%2060%2Fmin,flab2bp,,,flab2bp%20freeform%20layout%2C%20no-proliferator%20candidate%2C%209%20machines%2C%20609%20tiles%3B%20power%3A%20Wireless%20Power%20Tower\"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\"4E25FE3596F663B63CE9DA2A29BD592E",
+          "detail": {
+            "machines": 9,
+            "buildings": 211,
+            "primary_band": 100,
+            "certified_bands": [
+              100,
+              120,
+              160
+            ],
+            "title": "electromagnetic-matrix 60/min",
+            "outputs": {
+              "electromagnetic-matrix": {
+                "exact": "1",
+                "per_minute": 60
+              }
+            },
+            "external_inputs": {
+              "copper-ore": {
+                "exact": "1",
+                "per_minute": 60
+              },
+              "iron-ore": {
+                "exact": "2",
+                "per_minute": 120
+              }
+            },
+            "self_loop_seeds": {},
+            "input_markers": 3,
+            "unmarked_inputs": [],
+            "belt_tiers": {
+              "floor": "conveyor-belt-1",
+              "ceiling": "conveyor-belt-3",
+              "stack": 1,
+              "runs_upgraded": 0,
+              "upgrade_tiers": [],
+              "entry_lanes": [
+                {
+                  "item": "iron-ore",
+                  "lanes": 2,
+                  "lanes_needed": 1
+                }
+              ]
+            },
+            "report": {
+              "ok": true,
+              "checks_run": [
+                "geom.footprint",
+                "geom.overlap",
+                "geom.collide",
+                "game.sorter_collide",
+                "geom.belt_single_occupancy",
+                "geom.machine_ground",
+                "geom.altitude_range",
+                "geom.altitude_step",
+                "geom.bounds",
+                "sorter.anchors_present",
+                "sorter.reach",
+                "sorter.endpoints",
+                "sorter.endpoint_pair",
+                "sorter.own_slots",
+                "sorter.peer_slots",
+                "game.inserter_data",
+                "game.slot_occupancy",
+                "game.inserter_paste",
+                "game.inserter_skew",
+                "game.addon_supply",
+                "game.addon_facing",
+                "game.addon_corner",
+                "game.belt_crossing",
+                "game.belt_collide",
+                "sorter.filter",
+                "sorter.output_filter",
+                "belt.continuity",
+                "junction.stack_support",
+                "junction.ports",
+                "junction.colocated",
+                "junction.port_pose",
+                "junction.records_no_links",
+                "piler.ports",
+                "belt.link_adjacent",
+                "belt.port_dock",
+                "belt.acyclic",
+                "belt.termination",
+                "power.coverage",
+                "game.power_too_close",
+                "power.connectivity",
+                "machine.recipe_valid",
+                "machine.group_resolved",
+                "machine.inputs_supplied",
+                "flow.lane_sourced",
+                "flow.external_entry_reachable",
+                "flow.external_entry_points",
+                "machine.output_removed",
+                "flow.coproduct_buffer",
+                "flow.self_loop_primed",
+                "spec.machine_counts",
+                "spec.proliferator_input",
+                "prolif.belt_required_edges_not_direct_inserted",
+                "prolif.coaters_are_supplied",
+                "prolif.coater_rides_one_run",
+                "prolif.sprayed_cargo_reaches_machines",
+                "flow.conservation",
+                "flow.belt_capacity",
+                "piler.input_rate",
+                "flow.stack_pickable",
+                "flow.sorter_capacity",
+                "belt.tier_allowed",
+                "sorter.tier_allowed",
+                "piler.tier_allowed",
+                "flow.lane_attribution",
+                "flow.lane_single_item",
+                "flow.headroom"
+              ],
+              "skipped": [],
+              "errors": [],
+              "warnings": [
+                {
+                  "check": "belt.termination",
+                  "message": "belt run 3 (head building 51 at (8,18), carrying 'electromagnetic-matrix') runs 7 of its 21 tiles past its last tap and then stops; those tiles serve nothing"
+                },
+                {
+                  "check": "flow.external_entry_points",
+                  "message": "'iron-ore' is belted in at 2 separate lanes ((0,10), (20,0)); the player must connect a supply to every one of them"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "refusal": null,
+    "error": null,
+    "progress": {
+      "index": 1,
+      "total": 1,
+      "candidate": "no-proliferator",
+      "strategy": "freeform",
+      "phase": "laid-out",
+      "area": 609,
+      "ok": true,
+      "reason": null,
+      "projection_failures": []
+    },
+    "settled": [
+      {
+        "index": 1,
+        "total": 1,
+        "candidate": "no-proliferator",
+        "strategy": "freeform",
+        "phase": "laid-out",
+        "area": 609,
+        "ok": true,
+        "reason": null,
+        "projection_failures": []
+      }
+    ]
+  }
+}

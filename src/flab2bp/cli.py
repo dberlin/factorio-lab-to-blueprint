@@ -445,6 +445,13 @@ def build_parser() -> argparse.ArgumentParser:
         "are emitted. Refuses rather than falling back if every candidate this "
         "URL produces is proliferated.",
     )
+    ap.add_argument(
+        "--power-tower",
+        choices=tuple(pipeline.POWER_TOWER_CHOICES),
+        default=None,
+        help="power building (default: first power tower in the URL's machine "
+        "rank, otherwise Tesla Tower)",
+    )
     ap.add_argument("--budget", type=float, default=15.0, help="solver seconds per layout")
     ap.add_argument(
         "--workers",
@@ -577,6 +584,7 @@ def main(argv: list[str] | None = None) -> int:
                 fetch_timeout_s=args.fetch_timeout,
                 browser=args.browser,
                 no_proliferator=args.no_proliferator,
+                power_tower=args.power_tower,
                 workers=args.workers,
                 race=args.race,
                 share=args.share,

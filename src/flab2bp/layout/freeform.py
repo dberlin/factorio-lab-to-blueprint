@@ -5522,9 +5522,17 @@ def _splitter_stack_geometry(
 def _power_coverage_discs(
     buildings: Sequence[PlacedBuilding],
     tesla_sites: Sequence[tuple[int, int]],
+    *,
+    tower: catalog.Building | None = None,
 ) -> tuple[tuple[int, int, int], ...]:
-    """Exact doubled-coordinate power discs available during detailed routing."""
-    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    """Exact doubled-coordinate power discs available during detailed routing.
+
+    ``tower`` is the build's chosen power building -- ``canvas.power_building``
+    at every caller inside a layout run.  It defaults to the Tesla Tower so a
+    caller that has no canvas reads exactly the radius it always read.
+    """
+    if tower is None:
+        tower = catalog.power_tower_building(catalog.DEFAULT_POWER_TOWER)
     discs = [
         (
             2 * x + tower.width,
@@ -5698,8 +5706,16 @@ def _prepared_junction_ban(
     junction_bounds: tuple[int, int, int, int] | None = None,
     cancelled: Callable[[], bool] | None = None,
     cache: _StagedStaticCache | None = None,
+    tower: catalog.Building | None = None,
 ) -> frozenset[Cell]:
-    """Precompute exact flat and projected Splitter refusals."""
+    """Precompute exact flat and projected Splitter refusals.
+
+    ``tower`` is the build's chosen power building, so the reserved sites are
+    given the footprint that will actually stand on them.  It defaults to the
+    Tesla Tower for callers outside a layout run.
+    """
+    if tower is None:
+        tower = catalog.power_tower_building(catalog.DEFAULT_POWER_TOWER)
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
     indexed = buildings if isinstance(buildings, MutableBuildings) else Buildings(buildings)
@@ -5708,13 +5724,12 @@ def _prepared_junction_ban(
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
         obstacles.append(buildings[index])
-    tower = catalog.building(catalog.TESLA_TOWER_ID)
     for x, y in power_sites:
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
         obstacles.append(
             PlacedBuilding(
-                item_id=catalog.TESLA_TOWER_ID,
+                item_id=tower.item_id,
                 model_index=tower.model_index,
                 x=x,
                 y=y,
@@ -5850,6 +5865,19 @@ class _Canvas:
     #: The stack each item's lanes are planned at, so an emitter can ask for a
     #: sorter that keeps the promise the plan made (design 5.3).
     lane_stacks: _LaneStacks = _NO_LANE_STACKS
+    #: The power building this build stands on every planned power site.
+    #:
+    #: One record, resolved once from ``BuildSpec.power_tower_item_id`` in
+    #: :func:`_prepare_routing_problem`, carries everything the power passes
+    #: ask: item id, model index, footprint, ``cover_radius`` and
+    #: ``connect_distance``.  The planner's arithmetic was already generic over
+    #: those; only WHICH record it read was fixed.  The default is the Tesla
+    #: Tower, so a canvas built without a spec -- every synthetic test canvas,
+    #: and the hierarchy composer's -- behaves exactly as it did before the
+    #: choice existed.
+    power_building: catalog.Building = field(
+        default_factory=lambda: catalog.power_tower_building(catalog.DEFAULT_POWER_TOWER)
+    )
 
     buildings: MutableBuildings = field(default_factory=MutableBuildings)
     #: ``(x, y, level)`` -> building index, for cells that block routing.
@@ -6074,6 +6102,29 @@ class _Canvas:
         port = self.reserved.get(cell)
         return port is None or port in self.routing_ports
 
+    def fits(self, x: int, y: int, width: int, height: int) -> bool:
+        """Is EVERY tile of the footprint anchored at ``(x, y)`` free ground?
+
+        The canvas's own occupancy model asked about a RECTANGLE instead of a
+        cell.  It is not a second model and it is not a new question: it is
+        exactly the pair every ground-standing placer has always asked about
+        its anchor -- ``free`` for the lattice cell and ``solid`` for the tile
+        -- quantified over the tiles ``add`` will actually mark.
+
+        Both terms are needed and neither implies the other.  ``free``
+        deliberately ignores ``solid``, because a machine sells the levels
+        above its collider and a belt may cross it; a building standing ON the
+        ground may not.
+
+        A 1x1 tower makes this the single-cell test it replaces, tile for
+        tile, which is why the default arm cannot move.
+        """
+        return all(
+            self.free((tx, ty, 0)) and (tx, ty) not in self.solid
+            for tx in range(x, x + width)
+            for ty in range(y, y + height)
+        )
+
     def free_owned_guard(self, cell: Cell) -> bool:
         """Is ``cell`` blocked only by a junction guard this route owns?
 
@@ -6110,6 +6161,7 @@ class _Canvas:
             sorter_tiers=self.sorter_tiers,
             sorter_stacks=self.sorter_stacks,
             lane_stacks=self.lane_stacks,
+            power_building=self.power_building,
             buildings=MutableBuildings(self.buildings),
             blocked=dict(self.blocked),
             world_taken=set(self.world_taken),
@@ -8932,6 +8984,12 @@ class _PreparedRoutingProblem:
     sorter_tiers: tuple[int, ...] = catalog.SORTER_TIERS
     sorter_stacks: _SorterStacks = _NO_SORTER_STACKS
     lane_stacks: _LaneStacks = _NO_LANE_STACKS
+    #: The power building the spec chose, carried so every workspace canvas --
+    #: and so :func:`_place_power`, which runs on one -- stands the same
+    #: building the plan reserved ground for.
+    power_building: catalog.Building = field(
+        default_factory=lambda: catalog.power_tower_building(catalog.DEFAULT_POWER_TOWER)
+    )
     buildings_index: Buildings | None = field(default=None, init=False, repr=False, compare=False)
 
     def indexed_templates(self) -> Buildings:
@@ -8948,6 +9006,7 @@ class _PreparedRoutingProblem:
             sorter_tiers=self.sorter_tiers,
             sorter_stacks=self.sorter_stacks,
             lane_stacks=self.lane_stacks,
+            power_building=self.power_building,
             buildings=buildings,
             blocked=dict(self.blocked),
             world_taken=set(self.world_taken),
@@ -9463,7 +9522,11 @@ def _route_all(
     power_discs = (
         None
         if planned_power_sites is None
-        else _power_coverage_discs(canvas.buildings, planned_power_sites)
+        else _power_coverage_discs(
+            canvas.buildings,
+            planned_power_sites,
+            tower=canvas.power_building,
+        )
     )
     history: dict[tuple[int, int, int], float] = defaultdict(float)
     #: The live routing -- net index to path -- and the same cells the other way
@@ -15563,6 +15626,21 @@ def _power_projection_envelope(
     )
 
 
+def _power_reservation(tower: catalog.Building) -> tuple[int, int, int, int]:
+    """Cell offsets enclosing the collider clearance about the real footprint.
+
+    Round half-cell halos outwards on BOTH sides. A 6x6 clearance centred on a
+    5x5 substation therefore holds 7x7 cells; shifting a 6x6 rectangle east would
+    leave its west collider edge unprotected. Tesla retains its 1x1 reservation.
+    """
+    if tower.item_id == catalog.TESLA_TOWER_ID:
+        return 0, 0, tower.width, tower.height
+    width, height = catalog.clearance(tower.item_id, 0)
+    halo_x = max(0, (width - tower.width + 1) // 2)
+    halo_y = max(0, (height - tower.height + 1) // 2)
+    return -halo_x, -halo_y, tower.width + halo_x, tower.height + halo_y
+
+
 def _power_plan(
     canvas: _Canvas,
     demand: tuple[int, int, int, int],
@@ -15634,7 +15712,12 @@ def _power_plan(
         staged_static_cache = _StagedStaticCache()
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
-    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    tower = canvas.power_building
+    reserve_x0, reserve_y0, reserve_x1, reserve_y1 = _power_reservation(tower)
+    reserve_width = reserve_x1 - reserve_x0
+    reserve_height = reserve_y1 - reserve_y0
+    centre_dx = (tower.width - 1) // 2
+    centre_dy = (tower.height - 1) // 2
     reach2 = math.floor((2 * tower.cover_radius) ** 2)
     link2 = math.floor((2 * tower.connect_distance) ** 2)
     demand_x0, demand_y0, demand_x1, demand_y1 = demand
@@ -15664,6 +15747,9 @@ def _power_plan(
     reach = int(tower.cover_radius) + 1
     link = int(tower.connect_distance) + 1
     pad = link + reach + 1
+    # Incremental removal reads a two-radius score window one disc further
+    # out. Its source tiles are offset from anchors by the footprint centre.
+    pad = max(pad, 3 * reach + max(centre_dx, centre_dy), reserve_width, reserve_height)
     shape = (width + 2 * pad, height + 2 * pad)
 
     # A column is out if ANY level of it is blocked, so the level walk below
@@ -15671,7 +15757,7 @@ def _power_plan(
     # columns answers the same question once, for the whole fill.
     blocked_columns = {(bx, by) for (bx, by, _level) in canvas.blocked}
 
-    free = np.zeros(shape, dtype=bool)
+    open_ground = np.zeros(shape, dtype=bool)
     for x in range(min_x, max_x + 1):
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
@@ -15684,7 +15770,26 @@ def _power_plan(
                 continue
             if (x, y) in blocked_columns:
                 continue
-            free[x - min_x + pad, y - min_y + pad] = True
+            open_ground[x - min_x + pad, y - min_y + pad] = True
+
+    # Erode open ground by the collider-clearance reservation, not merely the
+    # visible footprint. Low-confidence substation collider findings may be
+    # suppressed by certification, so routing must never borrow this halo.
+    # The Tesla offsets are still only (0, 0), preserving its default mask.
+    free = open_ground.copy()
+    for footprint_dx in range(reserve_x0, reserve_x1):
+        for footprint_dy in range(reserve_y0, reserve_y1):
+            if not footprint_dx and not footprint_dy:
+                continue
+            shifted = np.zeros(shape, dtype=bool)
+            shifted[
+                max(0, -footprint_dx) : shape[0] - max(0, footprint_dx),
+                max(0, -footprint_dy) : shape[1] - max(0, footprint_dy),
+            ] = open_ground[
+                max(0, footprint_dx) : shape[0] - max(0, -footprint_dx),
+                max(0, footprint_dy) : shape[1] - max(0, -footprint_dy),
+            ]
+            free &= shifted
 
     in_demand = np.zeros(shape, dtype=bool)
     in_demand[
@@ -15724,7 +15829,10 @@ def _power_plan(
         b = canvas.buildings[index]
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
-        if catalog.is_belt(b.item_id) or b.item_id == catalog.TESLA_TOWER_ID:
+        # The chosen tower's id, NOT "any power node": a recipe set may legitimately
+        # build other power buildings, and treating one of those as a site this
+        # planner already placed would leave its tiles uncovered.
+        if catalog.is_belt(b.item_id) or b.item_id == tower.item_id:
             continue
         for tx, ty, _ in b.tiles():
             gx, gy = tx - min_x + pad, ty - min_y + pad
@@ -15739,13 +15847,13 @@ def _power_plan(
     #: exact rather than a tolerance.
     disc = [
         (dx, dy)
-        for dx in range(-reach, reach + 1)
-        for dy in range(-reach, reach + 1)
-        if (2 * dx) ** 2 + (2 * dy) ** 2 <= reach2
+        for dx in range(centre_dx - reach, centre_dx + reach + 1)
+        for dy in range(centre_dy - reach, centre_dy + reach + 1)
+        if (2 * dx + 1 - tower.width) ** 2 + (2 * dy + 1 - tower.height) ** 2 <= reach2
     ]
     disc_stamp = np.zeros((2 * reach + 1, 2 * reach + 1), dtype=bool)
     for dx, dy in disc:
-        disc_stamp[dx + reach, dy + reach] = True
+        disc_stamp[dx - centre_dx + reach, dy - centre_dy + reach] = True
     link_stamp = np.zeros((2 * link + 1, 2 * link + 1), dtype=bool)
     for dx in range(-link, link + 1):
         for dy in range(-link, link + 1):
@@ -15885,6 +15993,17 @@ def _power_plan(
 
     # How many free neighbours each cell has, for the tie-break. Taken once, on
     # the ground as packed: a tie-break does not need to track its own effects.
+    #
+    # `free`, deliberately, and NOT `open_ground`.  Reading the ground instead
+    # was tried and reverted: `free` is not `open_ground` even on the 1x1
+    # default, because the existing-power-node keepout loop above punches a halo
+    # into `free` before this runs.  On a canvas carrying one 3x3 power node
+    # that is 36 cells of differing openness, 16 of them legal candidates, and
+    # `key = score * 5 + openness` turns any score tie among them into a
+    # different site.  The corpus cannot currently reach it -- of the twelve
+    # power-node items only 2201/2202 and 2203/2205 have a halo escaping their
+    # own footprint and none of those is generator-placed -- but "unreachable
+    # today" is not a reason to move a tie-break inside a footprint fix.
     openness = np.zeros(shape, dtype=np.int32)
     for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
         openness[max(0, dx) : shape[0] + min(0, dx), max(0, dy) : shape[1] + min(0, dy)] += free[
@@ -15897,10 +16016,12 @@ def _power_plan(
     # against a 15s deadline; only the cells within two radii of a new tower can
     # change, so only those are touched.
     score = np.zeros(shape, dtype=np.int32)
+    # Coverage spreads anchors to tiles; scores gather those tiles back to
+    # anchors. These shifts are opposites once the footprint is wider than 1.
     for dx, dy in disc:
-        score[max(0, dx) : shape[0] + min(0, dx), max(0, dy) : shape[1] + min(0, dy)] += remaining[
-            max(0, -dx) : shape[0] + min(0, -dx), max(0, -dy) : shape[1] + min(0, -dy)
-        ]
+        score[max(0, -dx) : shape[0] + min(0, -dx), max(0, -dy) : shape[1] + min(0, -dy)] += (
+            remaining[max(0, dx) : shape[0] + min(0, dx), max(0, dy) : shape[1] + min(0, dy)]
+        )
 
     linked = np.zeros(shape, dtype=bool)
     sites: list[tuple[int, int]] = []
@@ -16008,7 +16129,7 @@ def _power_plan(
         candidate = (
             len(canvas.buildings) + len(sites),
             PlacedBuilding(
-                item_id=catalog.TESLA_TOWER_ID,
+                item_id=tower.item_id,
                 model_index=tower.model_index,
                 x=site[0],
                 y=site[1],
@@ -16174,13 +16295,24 @@ def _power_plan(
             gx - spacing_reach : gx + spacing_reach + 1,
             gy - spacing_reach : gy + spacing_reach + 1,
         ] &= ~spacing_stamp
+        # Exclude anchors whose clearance reservations overlap the new tower.
+        # On Tesla this remains the one cell already cleared by spacing.
+        free[
+            gx - (reserve_width - 1) : gx + reserve_width,
+            gy - (reserve_height - 1) : gy + reserve_height,
+        ] = False
         linked[gx - link : gx + link + 1, gy - link : gy + link + 1] |= link_stamp
-        win = (slice(gx - reach, gx + reach + 1), slice(gy - reach, gy + reach + 1))
+        win = (
+            slice(gx + centre_dx - reach, gx + centre_dx + reach + 1),
+            slice(gy + centre_dy - reach, gy + centre_dy + reach + 1),
+        )
         newly = remaining[win] & disc_stamp
         if newly.any():
             remaining[win] &= ~disc_stamp
             covered = np.zeros(shape, dtype=bool)
             covered[win] = newly
+            # The centre offsets cancel between the placed and scored anchors;
+            # the covered source window below still reads the shifted disc.
             lo_x, hi_x = gx - 2 * reach, gx + 2 * reach + 1
             lo_y, hi_y = gy - 2 * reach, gy + 2 * reach + 1
             for dx, dy in disc:
@@ -16192,8 +16324,11 @@ def _power_plan(
             exact_retry_evidence=projected_retry_evidence,
         )
 
-    for site in sites:
-        canvas.keep_out.add(site)
+    # Hold the same clearance rectangle through every routing level.
+    for site_x, site_y in sites:
+        for footprint_dx in range(reserve_x0, reserve_x1):
+            for footprint_dy in range(reserve_y0, reserve_y1):
+                canvas.keep_out.add((site_x + footprint_dx, site_y + footprint_dy))
     return sites
 
 
@@ -16222,14 +16357,21 @@ def _place_power(canvas: _Canvas, sites: Sequence[tuple[int, int]]) -> int:
     """
     if not canvas.buildings:
         return 0
-    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    tower = canvas.power_building
+    reserve_x0, reserve_y0, reserve_x1, reserve_y1 = _power_reservation(tower)
     placed = 0
     for cx, cy in sites:
-        if not canvas.free((cx, cy, 0)) or (cx, cy) in canvas.solid:
+        # Routing must leave the collider halo free as well as the footprint.
+        if not canvas.fits(
+            cx + reserve_x0,
+            cy + reserve_y0,
+            reserve_x1 - reserve_x0,
+            reserve_y1 - reserve_y0,
+        ):
             raise _Unpowerable(f"planned tower site {(cx, cy)} was taken during routing")
         canvas.add(
             PlacedBuilding(
-                item_id=catalog.TESLA_TOWER_ID,
+                item_id=tower.item_id,
                 model_index=tower.model_index,
                 x=cx,
                 y=cy,
@@ -16285,7 +16427,12 @@ def plan_power_infill(
     Returns ``(sites, uncovered)``: ground coordinates for
     :func:`_place_power`, and the tiles no legal site could reach.
     """
-    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    tower = canvas.power_building
+    reserve_x0, reserve_y0, reserve_x1, reserve_y1 = _power_reservation(tower)
+    reserve_width = reserve_x1 - reserve_x0
+    reserve_height = reserve_y1 - reserve_y0
+    centre_dx = (tower.width - 1) // 2
+    centre_dy = (tower.height - 1) // 2
     reach2 = math.floor((2 * tower.cover_radius) ** 2)
     link2 = math.floor((2 * tower.connect_distance) ** 2)
 
@@ -16310,7 +16457,8 @@ def plan_power_infill(
                 )
             )
         if info.power_node.is_power_node:
-            cx, cy = b.x + b.width // 2, b.y + b.height // 2
+            cx = b.x + b.width // 2 - centre_dx
+            cy = b.y + b.height // 2 - centre_dy
             for dx, dy, dz in rules.power_node_keepout_offsets(info.power_node, tower.power_node):
                 if not dz:
                     keepout.add((cx + dx, cy + dy))
@@ -16350,9 +16498,12 @@ def plan_power_infill(
             min_x <= x <= max_x
             and min_y <= y <= max_y
             and (x, y) not in keepout
-            and (x, y) not in blocked_columns
-            and (x, y) not in canvas.solid
-            and canvas.free((x, y, 0))
+            and canvas.fits(x + reserve_x0, y + reserve_y0, reserve_width, reserve_height)
+            and all(
+                (tx, ty) not in blocked_columns
+                for tx in range(x + reserve_x0, x + reserve_x1)
+                for ty in range(y + reserve_y0, y + reserve_y1)
+            )
         )
 
     reach = int(tower.cover_radius) + 1
@@ -16367,8 +16518,8 @@ def plan_power_infill(
             {
                 (tx + dx, ty + dy)
                 for tx, ty in dark
-                for dx in range(-reach, reach + 1)
-                for dy in range(-reach, reach + 1)
+                for dx in range(-reach - centre_dx, reach - centre_dx + 1)
+                for dy in range(-reach - centre_dy, reach - centre_dy + 1)
                 if free_site(tx + dx, ty + dy)
             }
         )
@@ -16399,6 +16550,13 @@ def plan_power_infill(
         for dx, dy, dz in rules.power_node_keepout_offsets(tower.power_node, tower.power_node):
             if not dz:
                 keepout.add((best_site[0] + dx, best_site[1] + dy))
+        # The spacing rule alone does not prevent two wide reservations from
+        # overlapping. Keep anchors out of the same rectangle as _power_plan.
+        keepout.update(
+            (best_site[0] + dx, best_site[1] + dy)
+            for dx in range(1 - reserve_width, reserve_width)
+            for dy in range(1 - reserve_height, reserve_height)
+        )
     return sites, tuple(sorted(dark))
 
 
@@ -16957,11 +17115,13 @@ def _prepare_routing_problem(
     """Build immutable exact geometry shared by both routing engines."""
     belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
     belt_model = catalog.building(belt_id).model_index
+    power_building = catalog.power_tower_building(spec.power_tower_item_id)
     canvas = _Canvas(
         ramped=ramped,
         sorter_tiers=_sorter_tiers_for(spec),
         sorter_stacks=_sorter_stacks_for(spec),
         lane_stacks=_lane_stacks_for(spec),
+        power_building=power_building,
     )
     if staged_static_cache is None:
         staged_static_cache = _StagedStaticCache()
@@ -17923,6 +18083,7 @@ def _prepare_routing_problem(
             power_sites,
             cancelled=cancelled,
             cache=staged_static_cache,
+            tower=canvas.power_building,
         )
         if junction_possible or power_sites
         else frozenset()
@@ -17980,6 +18141,7 @@ def _prepare_routing_problem(
         sorter_tiers=canvas.sorter_tiers,
         sorter_stacks=canvas.sorter_stacks,
         lane_stacks=canvas.lane_stacks,
+        power_building=canvas.power_building,
         world_taken=frozenset(canvas.world_taken),
         belt_ban=tuple(
             sorted((cell, frozenset(levels)) for cell, levels in canvas.belt_ban.items())

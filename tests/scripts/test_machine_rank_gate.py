@@ -9,10 +9,7 @@ from pathlib import Path
 
 import pytest
 
-EVIDENCE = (
-    Path(__file__).resolve().parents[2]
-    / "docs/superpowers/evidence/2026-09-07-machine-upto"
-)
+EVIDENCE = Path(__file__).resolve().parents[2] / "docs/superpowers/evidence/2026-09-07-machine-upto"
 SHA_A = "a" * 40
 SHA_B = "b" * 40
 
@@ -63,9 +60,7 @@ def test_gate_refuses_other_candidate_revision_before_launch(
     monkeypatch.setattr(gate.subprocess, "check_output", check_output)
     monkeypatch.setattr(gate, "pressure", no_launch)
     monkeypatch.setattr(gate.subprocess, "run", no_launch)
-    monkeypatch.setattr(
-        sys, "argv", ["run_gate", new_mode, new_arm, str(root), "--out", str(out)]
-    )
+    monkeypatch.setattr(sys, "argv", ["run_gate", new_mode, new_arm, str(root), "--out", str(out)])
     with pytest.raises(RuntimeError, match="candidate provenance"):
         gate.main()
     assert not (out / f"{new_mode}-{new_arm}-provenance.json").exists()
@@ -75,15 +70,25 @@ def test_gate_refuses_other_candidate_revision_before_launch(
 def _layouts(directory, gate, *, exact_sha=SHA_A, upto_sha=SHA_A):
     identity = {"commit": SHA_A, "checkout": "/candidate", "imported": "/candidate/src/flab2bp"}
     (directory / "candidate-provenance.json").write_text(json.dumps(identity))
-    for arm, commit in (("base", gate.BASE_SHA + "0" * 32), ("exact", exact_sha), ("up-to", upto_sha)):
+    for arm, commit in (
+        ("base", gate.BASE_SHA + "0" * 32),
+        ("exact", exact_sha),
+        ("up-to", upto_sha),
+    ):
         rows = [
-            {"strategy": strategy, "url_id": url_id, "spec_index": index,
-             "commit": commit, "machine_rank": arm, "status": "REFUSED"}
-            for strategy in gate.STRATEGIES for url_id in gate.URL_IDS for index in range(3)
+            {
+                "strategy": strategy,
+                "url_id": url_id,
+                "spec_index": index,
+                "commit": commit,
+                "machine_rank": arm,
+                "status": "REFUSED",
+            }
+            for strategy in gate.STRATEGIES
+            for url_id in gate.URL_IDS
+            for index in range(3)
         ]
-        (directory / f"{arm}.jsonl").write_text(
-            "".join(json.dumps(row) + "\n" for row in rows)
-        )
+        (directory / f"{arm}.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
 
 
 @pytest.mark.parametrize("mismatch", ["exact", "up-to", "rates"])
@@ -92,12 +97,14 @@ def test_moved_refuses_stale_layouts_before_rates_or_table(
 ):
     gate, moved = gate_modules
     _layouts(
-        tmp_path, gate,
+        tmp_path,
+        gate,
         exact_sha=SHA_B if mismatch == "exact" else SHA_A,
         upto_sha=SHA_B if mismatch == "up-to" else SHA_A,
     )
     monkeypatch.setattr(
-        moved.subprocess, "check_output",
+        moved.subprocess,
+        "check_output",
         lambda *args, **kwargs: SHA_B if mismatch == "rates" else SHA_A,
     )
 
@@ -106,9 +113,7 @@ def test_moved_refuses_stale_layouts_before_rates_or_table(
 
     monkeypatch.setattr(moved, "load_vendored", no_rates)
     output = tmp_path / "moved.jsonl"
-    monkeypatch.setattr(
-        sys, "argv", ["moved", "--out", str(output), "--layouts", str(tmp_path)]
-    )
+    monkeypatch.setattr(sys, "argv", ["moved", "--out", str(output), "--layouts", str(tmp_path)])
     with pytest.raises(RuntimeError, match="rates measurement SHA"):
         moved.main()
     assert not output.exists()
@@ -120,6 +125,10 @@ def test_matching_candidate_layouts_accept_distinct_pinned_baseline(gate_modules
     _layouts(tmp_path, gate)
     layouts = moved.load_layouts(tmp_path, SHA_A)
     assert set(layouts) == {"base", "exact", "up-to"}
-    expected = {(strategy, url_id, index) for strategy in gate.STRATEGIES
-                for url_id in gate.URL_IDS for index in range(3)}
+    expected = {
+        (strategy, url_id, index)
+        for strategy in gate.STRATEGIES
+        for url_id in gate.URL_IDS
+        for index in range(3)
+    }
     assert all(set(arm) == expected for arm in layouts.values())

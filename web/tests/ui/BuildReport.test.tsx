@@ -4,6 +4,17 @@ import { BuildReportPanel } from '../../src/ui/BuildReport';
 import type { Attempt } from '../../src/api/build';
 import { anAttempt, anAttemptDetail, aResult } from '../support/build';
 
+test('names the selected power building in the report', () => {
+  render(
+    <BuildReportPanel
+      result={aResult({ power_building: 'Satellite Substation' })}
+      selectedAttempt={null}
+      onSelectAttempt={() => {}}
+    />,
+  );
+  expect(screen.getByText('Power').nextElementSibling).toHaveTextContent('Satellite Substation');
+});
+
 test.each([
   [160, [160]],
   [160, [160, 200]],

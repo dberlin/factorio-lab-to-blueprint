@@ -16,6 +16,7 @@ import {
   DEFAULT_OPTIONS,
   type Job,
   MachineRank,
+  PowerTower,
   ProliferatorTier,
   projectSolve,
   RequestStrategy,
@@ -44,6 +45,7 @@ export function BuildPanel() {
   const budgetId = useId();
   const proliferatorTierId = useId();
   const machineRankId = useId();
+  const powerTowerId = useId();
   const flowId = useId();
 
   // A build outlives the panel if the page changes under it; aborting on
@@ -247,6 +249,21 @@ export function BuildPanel() {
         >
           <option value="exact">Exact (the URL&rsquo;s machine)</option>
           <option value="up-to">Up to (fewest machines at or below it)</option>
+        </select>
+
+        <label htmlFor={powerTowerId}>Power tower</label>
+        <select
+          id={powerTowerId}
+          value={options.power_tower}
+          onChange={(event) => {
+            const tower = PowerTower.safeParse(event.target.value);
+            if (tower.success) set('power_tower', tower.data);
+          }}
+        >
+          <option value="auto">URL selection (Tesla Tower if unspecified)</option>
+          <option value="tesla">Tesla Tower</option>
+          <option value="substation">Satellite Substation</option>
+          <option value="wireless">Wireless Power Tower</option>
         </select>
 
         <label className="checkbox">

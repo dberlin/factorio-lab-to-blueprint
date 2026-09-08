@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from fractions import Fraction
 
+import pytest
+
 from flab2bp.bench.metrics import measure
 from flab2bp.dsp import catalog
 from flab2bp.layout.base import PlacedBuilding, Placement
@@ -48,6 +50,10 @@ def _sorter(x: int, y: int, *, inp: int | None, out: int | None) -> PlacedBuildi
         input_obj=inp,
         output_obj=out,
     )
+
+
+def _substation(x: int, y: int) -> PlacedBuilding:
+    return PlacedBuilding(item_id=2212, model_index=68, x=x, y=y, width=5, height=5)
 
 
 def _tower(x: int, y: int) -> PlacedBuilding:
@@ -131,6 +137,48 @@ def test_empty_placement_does_not_divide_by_zero() -> None:
     m = measure(Placement(buildings=()))
     assert m.machines == 0
     assert m.packing_efficiency == 0.0
+
+
+def test_measure_counts_a_substation_as_a_tower() -> None:
+    buildings = [_substation(0, 0)]
+    assert measure(Placement(buildings=buildings)).towers == 1
+
+
+def test_measure_excludes_a_substation_from_the_machine_count() -> None:
+    buildings = [_substation(0, 0)]
+    assert measure(Placement(buildings=buildings)).machines == 0
+
+
+@pytest.mark.parametrize("item_id", [catalog.RAY_RECEIVER_ID, catalog.ENERGY_EXCHANGER_ID])
+def test_power_producers_remain_machines_and_direct_insert_endpoints(item_id: int) -> None:
+    info = catalog.building(item_id)
+    producer = PlacedBuilding(
+        item_id=item_id,
+        model_index=info.model_index,
+        x=10,
+        y=0,
+        width=info.width,
+        height=info.height,
+    )
+    placement = Placement(
+        buildings=(
+            _assembler(0, 0),
+            producer,
+            _substation(20, 0),
+            PlacedBuilding(item_id=2201, model_index=44, x=30, y=0),
+            PlacedBuilding(item_id=2202, model_index=71, x=35, y=0),
+            _sorter(5, 0, inp=0, out=1),
+            _sorter(5, 1, inp=1, out=0),
+            # A supply tower is not a production endpoint, even if linked.
+            _sorter(15, 0, inp=1, out=2),
+        )
+    )
+
+    metrics = measure(placement)
+    assert metrics.machines == 2
+    assert metrics.direct_inserts == 2
+    # Categories overlap: the producer is also a member of the power network.
+    assert metrics.towers == 4
 
 
 def test_machine_metrics_include_piler_but_exclude_tower_and_coater() -> None:

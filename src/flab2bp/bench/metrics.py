@@ -12,11 +12,17 @@ from flab2bp.dsp import catalog
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.buildings import Buildings, Kind
 
+# Supply towers are not production machines. Other power nodes, including
+# Ray Receivers and Energy Exchangers, still produce items and accept sorters.
+_SUPPLY_TOWER_IDS = frozenset(
+    catalog.item_id(lab_id) for lab_id in catalog.POWER_TOWER_CHOICES.values()
+)
+
 
 def _is_machine(b: PlacedBuilding) -> bool:
     if catalog.is_belt(b.item_id) or catalog.is_sorter(b.item_id):
         return False
-    if b.item_id in (catalog.SPLITTER_ID, catalog.TESLA_TOWER_ID):
+    if b.item_id == catalog.SPLITTER_ID or b.item_id in _SUPPLY_TOWER_IDS:
         return False
     try:
         return catalog.building(b.item_id).occupies_tiles
@@ -63,7 +69,7 @@ def measure(placement: Placement) -> Metrics:
     index = Buildings.of(placement)
     belt_tiles = index.count_by_kind(Kind.BELT)
     sorters = index.count_by_kind(Kind.SORTER)
-    towers = index.count_by_item(catalog.TESLA_TOWER_ID)
+    towers = sum(catalog.building(buildings[i].item_id).is_power_node for i in index.machines())
 
     # Piler occupies tiles and satisfies this metric's historical machine
     # predicate, although the domain index classifies it as OTHER.

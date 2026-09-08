@@ -145,6 +145,27 @@ def test_cli_reports_an_infeasible_spec_as_a_refusal_not_a_crash(
     assert "Traceback" not in err
 
 
+def test_cli_rejects_an_unknown_power_tower() -> None:
+    with pytest.raises(SystemExit) as caught:
+        cli.build_parser().parse_args(["https://example/x", "--power-tower", "none"])
+    assert caught.value.code == 2
+
+
+@pytest.mark.parametrize("selection", [None, "tesla", "substation", "wireless"])
+def test_cli_preserves_explicit_power_choice(
+    selection: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def inspect_build(_url: str, **kwargs: object) -> pipeline.Build:
+        assert kwargs["power_tower"] == selection
+        raise KeyError("stop before solving")
+
+    monkeypatch.setattr(pipeline, "build", inspect_build)
+    args = ["https://example/x"]
+    if selection is not None:
+        args.extend(("--power-tower", selection))
+    assert cli.main(args) == 2
+
+
 def test_trace_jsonl_defaults_to_none() -> None:
     args = cli.build_parser().parse_args(["https://example/x"])
     assert args.trace_jsonl is None

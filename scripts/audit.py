@@ -104,7 +104,7 @@ from flab2bp.layout.strategy_race import (  # noqa: E402
     RACE_COMPLETION_GRACE_S,
     RacingLayout,
 )
-from flab2bp.pipeline import resolve_sequence_islands  # noqa: E402
+from flab2bp.pipeline import _resolve_power_tower, resolve_sequence_islands  # noqa: E402
 from flab2bp.rates import (  # noqa: E402
     DEFAULT_CANDIDATE_POLICIES,
     CandidatePolicy,
@@ -183,6 +183,7 @@ class Job:
     #: Arrangements per height for freeform, or ``None`` for its own default.
     #: Only freeform has the notion, so it is passed only to freeform.
     arrangements: int | None = None
+    power_tower: str | None = None
 
     @property
     def label(self) -> str:
@@ -225,6 +226,7 @@ class Result:
     coaters: int = 0
     coater_merges: int = 0
     belt_tiles: int = 0
+    power_towers: int = 0
     #: Wall of the ATTEMPT -- the solve plus the compaction, projection and
     #: validation charged to nobody else -- and how far past ``budget + grace``
     #: it ran, clamped at zero, where ``grace`` is
@@ -288,7 +290,7 @@ def _scalar_stats(mapping: Mapping[str, object]) -> dict[str, float | str]:
 # rate solver six times per URL; a worker handles several cells of the same URL,
 # so caching here pays for itself and cannot skew the layout timings.
 _SPECS: dict[
-    tuple[str, tuple[CandidatePolicy, ...], MachineRank],
+    tuple[str, tuple[CandidatePolicy, ...], MachineRank, str | None],
     tuple[BuildSpec, ...],
 ] = {}
 
@@ -297,14 +299,17 @@ def _specs_for(
     url: str,
     candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES,
     machine_rank: MachineRank = MachineRank.EXACT,
+    power_tower: str | None = None,
 ) -> tuple[BuildSpec, ...]:
-    key = (url, candidate_policies, machine_rank)
+    key = (url, candidate_policies, machine_rank, power_tower)
     if key not in _SPECS:
+        request = parse_url(url)
         _SPECS[key] = build_candidates(
             load_vendored(),
-            parse_url(url),
+            request,
             candidate_policies=candidate_policies,
             machine_rank=machine_rank,
+            power_tower_item_id=_resolve_power_tower(power_tower, request),
         ).candidates
     return _SPECS[key]
 
@@ -332,7 +337,8 @@ def run_cell(job: Job) -> Result:
         specs = _specs_for(
             job.url,
             job.candidate_policies,
-            MachineRank(job.machine_rank),
+            machine_rank=MachineRank(job.machine_rank),
+            power_tower=job.power_tower,
         )
     except Exception as exc:  # noqa: BLE001
         return Result(job, "SPEC", "?", f"{type(exc).__name__}: {exc}", (), time.monotonic() - t0)
@@ -468,6 +474,9 @@ def run_cell(job: Job) -> Result:
         attempt_wall_s - job.budget - grace,
     )
     coaters, coater_merges, belt_tiles = _coater_census(placement)
+    power_towers = sum(
+        catalog.building(building.item_id).is_power_node for building in placement.buildings
+    )
     skipped_power = tuple(c for c in report.skipped if c.startswith("power."))
     if report.ok and not skipped_power:
         return Result(
@@ -489,6 +498,7 @@ def run_cell(job: Job) -> Result:
             coaters=coaters,
             coater_merges=coater_merges,
             belt_tiles=belt_tiles,
+            power_towers=power_towers,
         )
     checks = tuple(sorted({f.check for f in report.errors})) + tuple(
         f"unchecked:{check}" for check in skipped_power
@@ -512,6 +522,7 @@ def run_cell(job: Job) -> Result:
         coaters=coaters,
         coater_merges=coater_merges,
         belt_tiles=belt_tiles,
+        power_towers=power_towers,
     )
 
 
@@ -614,6 +625,7 @@ def build_jobs(
     skip: set[str] | None = None,
     arrangements: int | None = None,
     machine_rank: str = MachineRank.EXACT.value,
+    power_tower: str | None = None,
 ) -> list[Job]:
     """Every cell, hardest tier first so the pool does not end on a long tail."""
     entries = [e for e in URL_CORPUS if e.tier in tiers]
@@ -639,6 +651,7 @@ def build_jobs(
                             workers=workers,
                             machine_rank=machine_rank,
                             arrangements=arrangements,
+                            power_tower=power_tower,
                         )
                     )
     return jobs
@@ -697,6 +710,8 @@ def record(tallies: dict[str, Tally], r: Result) -> None:
         "spec_index": r.job.spec_index,
         "spec_label": r.spec_label,
         "power": r.job.power,
+        "power_tower": r.job.power_tower or "auto",
+        "power_towers": r.power_towers,
         "budget": r.job.budget,
         "machine_rank": r.job.machine_rank,
         "status": r.status,
@@ -761,6 +776,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="comma-separated solver budgets in seconds; sweeping is the point",
     )
     add_candidate_policy_argument(ap)
+    ap.add_argument("--power-tower", choices=tuple(catalog.POWER_TOWER_CHOICES), default=None)
     ap.add_argument(
         "--machine-rank",
         choices=[rank.value for rank in MachineRank],
@@ -846,6 +862,7 @@ def main() -> int:
         only=only,
         skip=skip,
         arrangements=args.arrangements,
+        power_tower=args.power_tower,
     )
     if not jobs:
         raise SystemExit(

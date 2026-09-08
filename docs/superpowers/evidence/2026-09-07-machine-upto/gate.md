@@ -34,6 +34,25 @@ source. The complete original brief is
 `/home/dannyb/handoff-agents/briefs/machine-upto-brief.md`; approved design and rules
 are in `../../plans/2026-09-07-machine-upto.md`.
 
+## Later combined integration with power-tower
+
+The merge of master `4c0da4b9` is outside the measurements above. Both options
+are retained through keyword-only candidate constructors, copied hierarchy specs,
+CLI, audit cache keys, web options/poll echoes and result metadata. The audit cache
+distinguishes both machine ranking and power choice.
+
+Main's actual browser build on the combined source submitted `machine_rank=up-to`
+and `power_tower=wireless` together: hierarchical iron-ingot at60/min,
+no-proliferator, budget30. Job `2681ea922508` completed with `valid=true`,
+one machine, `machine_rank=up-to`, no machine moves for this input, and
+`power_building=Wireless Power Tower`. Both selected controls and report values
+were rendered; this is not a claim that this input exercises a tier substitution.
+The earlier movement evidence below remains separate.
+
+Combined Ruff, mypy-src, web typecheck and production build pass; all405 web
+tests pass. Full Python integration-suite adjudication is recorded in Main's
+integration ledger. These checks do not erase the earlier measured FAIL gates.
+
 ## Gate (a): base versus exact — FAIL
 
 | Measure | base | exact | Verdict |

@@ -14039,6 +14039,25 @@ class TestPowerClaimsItsGroundBeforeRouting:
         assert report.ok, "\n".join(f.message for f in report.errors[:5])
 
 
+@pytest.mark.parametrize("belt_site", [(-1, 2), (5, 2), (2, -1), (2, 5)])
+def test_substation_emission_refuses_a_belt_in_its_clearance_halo(
+    belt_site: tuple[int, int],
+) -> None:
+    canvas = _Canvas(power_building=catalog.power_tower_building("satellite-substation"))
+    canvas.add(_belt(*belt_site))
+    with pytest.raises(_Unpowerable):
+        freeform._place_power(canvas, [(0, 0)])
+
+
+def test_substation_planner_refuses_a_footprint_sized_hole_without_clearance() -> None:
+    canvas = _Canvas(
+        power_building=catalog.power_tower_building("satellite-substation"),
+        limit=(0, 0, 4, 4),
+    )
+    with pytest.raises(_Unpowerable):
+        _power_plan(canvas, (0, 0, 4, 4), policy=BandPolicy("160"))
+
+
 def _power_node_at(index: int, x: int) -> tuple[int, PlacedBuilding, rules.PowerNode]:
     """A Tesla tower power node standing at ``x`` on row zero."""
     tower = catalog.building(catalog.TESLA_TOWER_ID)
@@ -25876,6 +25895,444 @@ def test_freeform_with_an_attached_observer_does_not_perturb_the_result(
     )
     assert (a.area, a.stats["belt_tiles"]) == (b.area, b.stats["belt_tiles"])
     assert observer.events, "an attached observer must actually receive events"
+
+
+class TestThePowerBuildingIsTheSpecsChoice:
+    """The power planner stands the building the spec chose, not a constant.
+
+    Every radius, footprint and link test in ``_power_plan`` / ``_place_power``
+    was already generic over a :class:`catalog.Building`; what was fixed was
+    WHICH record they read.  These tests pin the record to ``_Canvas`` and the
+    canvas to ``BuildSpec.power_tower_item_id``, and they pin the default arm --
+    a canvas built without a choice -- to the Tesla Tower it has always used.
+    """
+
+    @staticmethod
+    def _machine(x: int, y: int) -> PlacedBuilding:
+        """A 3x3 powered building -- an assembler, as far as coverage cares."""
+        return PlacedBuilding(item_id=2303, model_index=65, x=x, y=y, width=3, height=3)
+
+    def _planned(
+        self,
+        power_building: catalog.Building | None = None,
+        *,
+        step: int = 6,
+    ) -> tuple[_Canvas, list[tuple[int, int]]]:
+        """A field of machines, powered by whichever building was asked for.
+
+        ``step`` is the pitch of the 3x3 machines, and it decides what can
+        stand between them: at 6 the gaps are three tiles wide, which holds a
+        1x1 tower and nothing larger, and at 10 they are seven, which holds a
+        Satellite Substation's collider-clearance reservation.
+        three-wide field a substation has no legal site at all, and this helper
+        used to hand it one anyway -- the anchor cell was free, and the other
+        twenty-four tiles of the building landed on four machines.  See
+        :class:`TestALargePowerBuildingClaimsItsWholeFootprint`, which pins that
+        field to a refusal.
+        """
+        extra = {} if power_building is None else {"power_building": power_building}
+        canvas = _Canvas(limit=(0, 0, 60, 60), **extra)
+        for x in range(2, 50, step):
+            for y in range(2, 50, step):
+                canvas.add(self._machine(x, y), solid=True)
+        sites = _power_plan(canvas, (0, 0, 60, 60), policy=BandPolicy("portable"))
+        assert sites, "a powered building must be given at least one power site"
+        return canvas, sites
+
+    @staticmethod
+    def _placed_power(canvas: _Canvas, sites: list[tuple[int, int]]) -> list[PlacedBuilding]:
+        """Stand the planned sites and hand back only what went in as power."""
+        before = len(canvas.buildings)
+        canvas.keep_out.clear()
+        freeform._place_power(canvas, sites)
+        return canvas.buildings[before:]
+
+    def test_the_default_still_places_tesla_towers(self) -> None:
+        canvas, sites = self._planned()
+        power = self._placed_power(canvas, sites)
+
+        assert power
+        assert {b.item_id for b in power} == {catalog.TESLA_TOWER_ID}
+        assert all((b.width, b.height) == (1, 1) for b in power)
+
+    def test_power_sites_use_the_chosen_power_building(self) -> None:
+        substation = catalog.power_tower_building("satellite-substation")
+        canvas, sites = self._planned(substation, step=10)
+        power = self._placed_power(canvas, sites)
+
+        assert power
+        assert {b.item_id for b in power} == {2212}
+        assert all((b.width, b.height) == (5, 5) for b in power)
+
+    def test_a_wireless_build_places_wireless_towers(self) -> None:
+        wireless = catalog.power_tower_building("wireless-power-tower")
+        canvas, sites = self._planned(wireless)
+        power = self._placed_power(canvas, sites)
+
+        assert power
+        assert {b.item_id for b in power} == {2202}
+
+    def test_a_substation_build_needs_far_fewer_power_sites(self) -> None:
+        """A 26.5-tile cover radius must buy fewer sites than a 10.5-tile one.
+
+        The SAME field on both sides, at a pitch that holds the clearance halo --
+        comparison across two different fields would be measuring the field.
+        """
+        _tesla_canvas, tesla_sites = self._planned(step=10)
+        _sub_canvas, sub_sites = self._planned(
+            catalog.power_tower_building("satellite-substation"), step=10
+        )
+
+        assert len(sub_sites) < len(tesla_sites), (len(tesla_sites), len(sub_sites))
+
+    def test_the_chosen_building_reaches_the_junction_ban_and_the_discs(self) -> None:
+        """The two helpers that take the record explicitly get the chosen one."""
+        substation = catalog.power_tower_building("satellite-substation")
+        tesla = catalog.power_tower_building(catalog.DEFAULT_POWER_TOWER)
+
+        tesla_discs = freeform._power_coverage_discs((), ((0, 0),), tower=tesla)
+        sub_discs = freeform._power_coverage_discs((), ((0, 0),), tower=substation)
+        assert freeform._power_coverage_discs((), ((0, 0),)) == tesla_discs
+        assert sub_discs[0][2] > tesla_discs[0][2]
+
+        tesla_ban = freeform._prepared_junction_ban((), ((0, 0),), tower=tesla)
+        sub_ban = freeform._prepared_junction_ban((), ((0, 0),), tower=substation)
+        assert freeform._prepared_junction_ban((), ((0, 0),)) == tesla_ban
+        #: Not a superset: the two colliders differ in height as well as in
+        #: footprint, so each denies cells the other does not.  What matters is
+        #: that the reservation is computed from the record it was handed.
+        assert sub_ban and sub_ban != tesla_ban
+
+    def test_prepare_routing_problem_carries_the_specs_power_building(self) -> None:
+        """The spec's lab id is resolved once and reaches every workspace canvas."""
+        spec = two_stage_spec()
+        strips = plan_strips(spec)
+        pack = _greedy_pack(strips, _height_seed(strips))
+
+        base = _prepare_routing_problem(spec, strips, pack, power=True, policy=BandPolicy("160"))
+        assert base.power_building.item_id == catalog.TESLA_TOWER_ID
+        assert base.new_workspace().canvas.power_building.item_id == catalog.TESLA_TOWER_ID
+
+        chosen = spec.model_copy(update={"power_tower_item_id": "satellite-substation"})
+        prepared = _prepare_routing_problem(
+            chosen, strips, pack, power=True, policy=BandPolicy("160")
+        )
+        assert prepared.power_building.item_id == 2212
+        assert prepared.new_workspace().canvas.power_building.item_id == 2212
+
+
+class TestSubstationCoverageUsesItsFootprintCentre:
+    @staticmethod
+    def _single_site(machine_x: int, *, infill: bool = False) -> _Canvas:
+        """Only the 7x7 clearance patch for anchor (0, 0) is available."""
+        canvas = _Canvas(
+            power_building=catalog.power_tower_building("satellite-substation"),
+            limit=(min(-11 if infill else -1, machine_x - 1), -1, max(5, machine_x + 4), 6),
+        )
+        canvas.add(
+            PlacedBuilding(item_id=2303, model_index=65, x=machine_x, y=1, width=3, height=3),
+            solid=True,
+        )
+        if infill:
+            tesla = catalog.building(catalog.TESLA_TOWER_ID)
+            canvas.add(
+                PlacedBuilding(item_id=tesla.item_id, model_index=tesla.model_index, x=-10, y=2),
+                solid=True,
+            )
+        assert canvas.limit is not None
+        x0, y0, x1, y1 = canvas.limit
+        canvas.keep_out.update(
+            (x, y)
+            for x in range(x0, x1 + 1)
+            for y in range(y0, y1 + 1)
+            if not (-1 <= x <= 5 and -1 <= y <= 5)
+        )
+        return canvas
+
+    def test_east_boundary_is_reachable_from_the_centre_not_the_anchor(self) -> None:
+        canvas = self._single_site(26)
+        sites = _power_plan(canvas, (28, 2, 28, 2), policy=BandPolicy("160"))
+
+        assert sites == [(0, 0)]
+        discs = freeform._power_coverage_discs((), sites, tower=canvas.power_building)
+        assert discs == ((5, 5, 2809),)
+        assert freeform._buildings_are_powered(canvas.buildings, discs)
+
+    def test_west_boundary_outside_the_actual_disc_is_refused(self) -> None:
+        canvas = self._single_site(-26)
+
+        # The anchor is 26 tiles away, but the actual centre is 28 tiles away.
+        with pytest.raises(_Unpowerable):
+            _power_plan(canvas, (-26, 2, -26, 2), policy=BandPolicy("160"))
+
+    def test_incremental_removal_leaves_no_demand_tile_outside_real_discs(self) -> None:
+        canvas = _Canvas(
+            limit=(0, 0, 40, 40),
+            power_building=catalog.power_tower_building("satellite-substation"),
+        )
+        for x in range(2, 40, 12):
+            for y in range(2, 40, 12):
+                canvas.add(
+                    PlacedBuilding(item_id=2303, model_index=65, x=x, y=y, width=3, height=3),
+                    solid=True,
+                )
+
+        sites = _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("160"))
+
+        assert len(sites) > 1
+        assert all(
+            any((x - sx - 2) ** 2 + (y - sy - 2) ** 2 <= 702 for sx, sy in sites)
+            for x in range(41)
+            for y in range(41)
+        )
+
+    def test_infill_on_a_clone_emits_the_selected_building_at_its_anchor(self) -> None:
+        original = self._single_site(26, infill=True)
+        canvas = original.clone()
+
+        sites, uncovered = freeform.plan_power_infill(canvas)
+
+        assert (sites, uncovered) == ([(0, 0)], ())
+        before = len(canvas.buildings)
+        freeform._place_power(canvas, sites)
+        assert [(b.item_id, b.x, b.y, b.width, b.height) for b in canvas.buildings[before:]] == [
+            (2212, 0, 0, 5, 5)
+        ]
+        assert len(original.buildings) == before
+
+    def test_infill_refuses_a_belt_in_the_substation_clearance_halo(self) -> None:
+        canvas = self._single_site(26, infill=True)
+        canvas.add(_belt(5, 2))
+
+        sites, uncovered = freeform.plan_power_infill(canvas)
+
+        assert sites == []
+        assert set(uncovered) == {(x, y) for x in range(26, 29) for y in range(1, 4)}
+
+
+class TestALargePowerBuildingClaimsItsWholeFootprint:
+    """A 5x5 substation needs its centred collider-clearance reservation too.
+
+    Site selection and site reservation both used to ask about ONE cell -- the
+    anchor -- while ``_place_power`` then marked the whole
+    ``width x height`` band solid.  On a 1x1 tower those are the same question
+    and the difference never showed; on a Satellite Substation the anchor can
+    sit in a three-wide gap and the building lands on top of four machines, or
+    the router lays a belt through the twenty-four tiles nobody reserved.
+
+    ``catalog.LOW_CONFIDENCE_FOOTPRINTS`` contains 2212, so
+    :func:`validate.certify` SUPPRESSES belt-collision findings against a
+    substation: a clean report is not evidence here.  The overlap tests below
+    are therefore direct geometry over the placement, not a certify call.
+    """
+
+    SUBSTATION_ID = 2212
+
+    @staticmethod
+    def _machine(x: int, y: int) -> PlacedBuilding:
+        """A 3x3 powered building -- an assembler, as far as coverage cares."""
+        return PlacedBuilding(item_id=2303, model_index=65, x=x, y=y, width=3, height=3)
+
+    def _field(self, step: int, power_building: catalog.Building) -> _Canvas:
+        """A grid of 3x3 machines every ``step`` tiles inside a 60x60 limit.
+
+        ``step`` is the whole experiment: 3x3 machines every 6 tiles leave
+        three-wide gaps, which a 5x5 substation cannot stand in at all, and
+        every 10 tiles leave seven-wide ones, which hold the centred clearance
+        reservation as well as the footprint.
+        """
+        canvas = _Canvas(limit=(0, 0, 60, 60), power_building=power_building)
+        for x in range(2, 50, step):
+            for y in range(2, 50, step):
+                canvas.add(self._machine(x, y), solid=True)
+        return canvas
+
+    @staticmethod
+    def _substation() -> catalog.Building:
+        return catalog.power_tower_building("satellite-substation")
+
+    def test_a_planned_substation_holds_every_tile_it_will_stand_on(self) -> None:
+        """Every cell in the centred clearance halo must remain unroutable."""
+        canvas = self._field(10, self._substation())
+        sites = _power_plan(canvas, (0, 0, 60, 60), policy=BandPolicy("portable"))
+
+        assert sites
+        for sx, sy in sites:
+            for dx in range(-1, 6):
+                for dy in range(-1, 6):
+                    assert not canvas.free((sx + dx, sy + dy, 0))
+
+    def test_a_substation_site_never_overlaps_another_building(self) -> None:
+        canvas = self._field(10, self._substation())
+        sites = _power_plan(canvas, (0, 0, 60, 60), policy=BandPolicy("portable"))
+        assert sites
+        canvas.keep_out.clear()
+        freeform._place_power(canvas, sites)
+
+        boxes = [(b.x, b.y, b.width, b.height, b.item_id) for b in canvas.buildings]
+        power = [box for box in boxes if box[4] == self.SUBSTATION_ID]
+        assert power
+        for px, py, pw, ph, _item in power:
+            for bx, by, bw, bh, item in boxes:
+                if item == self.SUBSTATION_ID and (bx, by) == (px, py):
+                    continue
+                overlaps = (
+                    px - 1 < bx + bw and bx < px + pw + 1 and py - 1 < by + bh and by < py + ph + 1
+                )
+                assert not overlaps, f"substation at {(px, py)} overlaps item {item} at {(bx, by)}"
+
+    def test_two_planned_substations_never_land_on_each_other(self) -> None:
+        """The greedy must not double-book ground it has already spent.
+
+        ``free`` is eroded ONCE, from the static ground, so it cannot know about
+        the towers this plan is itself placing; the only per-site clearing is
+        the power-node spacing halo, which substation-against-substation is 21
+        cells at a reach of two while two 5x5 footprints overlap out to four.
+        Sixty of the eighty-one overlapping anchor offsets were left standing.
+
+        3x3 machines at pitch 12 in a 40x40 limit is the field that reaches it:
+        the plan plants (20, 20), walks to the far corner, and then chooses
+        (24, 19) -- four tiles away, so legal by spacing and overlapping by
+        one column.  ``_place_power`` refused the whole pack with "planned tower
+        site (24, 19) was taken during routing", which was not even true: the
+        router took nothing, the planner booked it twice.
+
+        This asserts the PLAN, not the refusal, because a fix that merely made
+        the refusal honest would still throw the pack away.
+        """
+        canvas = _Canvas(limit=(0, 0, 40, 40), power_building=self._substation())
+        for x in range(2, 40, 12):
+            for y in range(2, 40, 12):
+                canvas.add(self._machine(x, y), solid=True)
+
+        sites = _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("portable"))
+
+        assert len(sites) > 1, "this field needs several sites to be the case it is"
+        for index, (ax, ay) in enumerate(sites):
+            for bx, by in sites[index + 1 :]:
+                overlaps = abs(ax - bx) < 7 and abs(ay - by) < 7
+                assert not overlaps, f"planned substations at {(ax, ay)} and {(bx, by)} overlap"
+
+        # And the plan is standable, which is the property the refusal denied.
+        canvas.keep_out.clear()
+        freeform._place_power(canvas, sites)
+
+    def test_a_field_with_no_room_for_a_substation_is_refused(self) -> None:
+        """Three-wide gaps hold no 5x5, and that is INFEASIBLE, not a squeeze.
+
+        The margin outside the machine field is wide enough to stand in, but a
+        26.5-tile radius from there cannot reach the far corner, so no legal
+        cover exists.  Before the footprint was consulted this field planned a
+        full set of sites, each of them a substation sitting on four machines.
+        """
+        canvas = self._field(6, self._substation())
+
+        with pytest.raises(_Unpowerable):
+            _power_plan(canvas, (0, 0, 60, 60), policy=BandPolicy("portable"))
+
+    def test_a_tesla_field_is_unchanged_by_the_footprint_rule(self) -> None:
+        """The 1x1 default asks the same question it always asked."""
+        canvas = self._field(6, catalog.power_tower_building(catalog.DEFAULT_POWER_TOWER))
+        sites = _power_plan(canvas, (0, 0, 60, 60), policy=BandPolicy("portable"))
+
+        assert sites
+        assert canvas.keep_out == set(sites)
+
+    # --- end to end ------------------------------------------------------
+
+    @pytest.fixture(scope="class")
+    @staticmethod
+    def substation_build() -> tuple[BuildSpec, Placement]:
+        """One real build, on the substation arm, all the way to a placement."""
+        spec = two_stage_spec().model_copy(update={"power_tower_item_id": "satellite-substation"})
+        strips = plan_strips(spec)
+        pack = _greedy_pack(strips, _height_seed(strips))
+        prepared = _prepare_routing_problem(
+            spec, strips, pack, power=True, policy=BandPolicy("160")
+        )
+        result = _build_prepared(
+            spec,
+            strips,
+            prepared,
+            power=True,
+            route=True,
+            budget={"left": 50_000_000},
+        )
+        placement = result.placement
+        assert placement is not None
+        return spec, placement
+
+    def test_an_end_to_end_substation_build_places_only_substations(
+        self, substation_build: tuple[BuildSpec, Placement]
+    ) -> None:
+        """Task 3 proved spec->canvas and canvas->placed.  This is one run."""
+        _spec, placement = substation_build
+        power = [
+            b.item_id
+            for b in placement.buildings
+            if b.item_id in {catalog.TESLA_TOWER_ID, 2202, self.SUBSTATION_ID}
+        ]
+
+        assert power, "a powered build ships at least one power building"
+        assert set(power) == {self.SUBSTATION_ID}
+
+    def test_no_belt_or_sorter_tile_sits_inside_a_substation(
+        self, substation_build: tuple[BuildSpec, Placement]
+    ) -> None:
+        """D8: ``certify`` cannot see this, because 2212 is low-confidence."""
+        _spec, placement = substation_build
+        subs = [
+            (b.x, b.y, b.width, b.height)
+            for b in placement.buildings
+            if b.item_id == self.SUBSTATION_ID
+        ]
+        assert subs
+        #: The whole RECTANGLE of each carrier, not its anchor: a sorter is
+        #: 1x2 and a piler 2x1, so an anchor-only test would miss a carrier
+        #: hanging one tile into the substation.
+        carriers = [
+            (b.x, b.y, b.width, b.height)
+            for b in placement.buildings
+            if catalog.is_belt(b.item_id) or catalog.is_sorter(b.item_id)
+        ]
+        for sx, sy, sw, sh in subs:
+            for cx, cy, cw, ch in carriers:
+                overlaps = (
+                    sx - 1 < cx + cw and cx < sx + sw + 1 and sy - 1 < cy + ch and cy < sy + sh + 1
+                )
+                assert not overlaps, (
+                    f"belt/sorter at {(cx, cy)} {(cw, ch)} inside substation at {(sx, sy)}"
+                )
+
+    def test_no_machine_tile_sits_inside_a_substation(
+        self, substation_build: tuple[BuildSpec, Placement]
+    ) -> None:
+        _spec, placement = substation_build
+        subs = [
+            (b.x, b.y, b.width, b.height)
+            for b in placement.buildings
+            if b.item_id == self.SUBSTATION_ID
+        ]
+        assert subs
+        others = [
+            (b.x, b.y, b.width, b.height)
+            for b in placement.buildings
+            if b.item_id != self.SUBSTATION_ID
+        ]
+        for sx, sy, sw, sh in subs:
+            for bx, by, bw, bh in others:
+                overlaps = (
+                    sx - 1 < bx + bw and bx < sx + sw + 1 and sy - 1 < by + bh and by < sy + sh + 1
+                )
+                assert not overlaps, f"substation at {(sx, sy)} overlaps a building at {(bx, by)}"
+
+    def test_a_substation_build_certifies_clean(
+        self, substation_build: tuple[BuildSpec, Placement]
+    ) -> None:
+        spec, placement = substation_build
+        report = validate.certify(placement, spec, expect_power=True)
+
+        assert not report.errors, [f.check for f in report.errors]
 
 
 def _demand(index: int) -> freeform.PortAccessDemand:

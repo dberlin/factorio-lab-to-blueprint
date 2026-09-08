@@ -102,6 +102,19 @@ def test_strip_count_is_the_packed_count_not_the_logical_plan_count(mall_all_pro
     assert packed == len(plan_strips(partition.sub_spec(spec, block, 0)))
 
 
+def test_sub_spec_and_composed_spec_keep_the_power_tower_choice():
+    """D10: a sub-block that loses the choice silently reverts to the Tesla
+    Tower, so both rebuild sites (``sub_spec`` and ``composed_spec``) must
+    carry it forward from the parent."""
+    spec = _chain().model_copy(update={"power_tower_item_id": "satellite-substation"})
+    part = partition.initial_partition(spec, strip_cap=12)
+    for block in part.blocks:
+        sub = partition.sub_spec(spec, block, 0)
+        assert sub.power_tower_item_id == "satellite-substation"
+    composed = partition.composed_spec(spec, part.blocks)
+    assert composed.power_tower_item_id == "satellite-substation"
+
+
 def test_split_block_of_one_unit_splits_the_count():
     spec = _chain()
     ingot = next(g for g in spec.groups if g.recipe_id == "ingot")

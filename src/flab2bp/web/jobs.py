@@ -74,6 +74,7 @@ class Options:
     budget_s: float = 15.0
     proliferator_tier: ProliferatorTier | None = None
     machine_rank: MachineRank = MachineRank.EXACT
+    power_tower: str | None = None
     name: str = ""
     #: Mirrors ``--allow-invalid``.  Off by default: a blueprint that pastes
     #: cleanly and then does not run is the worst outcome available here.
@@ -210,6 +211,7 @@ def parse_options(raw: JsonValue) -> Options:
         "budget_s",
         "proliferator_tier",
         "machine_rank",
+        "power_tower",
         "name",
         "allow_invalid",
         "flow",
@@ -297,6 +299,16 @@ def parse_options(raw: JsonValue) -> Options:
         case _:
             raise InvalidOptions("'machine_rank' must be one of exact, up-to")
 
+    raw_power_tower = raw.get("power_tower", "auto")
+    if raw_power_tower is None or raw_power_tower == "auto":
+        power_tower = None
+    elif isinstance(raw_power_tower, str) and raw_power_tower in pipeline.POWER_TOWER_CHOICES:
+        power_tower = raw_power_tower
+    else:
+        raise InvalidOptions(
+            "'power_tower' must be one of auto, " + ", ".join(pipeline.POWER_TOWER_CHOICES)
+        )
+
     allow_invalid = raw.get("allow_invalid", False)
     if not isinstance(allow_invalid, bool):
         raise InvalidOptions("'allow_invalid' must be a boolean")
@@ -329,6 +341,7 @@ def parse_options(raw: JsonValue) -> Options:
         budget_s=budget,
         proliferator_tier=proliferator_tier,
         machine_rank=machine_rank,
+        power_tower=power_tower,
         name=name,
         allow_invalid=allow_invalid,
         flow=flow.strip(),
@@ -416,6 +429,7 @@ def run_build(
         time_budget_s=options.budget_s,
         proliferator_tier=options.proliferator_tier,
         machine_rank=options.machine_rank,
+        power_tower=options.power_tower,
         name=options.name,
         flow_text=options.flow or None,
         fetch_flow=options.fetch_flow,
@@ -602,6 +616,7 @@ class Builder:
                         policy.value for policy in job.options.candidate_policies
                     ],
                     "budget_s": job.options.budget_s,
+                    "power_tower": job.options.power_tower or "auto",
                     "proliferator_tier": (
                         job.options.proliferator_tier.value
                         if job.options.proliferator_tier is not None

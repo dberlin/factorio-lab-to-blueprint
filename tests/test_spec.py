@@ -331,6 +331,21 @@ def test_the_external_override_beats_the_specs_own_classification() -> None:
     assert spec.planning_stack("deuterium", external=True) == 2
 
 
+def test_build_spec_defaults_to_the_tesla_tower() -> None:
+    spec = BuildSpec(groups=())
+    assert spec.power_tower_item_id == "tesla-tower"
+
+
+def test_build_spec_accepts_every_power_tower_choice() -> None:
+    for lab_id in catalog.POWER_TOWER_CHOICES.values():
+        assert BuildSpec(groups=(), power_tower_item_id=lab_id).power_tower_item_id == lab_id
+
+
+def test_build_spec_refuses_a_power_tower_it_cannot_place() -> None:
+    with pytest.raises(ValidationError):
+        BuildSpec(groups=(), power_tower_item_id="assembling-machine-1")
+
+
 def test_self_loop_seed_arithmetic_cannot_lie() -> None:
     with pytest.raises(ValidationError):
         SelfLoopSeed(

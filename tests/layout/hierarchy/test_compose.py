@@ -197,6 +197,29 @@ def test_canvas_for_registers_each_building_kind_the_way_freeform_does():
     assert all(levels and min(levels) >= 1 for levels in canvas.belt_ban.values())
 
 
+@pytest.mark.parametrize(
+    ("power_id", "reserved_radius"), (("tesla-tower", 0), ("satellite-substation", 3))
+)
+def test_composed_power_clearance_blocks_cut_routes_without_widening_tesla(
+    power_id: str, reserved_radius: int
+) -> None:
+    power = catalog.power_tower_building(power_id)
+    tower = PlacedBuilding(
+        item_id=power.item_id,
+        model_index=power.model_index,
+        x=-(power.width // 2),
+        y=-(power.height // 2),
+        width=power.width,
+        height=power.height,
+    )
+    spec = chain_build_spec().model_copy(update={"power_tower_item_id": power_id})
+    canvas = compose.canvas_for(spec, [tower], ramped=False, margin=4)
+
+    assert not canvas.free((-reserved_radius, -reserved_radius, 0))
+    assert not canvas.free((reserved_radius, reserved_radius, 0))
+    assert canvas.free((reserved_radius + 1, 0, 0))
+
+
 def test_a_coater_drop_is_exempt_from_another_coaters_ban():
     """Two Coaters one tile apart: A's ban covers B's drop, and the drop wins.
 

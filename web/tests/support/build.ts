@@ -72,6 +72,7 @@ export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
     machines: 9,
     machine_rank: 'exact',
     machine_moves: [],
+    power_building: 'Tesla Tower',
     pilers: 0,
     area: 575,
     primary_band: 160,

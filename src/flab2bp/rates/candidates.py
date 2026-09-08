@@ -15,7 +15,7 @@ from enum import StrEnum
 from fractions import Fraction
 from math import gcd, lcm
 
-from flab2bp.dsp import rules
+from flab2bp.dsp import catalog, rules
 from flab2bp.lab.flow import (
     FlowError,
     FlowSelection,
@@ -194,6 +194,7 @@ def _to_build_spec(
     *,
     machine_rank: MachineRank = MachineRank.EXACT,
     machine_moves: tuple[MachineMove, ...] = (),
+    power_tower_item_id: str = catalog.DEFAULT_POWER_TOWER,
 ) -> BuildSpec:
     """Project a solved plan onto the frozen rates/geometry contract."""
     groups: list[MachineGroup] = []
@@ -243,6 +244,7 @@ def _to_build_spec(
         outputs=dict(solution.outputs),
         surplus_outputs=surplus_outputs,
         belt_item_id=belt_id,
+        power_tower_item_id=power_tower_item_id,
         belt_items_per_second=data.belt_speed(belt_id),
         belt_upgrades=belt_upgrades,
         sorter_item_ids=tiers.sorter_item_ids,
@@ -422,7 +424,9 @@ def _pinned_candidates(
     flow: FlowSelection,
     time_limit_s: float,
     tier: ProliferatorTier | None = None,
+    *,
     machine_rank: MachineRank = MachineRank.EXACT,
+    power_tower_item_id: str = catalog.DEFAULT_POWER_TOWER,
 ) -> BuildSpecSet:
     """Build the single recipe/mode selection FactorioLab's flow describes.
 
@@ -457,6 +461,7 @@ def _pinned_candidates(
         label,
         machine_rank=machine_rank,
         machine_moves=plan.machine_moves,
+        power_tower_item_id=power_tower_item_id,
     )
     forbidden = sorted(
         {item_id for item_id in (*spec.outputs, *spec.surplus_outputs) if item_id.startswith("df-")}
@@ -495,6 +500,7 @@ def build_candidates(
     time_limit_s: float = 30.0,
     flow: FlowSelection | None = None,
     machine_rank: MachineRank = MachineRank.EXACT,
+    power_tower_item_id: str = catalog.DEFAULT_POWER_TOWER,
 ) -> BuildSpecSet:
     """Canonicalize direct public inputs once, then build the selected policies."""
     return _build_candidates_canonical(
@@ -505,6 +511,7 @@ def build_candidates(
         time_limit_s=time_limit_s,
         flow=flow,
         machine_rank=machine_rank,
+        power_tower_item_id=power_tower_item_id,
     )
 
 
@@ -517,6 +524,7 @@ def _build_candidates_canonical(
     time_limit_s: float = 30.0,
     flow: FlowSelection | None = None,
     machine_rank: MachineRank = MachineRank.EXACT,
+    power_tower_item_id: str = catalog.DEFAULT_POWER_TOWER,
 ) -> BuildSpecSet:
     """Emit the selected policies in canonical order as complete, valid builds.
 
@@ -554,7 +562,13 @@ def _build_candidates_canonical(
         # A supplied flow fixes recipe and per-recipe mode choices. An explicit
         # tier still wins; None means preserve the flow's own tier exactly.
         return _pinned_candidates(
-            data, request, flow, time_limit_s, tier, machine_rank=machine_rank
+            data,
+            request,
+            flow,
+            time_limit_s,
+            tier,
+            machine_rank=machine_rank,
+            power_tower_item_id=power_tower_item_id,
         )
 
     # A URL that names a proliferator pins the tier; one that does not leaves
@@ -579,6 +593,7 @@ def _build_candidates_canonical(
         "no-proliferator",
         machine_rank=machine_rank,
         machine_moves=baseline.machine_moves,
+        power_tower_item_id=power_tower_item_id,
     )
     _refuse_derived_dark_fog(baseline_spec)
     baseline_machines = baseline_spec.machine_count
@@ -626,6 +641,7 @@ def _build_candidates_canonical(
                 policy.value,
                 machine_rank=machine_rank,
                 machine_moves=plan.machine_moves,
+                power_tower_item_id=power_tower_item_id,
             )
             if _is_runaway(spec, baseline_machines):
                 dropped.append(f"{policy.value} ({spec.machine_count:,} machines)")

@@ -154,10 +154,17 @@ test('empty candidate policy selection disables Build and shows inline validatio
   expect(calls).toHaveLength(0);
 });
 
-test('power is always on and has no selector', () => {
+test('the power tower selection is sent as an explicit override', async () => {
+  const calls = serving({ status: 202, body: aJob() });
   mount();
-  expect(screen.queryByRole('checkbox', { name: /Tesla Towers/i })).not.toBeInTheDocument();
-  expect(screen.queryByText(/--no-power/i)).not.toBeInTheDocument();
+  const select = screen.getByRole('combobox', { name: 'Power tower' });
+  expect(select).toHaveValue('auto');
+  fireEvent.change(select, { target: { value: 'substation' } });
+  build();
+  await waitFor(() => expect(calls).toHaveLength(1));
+  const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
+  expect(body.power_tower).toBe('substation');
+  expect(body).not.toHaveProperty('power');
 });
 
 test('automatic flow fetch is off by default and is submitted when selected', async () => {

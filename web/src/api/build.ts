@@ -38,6 +38,7 @@ export const RequestStrategy = z.enum(['best', 'freeform', 'sequence-pair', 'hie
 export const ExplicitStrategy = z.enum(['freeform', 'sequence-pair', 'hierarchical']);
 
 export const ProliferatorTier = z.enum(['auto', 'none', '1', '2', '3']);
+export const PowerTower = z.enum(['auto', 'tesla', 'substation', 'wireless']);
 
 /** Whether the URL's ranked producer is exact or a speed ceiling. */
 export const MachineRank = z.enum(['exact', 'up-to']);
@@ -150,6 +151,7 @@ const BuildResult = z.object({
   machines: z.number(),
   machine_rank: MachineRank,
   machine_moves: z.array(MachineMove),
+  power_building: z.string(),
   pilers: z.number(),
   area: z.number(),
   buildings: z.number(),
@@ -228,6 +230,7 @@ export const BuildOptions = z
     budget_s: z.number(),
     proliferator_tier: ProliferatorTier,
     machine_rank: MachineRank,
+    power_tower: PowerTower,
     band: BandSelection,
     name: z.string(),
     allow_invalid: z.boolean(),
@@ -249,6 +252,7 @@ export type RequestStrategy = z.infer<typeof RequestStrategy>;
 export type ExplicitStrategy = z.infer<typeof ExplicitStrategy>;
 export type ProliferatorTier = z.infer<typeof ProliferatorTier>;
 export type MachineRank = z.infer<typeof MachineRank>;
+export type PowerTower = z.infer<typeof PowerTower>;
 
 export const DEFAULT_OPTIONS: BuildOptions = {
   url: '',
@@ -257,6 +261,7 @@ export const DEFAULT_OPTIONS: BuildOptions = {
   budget_s: 15,
   proliferator_tier: 'auto',
   machine_rank: 'exact',
+  power_tower: 'auto',
   name: '',
   band: 'portable',
   // Off by default, exactly as the CLI has it: a blueprint that pastes cleanly
