@@ -61,5 +61,14 @@ def test_an_absent_strip_raises_the_same_shape_of_error_as_index() -> None:
 
 
 def test_an_empty_permutation_is_legal_and_empty() -> None:
-    index = StripPositions.of(())
+    index: StripPositions[int] = StripPositions.of(())
     assert len(index) == 0
+
+
+def test_repeated_hashable_identities_keep_the_first_matching_position() -> None:
+    identities = (("iron", 0), ("copper", 1), ("iron", 0))
+    index = StripPositions.of(identities)
+
+    assert index.position_of(("iron", 0)) == 0
+    assert index.positions_of(("copper", 1), ("iron", 0)) == (1, 0)
+    assert index.strip_at(1) == ("copper", 1)

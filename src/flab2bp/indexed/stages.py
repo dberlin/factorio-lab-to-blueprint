@@ -1,16 +1,13 @@
 """An append-and-rewrite ledger that keeps its own predicate count.
 
-`SequenceSolver` sums `_counts_as_scheduled_stage` over `self._stage_stats` on
-EVERY iteration of its top-level `while True:` driver (sequence_solver.py:1280)
-and again inside `_run_pending_projection_feedback` (:2030), which that same
-loop reaches from three sites. The list grows one entry per stage, so the sum is
-O(S) per iteration and O(S^2) over a solve.
+`SequenceSolver` formerly summed `_counts_as_scheduled_stage` over every
+observation on each driver iteration and again before pending projection
+feedback. Those repeated scans made a solve's count maintenance O(S^2).
 
-The list is also REWRITTEN in place: sequence_solver.py:2106-2107 replaces
-`[-1]` with a copy whose `global_skip_reason` is "projection-feedback", and the
-predicate is False for that reason. That is why this type owns BOTH mutations
-and re-evaluates the predicate on each; a counter bumped only on append reports
-a number the scan never would.
+The most recent observation is also rewritten after projection feedback,
+which does not consume another scheduled stage. This type owns BOTH
+mutations and re-evaluates the predicate on each; a counter bumped only
+on append would stop the search early.
 
 Backend: a plain list plus an int. The only repeated query is a count under one
 predicate, on the hottest write path in the solver -- Ruling 2's plain-index

@@ -748,7 +748,7 @@ def _add_net_endpoints(strips: set[int], net: NetId, size: int) -> None:
 
 
 def _sequence_neighbours(
-    positions: tuple[StripPositions, StripPositions], strips: set[int]
+    positions: tuple[StripPositions[int], StripPositions[int]], strips: set[int]
 ) -> set[int]:
     neighbours: set[int] = set()
     for permutation in positions:

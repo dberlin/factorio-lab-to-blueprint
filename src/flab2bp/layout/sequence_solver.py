@@ -18,6 +18,7 @@ from itertools import islice
 from types import MappingProxyType
 from typing import Protocol, TypedDict
 
+from flab2bp.indexed import Stages, StripPositions
 from flab2bp.layout import finalize, last_mile, route_kernel, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
@@ -1116,7 +1117,7 @@ class SequenceSolver[PreparedT]:
             )
             for order, height in enumerate(heights)
         ]
-        self._stage_stats: list[StageObservation] = []
+        self._stage_stats: Stages[StageObservation] = Stages(_counts_as_scheduled_stage)
         self._incumbent: _ExactIncumbent | None = None
         self._last_height: int | None = None
         #: The AREA of the best placement another racing strategy has certified,
@@ -1130,6 +1131,20 @@ class SequenceSolver[PreparedT]:
         #: The build's label, forwarded once at construction so a `SearchEvent`
         #: never has to look it up -- it is copied, never computed.
         self._candidate_label = candidate_label
+
+    def _deferred_feedback_height(self) -> _HeightState | None:
+        """Return the first height with deferred feedback, in scheduling order."""
+        return next(
+            (height for height in self._heights if height.deferred_feedback_budget is not None),
+            None,
+        )
+
+    def _pending_compact_height(self) -> _HeightState | None:
+        """Return the first height with a compact seed, in scheduling order."""
+        return next(
+            (height for height in self._heights if height.pending_compact_seed is not None),
+            None,
+        )
 
     def _start_measured_stage(
         self,
@@ -1277,7 +1292,7 @@ class SequenceSolver[PreparedT]:
         termination = "stage-limit"
         feasibility_restart_batches = 0
         while True:
-            if sum(_counts_as_scheduled_stage(stage) for stage in self._stage_stats) >= stage_limit:
+            if self._stage_stats.scheduled_count() >= stage_limit:
                 # Each stop keeps its own attribution: a continuation that runs
                 # out of clock or of ledger is a deadline or a budget refusal,
                 # exactly as it would have been without the continuation.  Only
@@ -1305,14 +1320,8 @@ class SequenceSolver[PreparedT]:
             if self.deadline_reached():
                 termination = "deadline"
                 break
-            deferred_feedback_height = next(
-                (height for height in self._heights if height.deferred_feedback_budget is not None),
-                None,
-            )
-            compact_height = next(
-                (height for height in self._heights if height.pending_compact_seed is not None),
-                None,
-            )
+            deferred_feedback_height = self._deferred_feedback_height()
+            compact_height = self._pending_compact_height()
             measured_role = (
                 _MeasuredStageRole.FEEDBACK
                 if deferred_feedback_height is not None
@@ -1644,7 +1653,7 @@ class SequenceSolver[PreparedT]:
             exact_candidate_key=incumbent.candidate_key,
             exact_breakdown=incumbent.breakdown,
             exact_archive_categories=incumbent.archive_categories,
-            stages=tuple(self._stage_stats),
+            stages=self._stage_stats.as_tuple(),
             termination=termination,
             feasibility_restart_batches=feasibility_restart_batches,
         )
@@ -2027,7 +2036,7 @@ class SequenceSolver[PreparedT]:
             ),
             None,
         )
-        scheduled_stages = sum(_counts_as_scheduled_stage(stage) for stage in self._stage_stats)
+        scheduled_stages = self._stage_stats.scheduled_count()
         if (
             prior_cancelled
             or effective_detailed_allowance == 0
@@ -2103,10 +2112,9 @@ class SequenceSolver[PreparedT]:
                 closure_allowance=(allowance if closure_allowance is None else closure_allowance),
             )
             if projection_closure:
-                observation = self._stage_stats[-1]
-                self._stage_stats[-1] = replace(
-                    observation,
-                    global_skip_reason="projection-feedback",
+                observation = self._stage_stats.last()
+                self._stage_stats.replace_last(
+                    replace(observation, global_skip_reason="projection-feedback")
                 )
             return routed
         finally:
@@ -3485,10 +3493,10 @@ def _projection_feedback_stage_update(
         permutation: tuple[int, ...],
         left: int,
         right: int,
+        positions: StripPositions[int],
     ) -> tuple[int, ...]:
         values = list(permutation)
-        left_position = values.index(left)
-        right_position = values.index(right)
+        left_position, right_position = positions.positions_of(left, right)
         values[left_position], values[right_position] = (
             values[right_position],
             values[left_position],
@@ -3497,6 +3505,8 @@ def _projection_feedback_stage_update(
 
     if deadline is not None and time.monotonic() >= deadline:
         return None
+    positive_positions = StripPositions.of(state.pair.positive)
+    negative_positions = StripPositions.of(state.pair.negative)
     for left, right in pairs:
         for axis in ("negative", "positive"):
             if deadline is not None and time.monotonic() >= deadline:
@@ -3504,12 +3514,12 @@ def _projection_feedback_stage_update(
             sequence_pair = (
                 replace(
                     state.pair,
-                    negative=swapped(state.pair.negative, left, right),
+                    negative=swapped(state.pair.negative, left, right, negative_positions),
                 )
                 if axis == "negative"
                 else replace(
                     state.pair,
-                    positive=swapped(state.pair.positive, left, right),
+                    positive=swapped(state.pair.positive, left, right, positive_positions),
                 )
             )
             candidate = replace(state, pair=sequence_pair)
@@ -5622,6 +5632,9 @@ def _production_run(
         | None
     ) = None
 
+    # Each index retains its immutable tuple, so identity keys cannot be reused.
+    instance_positions: dict[int, StripPositions[StripInstanceId]] = {}
+
     def transform_stage(
         height: int,
         problem: PlacementProblem,
@@ -5643,7 +5656,12 @@ def _production_run(
                 projection_failures,
             )
             if requirement is not None:
-                strip = problem.instance_ids.index(requirement.instance_id)
+                identities_key = id(problem.instance_ids)
+                positions = instance_positions.get(identities_key)
+                if positions is None:
+                    positions = StripPositions.of(problem.instance_ids)
+                    instance_positions[identities_key] = positions
+                strip = positions.position_of(requirement.instance_id)
                 selected_variant = problem.variant(strip, state.variant_indices[strip])
                 pose_id = strip_pose_id(selected_variant)
                 enabled = tuple(
@@ -6215,7 +6233,7 @@ def _production_run(
                 refinement_hint = _retain_refinement_hint(
                     refinement_hint,
                     width=candidate.width,
-                    exact_key=solver._stage_stats[-1].exact_key,
+                    exact_key=solver._stage_stats.last().exact_key,
                     decoded=decoded,
                 )
             stop_topology = False
@@ -6261,7 +6279,7 @@ def _production_run(
                         ),
                     )
                     telemetry.topology_beam_candidates += 1
-                    if solver._stage_stats[-1].exact_key is not None:
+                    if solver._stage_stats.last().exact_key is not None:
                         stop_topology = True
             stage_admission.finish(
                 topology_stage_started,
@@ -6511,7 +6529,7 @@ class _PreparedLowerBoundStats(TypedDict):
 
 
 def _prepared_lower_bound_stats(
-    stages: Sequence[StageObservation],
+    stages: Sequence[StageObservation] | Stages[StageObservation],
 ) -> _PreparedLowerBoundStats:
     """Aggregate prepared-bound observations, including proof-based skips."""
     prepared = tuple(stage for stage in stages if stage.prepared_lower_key is not None)

@@ -699,7 +699,13 @@ def test_exhausted_compact_restart_does_not_defer_feedback_or_double_settle() ->
     assert budget.discovery_complete
 
 
-def test_compact_projection_refusal_closes_inside_its_replacement_stage() -> None:
+@pytest.mark.parametrize(
+    ("stage_limit", "termination"),
+    [(1, "stage-limit"), (2, "candidates")],
+)
+def test_compact_projection_refusal_closes_inside_its_replacement_stage(
+    stage_limit: int, termination: str
+) -> None:
     problem, state, refused, failure = _projection_pitch_stage_fixture()
     exact = _placement(area=20, belt_tiles=4)
     detailed_results = iter(
@@ -758,9 +764,10 @@ def test_compact_projection_refusal_closes_inside_its_replacement_stage() -> Non
         stage_boundary_transform=transform,
     )
 
-    result = solver.search(max_stages=1)
+    result = solver.search(max_stages=stage_limit)
 
     assert result.placement is exact
+    assert result.termination == termination
     assert [stage.global_skip_reason for stage in result.stages] == [
         "compact-seed",
         "projection-feedback",
@@ -4925,6 +4932,7 @@ def test_topology_candidate_zero_survives_single_admission_and_tall_refinement(
 
             class Stage:
                 exact_key: tuple[int, int] | None = None
+                global_skip_reason = "topology-beam"
 
             _solver._stage_stats.append(Stage())  # type: ignore[arg-type]
         assert reason == "topology-beam"
