@@ -73,6 +73,7 @@ def test_beside_equals_the_from_scratch_touch_map_after_every_mutation() -> None
         brute = _brute_touch(live)
         for cell, expected in brute.items():
             assert index.beside(cell) == frozenset(expected), (step, cell)
+            assert index.beside_in_scan_order(cell) == tuple(expected), (step, cell)
         assert index.nets() == tuple(sorted(live)), step
 
 
@@ -112,10 +113,10 @@ def test_sole_neighbours_equals_the_from_scratch_sole_map() -> None:
 
 def test_position_in_equals_tuple_index_and_answers_none_when_absent() -> None:
     index = StakedPaths(_STEPS)
-    path = ((1, 1, 0), (2, 1, 0), (3, 1, 0))
+    path = ((1, 1, 0), (2, 1, 0), (3, 1, 0), (1, 1, 0))
     index.stake(7, path)
-    for position, cell in enumerate(path):
-        assert index.position_in(7, cell) == position
+    for cell in path:
+        assert index.position_in(7, cell) == path.index(cell)
     assert index.position_in(7, (9, 9, 9)) is None
     assert index.position_in(999, (1, 1, 0)) is None
 
@@ -134,3 +135,16 @@ def test_stake_accepts_an_empty_path_without_raising() -> None:
     assert index.position_in(3, (0, 0, 0)) is None
     index.unstake(3)
     assert index.nets() == ()
+
+
+def test_linked_heads_drop_replaced_and_unstaked_taps_only() -> None:
+    index = StakedPaths(_STEPS)
+    shared = ((1, 1, 0), (2, 1, 0))
+    index.stake(1, shared, linked_head=True)
+    index.stake(2, shared, linked_head=True)
+    index.stake(3, ((9, 9, 0),))
+    assert index.linked_heads() == frozenset({shared[0]})
+    index.unstake(1)
+    assert index.linked_heads() == frozenset({shared[0]})
+    index.stake(2, ((4, 4, 0),))
+    assert index.linked_heads() == frozenset()
