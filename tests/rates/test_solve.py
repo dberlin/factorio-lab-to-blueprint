@@ -14,6 +14,7 @@ from ortools.linear_solver import pywraplp  # type: ignore[import-untyped]
 from sympy import Rational  # type: ignore[import-untyped]
 from sympy.solvers.simplex import linprog  # type: ignore[import-untyped]
 
+from flab2bp.lab import params as P
 from flab2bp.lab.data import load_dataset
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import LabRequest, Objective, ObjectiveType, ObjectiveUnit, parse_url
@@ -1483,6 +1484,79 @@ def test_a_zero_limit_on_a_raw_input_refuses_the_solve(data: Dataset) -> None:
     """Nothing here crafts iron ore, so the block cannot honour the limit."""
     with pytest.raises(InfeasibleError, match="iron-ore is limited to zero as an input"):
         solve(data, _with_limit("iron-ore", 0))
+
+
+@pytest.mark.parametrize("compressed", [False, True], ids=["bare", "compressed"])
+def test_parsed_zero_limit_reaches_rate_constraint(data: Dataset, compressed: bool) -> None:
+    output, limited = "gear", "iron-ingot"
+    if compressed:
+        mh = P.load_mod_hash("dsp")
+        output = P.n_to_id(mh.items.index(output))
+        limited = P.n_to_id(mh.items.index(limited))
+    query = f"o={output}*60&o={limited}*0*0*3&v=11"
+    if compressed:
+        query = f"z={P.deflate(query)}&v=11"
+    request = parse_url(f"https://factoriolab.github.io/dsp/list?{query}")
+    assert request.objectives[1].value == Fraction(0)
+    solution = solve(data, request)
+    assert solution.outputs == {"gear": Fraction(1)}
+    assert "iron-ingot" in solution.forbidden_inputs
+    assert "iron-ingot" not in solution.external_inputs
+
+
+def test_parsed_zero_output_and_input_do_not_become_positive_rates(data: Dataset) -> None:
+    request = parse_url(
+        "https://factoriolab.github.io/dsp/list?o=iron-ingot*60&o=gear*0&o=copper-ingot*0*0*1&v=11"
+    )
+    assert target_rates(data, request) == {"iron-ingot": Fraction(1), "gear": Fraction(0)}
+    assert supplied_rates(data, request) == {"copper-ingot": Fraction(0)}
+
+
+def test_parsed_zero_maximize_is_refused_by_rate_domain(data: Dataset) -> None:
+    request = parse_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&o=gear*0*0*2&v=11")
+    with pytest.raises(UnsupportedObjectiveError):
+        target_rates(data, request)
+
+
+def test_physical_area_ignores_machine_display_labels(data: Dataset) -> None:
+    renamed = replace(
+        data,
+        items=tuple(
+            replace(item, name=f"Translated {item.id}") if item.machine else item
+            for item in data.items
+        ),
+    )
+    request = parse_url(
+        "https://factoriolab.github.io/dsp/list?o=iron-ingot*60&mmr=arc-smelter&v=11"
+    )
+    original = solve(data, request)
+    translated = solve(renamed, request)
+    assert translated.total_area == original.total_area == 9
+    assert translated.lower_bound_area == original.lower_bound_area == Fraction(9)
+    assert translated.external_inputs == original.external_inputs == {"iron-ore": Fraction(1)}
+    assert translated.outputs == original.outputs == {"iron-ingot": Fraction(1)}
+
+
+def test_extraction_has_zero_area_without_a_physical_machine(data: Dataset) -> None:
+    from flab2bp.rates.solve import _columns
+
+    recipe = replace(data.recipe("iron-vein"), producers=("unplaced-extraction",))
+    extraction_data = replace(
+        data,
+        items=(
+            *data.items,
+            replace(data.item("mining-machine"), id="unplaced-extraction"),
+        ),
+    )
+    (column,) = _columns(
+        extraction_data,
+        {"iron-ore": (recipe,)},
+        parse_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11"),
+        ProliferatorTier.NONE,
+        None,
+    )
+    assert column.footprint_area == 0
+    assert column.output_rate("iron-ore") > 0
 
 
 def test_up_to_changes_machine_ids_without_changing_counts_or_flows(data: Dataset) -> None:

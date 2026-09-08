@@ -1,8 +1,9 @@
-import { createContext, type ReactNode, useContext, useState } from 'react';
+import { createContext, type ReactNode, useCallback, useContext, useRef, useState } from 'react';
 import type { TraceFrame } from '../api/trace';
 import { type Blueprint, parseBlueprint } from '../format';
 import type { Catalog } from '../model/catalog';
 import { buildSceneModel, type SceneModel } from '../model/layout';
+import { traceFrameLabel, traceFrameToBlueprint } from '../model/traceScene';
 
 /** How the machines are drawn. Ghosted by default: the belts, their numbers
     and the sorters that serve them all sit at ground level, and a solid
@@ -28,7 +29,34 @@ export interface TraceOverlayShow {
   noGoods: boolean;
 }
 
+export type ArtifactSource = { kind: 'import' } | { kind: 'build'; jobId: string };
+
+export type DisplayedDocument =
+  | {
+      kind: 'artifact';
+      generation: number;
+      blueprint: Blueprint;
+      text: string;
+      source: ArtifactSource;
+    }
+  | {
+      kind: 'trace';
+      generation: number;
+      blueprint: Blueprint;
+      frame: TraceFrame;
+      label: string;
+      jobId: string;
+    };
+
+interface DisplayState {
+  document: DisplayedDocument | null;
+  error: string | null;
+  selectedIndex: number | null;
+  stale: boolean;
+}
+
 export interface BlueprintState {
+  document: DisplayedDocument | null;
   blueprint: Blueprint | null;
   sceneModel: SceneModel | null;
   catalog: Catalog;
@@ -43,18 +71,19 @@ export interface BlueprintState {
       a picture of a search state: it was never encoded, never validated, and
       must never be mistaken for something pasteable. */
   snapshotLabel: string | null;
-  /** The frame the canvas' overlays are drawn from -- `null` off a real load
-      (see `load`) and while no trace has produced one yet. */
+  /** Derived from the displayed trace document; absent for encoded artifacts. */
   traceFrame: TraceFrame | null;
   traceShow: TraceOverlayShow;
   view: ViewOptions;
   setView(view: ViewOptions): void;
-  load(text: string): void;
-  loadSnapshot(bp: Blueprint, label: string): void;
-  setTraceFrame(frame: TraceFrame | null): void;
+  beginPublication(): number;
+  publishArtifact(text: string, generation: number, source?: ArtifactSource): boolean;
+  failPublication(message: string, generation: number): void;
+  publishTrace(frame: TraceFrame, jobId: string, generation: number): boolean;
+  selectTrace(frame: TraceFrame, jobId: string): number;
   setTraceShow(show: TraceOverlayShow): void;
   select(index: number | null): void;
-  markStale(): void;
+  markStale(generation: number): void;
 }
 
 const Ctx = createContext<BlueprintState | null>(null);
@@ -66,12 +95,15 @@ export function BlueprintProvider({
   catalog: Catalog;
   children: ReactNode;
 }) {
-  const [blueprint, setBlueprint] = useState<Blueprint | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-  const [stale, setStale] = useState(false);
-  const [snapshotLabel, setSnapshotLabel] = useState<string | null>(null);
-  const [traceFrame, setTraceFrame] = useState<TraceFrame | null>(null);
+  const [display, setDisplay] = useState<DisplayState>({
+    document: null,
+    error: null,
+    selectedIndex: null,
+    stale: false,
+  });
+  // Async producers hold tokens, not setters. Ref admission is synchronous even
+  // when React batches a manual selection and an older completion together.
+  const authority = useRef({ generation: 0, automaticTrace: true });
   const [traceShow, setTraceShow] = useState<TraceOverlayShow>({
     stranded: true,
     noGoods: true,
@@ -83,54 +115,102 @@ export function BlueprintProvider({
     machines: 'ghosted',
   });
 
-  // Derived during render. Do NOT move this into state or an effect; the React
-  // Compiler memoizes it, and buildSceneModel is pure.
+  const beginPublication = useCallback(() => {
+    const generation = authority.current.generation + 1;
+    authority.current = { generation, automaticTrace: true };
+    return generation;
+  }, []);
+
+  const publishArtifact = useCallback(
+    (text: string, generation: number, source: ArtifactSource = { kind: 'import' }) => {
+      if (generation !== authority.current.generation) return false;
+      authority.current.automaticTrace = false;
+      try {
+        const blueprint = parseBlueprint(text);
+        setDisplay({
+          document: { kind: 'artifact', generation, blueprint, text, source },
+          error: null,
+          selectedIndex: null,
+          stale: false,
+        });
+      } catch (cause) {
+        setDisplay({
+          document: null,
+          error: cause instanceof Error ? cause.message : String(cause),
+          selectedIndex: null,
+          stale: false,
+        });
+      }
+      return true;
+    },
+    [],
+  );
+
+  const failPublication = useCallback((error: string, generation: number) => {
+    if (generation === authority.current.generation) {
+      setDisplay((previous) => ({ ...previous, error }));
+    }
+  }, []);
+
+  const publishTrace = useCallback((frame: TraceFrame, jobId: string, generation: number) => {
+    if (generation !== authority.current.generation || !authority.current.automaticTrace)
+      return false;
+    const document: DisplayedDocument = {
+      kind: 'trace',
+      generation,
+      jobId,
+      frame,
+      blueprint: traceFrameToBlueprint(frame),
+      label: traceFrameLabel(frame),
+    };
+    setDisplay({ document, error: null, selectedIndex: null, stale: false });
+    return true;
+  }, []);
+
+  const selectTrace = useCallback(
+    (frame: TraceFrame, jobId: string) => {
+      const generation = beginPublication();
+      publishTrace(frame, jobId, generation);
+      return generation;
+    },
+    [beginPublication, publishTrace],
+  );
+
+  const select = useCallback((selectedIndex: number | null) => {
+    setDisplay((previous) => ({ ...previous, selectedIndex }));
+  }, []);
+  const markStale = useCallback((generation: number) => {
+    if (generation === authority.current.generation) {
+      setDisplay((previous) => ({ ...previous, stale: previous.document !== null }));
+    }
+  }, []);
+
+  const { document, error, selectedIndex, stale } = display;
+  const blueprint = document?.blueprint ?? null;
+  // Derived, not another publication authority. The React Compiler memoizes it.
   const sceneModel = blueprint ? buildSceneModel(blueprint, catalog) : null;
 
-  const load = (text: string) => {
-    setStale(false);
-    // A real load replaces whatever search snapshot was on the canvas -- this
-    // is a validated result, not a picture of the search that found it.
-    setSnapshotLabel(null);
-    setTraceFrame(null);
-    try {
-      setBlueprint(parseBlueprint(text));
-      setError(null);
-    } catch (cause) {
-      setBlueprint(null);
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-    setSelectedIndex(null);
-  };
-
-  // Takes an already-built Blueprint -- never `parseBlueprint`, never a
-  // pasted string -- and leaves `stale` alone (Ruling 5, task-5-addendum.md):
-  // a non-null `snapshotLabel` alongside the existing `stale` machinery is
-  // what stops a trace frame being mistaken for a real result.
-  const loadSnapshot = (bp: Blueprint, label: string) => {
-    setBlueprint(bp);
-    setSnapshotLabel(label);
-  };
-
   const value: BlueprintState = {
+    document,
     blueprint,
     sceneModel,
     catalog,
     error,
     selectedIndex,
-    // Nothing loaded is not stale, it is empty; the canvas says so itself.
-    stale: stale && blueprint !== null,
-    snapshotLabel,
-    traceFrame,
+    stale,
+    snapshotLabel: document?.kind === 'trace' ? document.label : null,
+    traceFrame: document?.kind === 'trace' ? document.frame : null,
     traceShow,
     view,
     setView,
-    load,
-    loadSnapshot,
-    setTraceFrame,
+    beginPublication,
+    publishArtifact,
+    failPublication,
+    publishTrace,
+    selectTrace,
     setTraceShow,
-    select: setSelectedIndex,
-    markStale: () => setStale(true),
+    select,
+    markStale,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

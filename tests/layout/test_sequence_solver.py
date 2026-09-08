@@ -17,7 +17,8 @@ import flab2bp.layout.sequence_solver as sequence_solver
 import flab2bp.layout.sequence_solver as sequence_solver_module
 import flab2bp.layout.strip_variants as strip_variants_module
 from flab2bp.dsp import catalog, rules
-from flab2bp.layout import finalize, route_kernel, slots, validate
+from flab2bp.lab.techs import belt_rules_for_url
+from flab2bp.layout import finalize, route_kernel, routing_domain, slots, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     AreaFrame,
@@ -36,16 +37,12 @@ from flab2bp.layout.compact_seed import (
     VariantDirectInsertTarget,
 )
 from flab2bp.layout.freeform import (
-    _COATER_NODE_TILES,
     _COATER_WEST_CHANNEL,
-    _ENTRY_RING,
-    PreparedRoutingLowerBound,
     _box,
     _coarsen_saturated_strip_plan,
     _direct_net_candidates,
     _greedy_pack,
     _nets_between,
-    _prepare_routing_problem,
     plan_strips,
 )
 from flab2bp.layout.global_router import GlobalRouteResult
@@ -64,6 +61,12 @@ from flab2bp.layout.route_feedback import (
     select_lns_neighbourhood,
     select_split_candidate,
     update_feedback,
+)
+from flab2bp.layout.routing_domain import (
+    _COATER_NODE_TILES,
+    _ENTRY_RING,
+    PreparedRoutingLowerBound,
+    _prepare_routing_problem,
 )
 from flab2bp.layout.sequence_alns import (
     C_CONTEXT_FRACTION_STEPS,
@@ -150,6 +153,9 @@ from tests.layout.test_freeform import (
     spray_domain_spec,
     two_stage_spec,
 )
+
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+
 
 Prepared = tuple[int, DecodedPlacement]
 _PORTABLE_BAND_POLICY = BandPolicy("portable")
@@ -271,6 +277,7 @@ def test_sequence_pair_preserves_mixed_spray_domain_logical_nets() -> None:
 def test_sequence_pair_routes_requested_outputs_to_the_boundary() -> None:
     spec = single_recipe_spec()
     placement = SequencePairLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         islands=1,
         config=SequenceSolverConfig.test(),
@@ -288,7 +295,7 @@ def test_sequence_pair_routes_requested_outputs_to_the_boundary() -> None:
     assert all(
         building.x in (min_x, max_x) or building.y in (min_y, max_y) for building in terminals
     )
-    assert validate.certify(placement, spec, expect_power=True).ok
+    assert validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True).ok
 
 
 def _routing(
@@ -2506,6 +2513,7 @@ def test_production_projection_refusals_reach_terminal_sequence_evidence(
 ) -> None:
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -2532,14 +2540,16 @@ def test_production_projection_refusals_reach_terminal_sequence_evidence(
     )
     batches = iter(((first, shared), (shared, last)))
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
 
     def refuse_projection(
         _placement: Placement,
         _policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
     ) -> Never:
         raise finalize.ProjectionRefusal(next(batches))
 
@@ -3253,8 +3263,8 @@ def test_unseatable_prepared_candidate_remains_searchable_refusal(
 ) -> None:
     def refuse_preparation(
         _spec: BuildSpec,
-        _strips: list[freeform_module.Strip],
-        _pack: freeform_module._Pack,
+        _strips: list[routing_domain.Strip],
+        _pack: routing_domain._Pack,
         *,
         policy: BandPolicy,
         power: bool,
@@ -3262,7 +3272,7 @@ def test_unseatable_prepared_candidate_remains_searchable_refusal(
         _reserve_ports: bool = True,
     ) -> Never:
         del power, policy, ramped, _reserve_ports
-        raise freeform_module._Unseatable("positional coater collision")
+        raise routing_domain._Unseatable("positional coater collision")
 
     monkeypatch.setattr(
         sequence_solver_module,
@@ -3271,6 +3281,7 @@ def test_unseatable_prepared_candidate_remains_searchable_refusal(
     )
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -3381,7 +3392,7 @@ def test_production_detailed_adapter_reports_charged_spend_when_unpowerable(
         **_kwargs: object,
     ) -> Never:
         budget["left"] -= 7
-        raise freeform_module._Unpowerable("no legal tower placement")
+        raise routing_domain._Unpowerable("no legal tower placement")
 
     monkeypatch.setattr(
         sequence_solver_module,
@@ -3523,9 +3534,9 @@ def _direct_flow_two_stage_spec() -> BuildSpec:
 
 def _direct_pack_adapter_scene() -> tuple[
     BuildSpec,
-    list[freeform_module.Strip],
+    list[routing_domain.Strip],
     dict[tuple[int, int], freeform_module._DirectCandidate],
-    freeform_module._Pack,
+    routing_domain._Pack,
     PlacementProblem,
 ]:
     spec = _direct_flow_two_stage_spec()
@@ -3648,6 +3659,7 @@ def test_deadline_empty_global_is_cancelled_without_budget_exhaustion() -> None:
     )
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -3710,6 +3722,7 @@ def test_deadline_returns_an_existing_exact_incumbent() -> None:
 def test_production_run_uses_requested_budget_with_supplied_absolute_deadline() -> None:
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -3755,6 +3768,7 @@ def test_production_run_tells_stage_admission_its_own_ceiling(
     started = time.monotonic()
     _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=30.0,
         power=False,
@@ -3769,6 +3783,7 @@ def test_production_run_tells_stage_admission_its_own_ceiling(
     captured.clear()
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=7.0,
         power=False,
@@ -3797,9 +3812,9 @@ def test_production_exact_preparation_propagates_deadline_and_reuses_only_pure_c
         caches.append(staged_static_cache)
         checks.append(cancelled())
         deadlines.append(deadline)
-        demand = freeform_module.PortAccessDemand(
+        demand = routing_domain.PortAccessDemand(
             cell=(0, 0, 0),
-            kind=freeform_module.PortAccessKind.BOUNDARY_ARRIVAL,
+            kind=routing_domain.PortAccessKind.BOUNDARY_ARRIVAL,
             item="ore",
             belt=0,
             strip_index=0,
@@ -3809,15 +3824,15 @@ def test_production_exact_preparation_propagates_deadline_and_reuses_only_pure_c
 
         def expire_during_resolve(
             _assigned: Mapping[
-                freeform_module.PortAccessDemand,
-                freeform_module.PortAccessCorridor,
+                routing_domain.PortAccessDemand,
+                routing_domain.PortAccessCorridor,
             ],
-        ) -> tuple[freeform_module.PortAccessDemand, ...]:
+        ) -> tuple[routing_domain.PortAccessDemand, ...]:
             monkeypatch.setattr(freeform_module.time, "monotonic", lambda: deadline)
             return (demand,)
 
         try:
-            freeform_module._match_access_corridors(
+            routing_domain._match_access_corridors(
                 (demand,),
                 {demand: (((1, 0, 0), (2, 0, 0)), ((0, 1, 0), (0, 2, 0)))},
                 validate=expire_during_resolve,
@@ -3835,6 +3850,7 @@ def test_production_exact_preparation_propagates_deadline_and_reuses_only_pure_c
     )
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -3863,16 +3879,16 @@ def test_production_exact_preparation_propagates_deadline_and_reuses_only_pure_c
 def test_production_exact_preparation_reuses_realized_direct_insert(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    promised_direct: list[frozenset[freeform_module.DirectInsertId]] = []
+    promised_direct: list[frozenset[routing_domain.DirectInsertId]] = []
 
     def capture_prepare(
         _spec: BuildSpec,
-        _strips: list[freeform_module.Strip],
-        pack: freeform_module._Pack,
+        _strips: list[routing_domain.Strip],
+        pack: routing_domain._Pack,
         **_kwargs: object,
     ) -> Never:
         promised_direct.append(pack.direct)
-        raise freeform_module._PreparationDeadline
+        raise routing_domain._PreparationDeadline
 
     monkeypatch.setattr(
         sequence_solver_module,
@@ -3881,6 +3897,7 @@ def test_production_exact_preparation_reuses_realized_direct_insert(
     )
     run = _production_run(
         _direct_flow_two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -3909,6 +3926,7 @@ def test_the_production_run_divides_the_remaining_wall_by_its_own_ceiling(
     """
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -3938,6 +3956,7 @@ _WindowAdapter = Callable[
 def _window_adapter_run(deadline: float, spec: BuildSpec | None = None) -> _ProductionRun:
     return _production_run(
         spec if spec is not None else two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -3963,7 +3982,7 @@ def _forbidden_window_pack(strips: object, **kwargs: Any) -> Any:
     raise AssertionError("the window must not be solved here")
 
 
-def _window_outcome(pack: freeform_module._Pack) -> freeform_module._PackSolveOutcome:
+def _window_outcome(pack: routing_domain._Pack) -> freeform_module._PackSolveOutcome:
     return freeform_module._PackSolveOutcome(
         pack=pack,
         status="OPTIMAL",
@@ -4325,6 +4344,7 @@ def test_the_window_adapter_returns_a_decodable_placement() -> None:
     spec = plastic_spec()
     run = _production_run(
         spec,
+        belt_rules=_BELT_RULES,
         time_budget_s=10.0,
         power=True,
         band_policy=BandPolicy.parse("portable"),
@@ -4354,6 +4374,7 @@ def test_local_exact_pack_is_in_the_production_repair_portfolio() -> None:
     spec = plastic_spec()
     run = _production_run(
         spec,
+        belt_rules=_BELT_RULES,
         time_budget_s=10.0,
         power=True,
         band_policy=BandPolicy.parse("portable"),
@@ -4376,6 +4397,7 @@ def test_local_exact_pack_is_in_the_production_repair_portfolio() -> None:
 def test_production_exact_preparation_replay_is_deterministic() -> None:
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -4418,7 +4440,7 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
         power: bool,
         strip_len: int,
         config: SequenceSolverConfig,
-        belt_vertical_construction: bool = True,
+        belt_rules: catalog.BeltAltitudeRules,
         absolute_deadline: float | None = None,
         compact_seed_attempt: int | None = None,
         compact_seed_base_seed: int | None = None,
@@ -4432,7 +4454,7 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
             time_budget_s,
             strip_len,
             config,
-            belt_vertical_construction,
+            belt_rules,
             absolute_deadline,
             compact_seed_base_seed,
             portfolio_incumbent,
@@ -4452,6 +4474,7 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
 
     with pytest.raises(RuntimeError, match="captured production arguments"):
         SequencePairLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(two_stage_spec(), time_budget_s=2.0)
 
@@ -5000,6 +5023,7 @@ def test_topology_candidate_zero_survives_single_admission_and_tall_refinement(
 
     _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -5256,6 +5280,7 @@ def test_production_compact_seed_wall_ceiling_is_a_twelfth_of_a_much_larger_budg
     )
     _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=30.0,
         power=False,
@@ -5304,6 +5329,7 @@ def test_production_seed_has_its_own_wall_and_deterministic_caps(
     monkeypatch.setattr(sequence_solver_module, "solve_compact_seed", capture_seed)
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -5388,6 +5414,7 @@ def test_large_sparse_compact_seed_survives_a_bounded_narrowest_height(
 
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("80"),
         time_budget_s=2.0,
         power=True,
@@ -5433,6 +5460,7 @@ def test_a_reserve_boundary_swap_still_falls_back_to_the_balanced_height(
 
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("80"),
         time_budget_s=2.0,
         power=True,
@@ -5469,6 +5497,7 @@ def test_production_planning_generates_variant_families_once(
 
     _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -5492,17 +5521,19 @@ def test_validator_finishes_inside_atomic_completion_grace(
         _placement: Placement,
         _spec: BuildSpec,
         *,
+        belt_rules: catalog.BeltAltitudeRules,
         expect_power: bool,
     ) -> Report:
-        del expect_power
+        del belt_rules, expect_power
         certify_called[0] = True
         now[0] = 2.0
         return Report()
 
     monkeypatch.setattr(time, "monotonic", lambda: now[0])
-    monkeypatch.setattr(validate, "certify", crossing_certify)
+    monkeypatch.setattr(finalize, "_certify", crossing_certify)
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -5533,16 +5564,18 @@ def test_validator_crossing_atomic_completion_grace_returns_incomplete_budget(
         _placement: Placement,
         _spec: BuildSpec,
         *,
+        belt_rules: catalog.BeltAltitudeRules,
         expect_power: bool,
     ) -> Report:
-        del expect_power
+        del belt_rules, expect_power
         now[0] = 6.2
         return Report()
 
     monkeypatch.setattr(time, "monotonic", lambda: now[0])
-    monkeypatch.setattr(validate, "certify", crossing_certify)
+    monkeypatch.setattr(finalize, "_certify", crossing_certify)
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -5566,7 +5599,7 @@ def test_deadline_without_an_exact_incumbent_raises() -> None:
 
 def _two_stage_variant_problem() -> tuple[
     BuildSpec,
-    list[freeform_module.Strip],
+    list[routing_domain.Strip],
     PlacementProblem,
 ]:
     spec = _direct_flow_two_stage_spec()
@@ -5655,7 +5688,7 @@ def _three_stage_spec() -> BuildSpec:
 
 def _three_stage_variant_problem() -> tuple[
     BuildSpec,
-    list[freeform_module.Strip],
+    list[routing_domain.Strip],
     PlacementProblem,
 ]:
     spec = _three_stage_spec()
@@ -5927,9 +5960,9 @@ def test_variant_direct_eligibility_is_unchanged_by_the_candidate_memo(
     calls = 0
 
     def counting(
-        source: freeform_module.Strip,
-        destination: freeform_module.Strip,
-        groups: Mapping[str, freeform_module._Group],
+        source: routing_domain.Strip,
+        destination: routing_domain.Strip,
+        groups: Mapping[str, routing_domain._Group],
         eligible: frozenset[tuple[str, str]],
     ) -> freeform_module._DirectCandidate | None:
         nonlocal calls
@@ -5946,7 +5979,7 @@ def test_variant_direct_eligibility_is_unchanged_by_the_candidate_memo(
     memoized_calls = calls
 
     def without_memo(
-        selected: list[freeform_module.Strip],
+        selected: list[routing_domain.Strip],
         build_spec: BuildSpec,
         *,
         memo: freeform_module.DirectCandidateMemo | None = None,
@@ -5968,7 +6001,7 @@ def test_variant_direct_eligibility_is_unchanged_by_the_candidate_memo(
 
 
 def _selected_strips_split_fixture() -> tuple[
-    list[freeform_module.Strip],
+    list[routing_domain.Strip],
     PlacementProblem,
     tuple[int, ...],
     BandPolicy,
@@ -6011,7 +6044,7 @@ def _selected_strips_split_fixture() -> tuple[
 
 
 def _selected_strips_fixture() -> tuple[
-    list[freeform_module.Strip],
+    list[routing_domain.Strip],
     PlacementProblem,
     tuple[int, ...],
     BandPolicy,
@@ -6046,7 +6079,7 @@ def test_selected_strips_memo_returns_equal_strips_and_reuses_them() -> None:
     strips, problem, indices, policy = _selected_strips_fixture()
     memo: dict[
         tuple[int, StripInstanceId, StripVariant],
-        freeform_module.Strip,
+        routing_domain.Strip,
     ] = {}
 
     first = _selected_strips(strips, problem, indices, band_policy=policy, memo=memo)
@@ -6080,7 +6113,7 @@ def test_selected_strips_memo_keys_name_the_selected_variant() -> None:
     strips, problem, indices, policy = _selected_strips_fixture()
     memo: dict[
         tuple[int, StripInstanceId, StripVariant],
-        freeform_module.Strip,
+        routing_domain.Strip,
     ] = {}
 
     _selected_strips(strips, problem, indices, band_policy=policy, memo=memo)
@@ -6270,7 +6303,9 @@ def test_sequence_pair_builds_the_placed_coater_node(
     monkeypatch.setenv("FLAB2BP_COATER_NODE", arm)
     spec = proliferated_spec()
     placement = SequencePairLayout(
-        band_policy=BandPolicy("portable"), config=SequenceSolverConfig.test()
+        belt_rules=_BELT_RULES,
+        band_policy=BandPolicy("portable"),
+        config=SequenceSolverConfig.test(),
     ).lay_out(spec, time_budget_s=2.0)
 
     coaters = [
@@ -6484,7 +6519,7 @@ def test_selected_variant_recomputes_its_own_staged_static_clearance(
     proof_policies: list[BandPolicy] = []
 
     def prove_relation(
-        relation: freeform_module.StagedStaticClearanceKey,
+        relation: routing_domain.StagedStaticClearanceKey,
         selected_policy: BandPolicy,
     ) -> bool:
         proof_policies.append(selected_policy)
@@ -6562,6 +6597,7 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
     spec = two_stage_spec()
     run = _production_run(
         spec,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -7162,7 +7198,7 @@ def test_exact_projection_feedback_trials_stay_constant_for_many_strips(
 def _two_strip_stage() -> tuple[
     PlacementProblem,
     AnnealState,
-    freeform_module._Pack,
+    routing_domain._Pack,
     tuple[finalize.ProjectionGeometrySignature, ...],
     tuple[int, ...],
 ]:
@@ -7306,6 +7342,7 @@ def _stage_harness_with_two_strips() -> _StageHarness:
     """Extract the real `transform_stage` closure over a two-strip problem."""
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=_PORTABLE_BAND_POLICY,
         time_budget_s=2.0,
         power=False,
@@ -7896,6 +7933,7 @@ def test_production_padded_variant_transform_maps_same_strip_projection() -> Non
     problem, state, placement, failure = _projection_pitch_stage_fixture()
     run = _production_run(
         projected_chemical_plant_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -7949,6 +7987,7 @@ def test_projection_pitch_unmapped_control_does_not_enable_padded_variant() -> N
     problem, state, placement, failure = _projection_pitch_stage_fixture()
     run = _production_run(
         projected_chemical_plant_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -7988,6 +8027,7 @@ def test_different_strip_feedback_rebuilds_production_stage(
     problem, state, placement, failure = _projection_pitch_stage_fixture()
     run = _production_run(
         projected_chemical_plant_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -8431,12 +8471,13 @@ def test_sequence_backend_returns_authoritative_finalized_placement_once(
     spec = two_stage_spec()
     policy = BandPolicy("portable")
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     production = _production_run(
         spec,
+        belt_rules=_BELT_RULES,
         band_policy=policy,
         time_budget_s=2.0,
         power=False,
@@ -8484,14 +8525,20 @@ def test_sequence_backend_returns_authoritative_finalized_placement_once(
     finalized: list[Placement] = []
     finalize_placement = finalize.finalize_placement
 
-    def track_finalization(placement: Placement, band_policy: BandPolicy) -> Placement:
-        result = finalize_placement(placement, band_policy)
+    def track_finalization(
+        placement: Placement,
+        band_policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Placement:
+        result = finalize_placement(placement, band_policy, cancelled=cancelled)
         finalized.append(result)
         return result
 
     monkeypatch.setattr(finalize, "finalize_placement", track_finalization)
 
     placement = SequencePairLayout(
+        belt_rules=_BELT_RULES,
         band_policy=policy,
         config=SequenceSolverConfig.test(),
     ).lay_out(spec, time_budget_s=2.0)
@@ -8504,13 +8551,14 @@ def test_sequence_backend_returns_authoritative_finalized_placement_once(
     assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
 
 
-def test_sequence_completion_reuses_clean_compaction_report_after_projection(
+def test_sequence_completion_rejects_invalid_projection_after_clean_compaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spec = two_stage_spec()
     policy = BandPolicy("portable")
     production = _production_run(
         spec,
+        belt_rules=_BELT_RULES,
         band_policy=policy,
         time_budget_s=20.0,
         power=False,
@@ -8521,6 +8569,7 @@ def test_sequence_completion_reuses_clean_compaction_report_after_projection(
     compacted = _placement(area=9, belt_tiles=1)
     projected = replace(
         _placement(area=8, belt_tiles=1),
+        buildings=(),
         frame=AreaFrame(
             width=8,
             height=1,
@@ -8553,23 +8602,18 @@ def test_sequence_completion_reuses_clean_compaction_report_after_projection(
         **_kwargs: object,
     ) -> validate.Report:
         trace.append(("validate", candidate))
-        return validate.Report(findings=())
+        return validate.certify(candidate, spec, belt_rules=_BELT_RULES, expect_power=False)
 
     monkeypatch.setattr(finalize, "compact_open_boundary_belts_certified", compact)
     monkeypatch.setattr(finalize, "finalize_placement", project)
-    monkeypatch.setattr(validate, "certify", certify)
+    monkeypatch.setattr(finalize, "_certify", certify)
 
     verdict = production.solver.adapters.validate(routed)
 
-    assert verdict.ok
-    assert verdict.placement == replace(
-        projected,
-        completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
-    )
-    assert trace == [
-        ("compact", routed),
-        ("finalize", compacted),
-    ]
+    assert not verdict.ok
+    assert verdict.placement is None
+    assert "spec.machine_counts" in verdict.failed_checks
+    assert trace[-1] == ("validate", projected)
 
 
 def test_sequence_completion_cancels_projection_before_atomic_validation(
@@ -8577,6 +8621,7 @@ def test_sequence_completion_cancels_projection_before_atomic_validation(
 ) -> None:
     production = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=20.0,
         power=False,
@@ -8606,7 +8651,7 @@ def test_sequence_completion_cancels_projection_before_atomic_validation(
 
     monkeypatch.setattr(time, "monotonic", monotonic)
     monkeypatch.setattr(finalize, "compact_open_boundary_belts_certified", compact)
-    monkeypatch.setattr(validate, "certify", certify)
+    monkeypatch.setattr(finalize, "_certify", certify)
 
     verdict = production.solver.adapters.validate(_placement(area=10, belt_tiles=2))
 
@@ -8662,7 +8707,7 @@ def test_sequence_backend_returns_only_certified_powered_placements(
     spec = _direct_flow_two_stage_spec()
     placement = SequencePairLayout(
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=belt_vertical_construction,
+        belt_rules=replace(_BELT_RULES, vertical_construction=belt_vertical_construction),
         config=SequenceSolverConfig.test(),
     ).lay_out(spec, time_budget_s=2.0)
 
@@ -8775,6 +8820,7 @@ def test_production_observability_preserves_categories_and_all_grouped_work() ->
     )
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -8937,12 +8983,12 @@ def test_sequence_reuses_adaptive_coarse_strip_partition_before_problem_identity
         minimum_pitch_x: Mapping[StripPoseId, int] | None = None,
         families: Sequence[StripFamily] | None = None,
         minimum_staged_static_clearance: Mapping[
-            freeform_module.StagedStaticClearanceKey,
+            routing_domain.StagedStaticClearanceKey,
             int,
         ]
         | None = None,
         cancelled: Callable[[], bool] | None = None,
-    ) -> list[freeform_module.Strip]:
+    ) -> list[routing_domain.Strip]:
         coarse_replans.append((strip_len, band_policy))
         return real_plan_strips(
             selected_spec,
@@ -8960,6 +9006,7 @@ def test_sequence_reuses_adaptive_coarse_strip_partition_before_problem_identity
 
     run = _production_run(
         spec,
+        belt_rules=_BELT_RULES,
         band_policy=policy,
         time_budget_s=2.0,
         power=False,
@@ -9011,7 +9058,9 @@ def test_refinery_closed_loop_routes_the_selected_rotated_pose() -> None:
     )
 
     placement = SequencePairLayout(
-        band_policy=BandPolicy("portable"), config=SequenceSolverConfig.test()
+        belt_rules=_BELT_RULES,
+        band_policy=BandPolicy("portable"),
+        config=SequenceSolverConfig.test(),
     ).lay_out(
         spec,
         time_budget_s=2.0,
@@ -9019,7 +9068,7 @@ def test_refinery_closed_loop_routes_the_selected_rotated_pose() -> None:
 
     refinery = next(building for building in placement.buildings if building.item_id == 2308)
     assert refinery.yaw in {90.0, 270.0}
-    assert not validate.certify(placement, spec, expect_power=True).errors
+    assert not validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True).errors
     assert placement.stats["detailed_routes"] >= 1.0
     assert placement.stats["pose_count"] == 1.0
     assert (placement.stats["pose_yaw_90"] + placement.stats["pose_yaw_270"]) == 1.0
@@ -9035,7 +9084,9 @@ def test_chemical_closed_loop_emits_exact_inner_anchor_sorters() -> None:
     )
 
     placement = SequencePairLayout(
-        band_policy=BandPolicy("portable"), config=SequenceSolverConfig.test()
+        belt_rules=_BELT_RULES,
+        band_policy=BandPolicy("portable"),
+        config=SequenceSolverConfig.test(),
     ).lay_out(
         spec,
         time_budget_s=2.0,
@@ -9078,7 +9129,7 @@ def test_chemical_closed_loop_emits_exact_inner_anchor_sorters() -> None:
         and machine.y < y < machine.y + machine.height - 1
         for x, y in machine_cells
     )
-    assert not validate.certify(placement, spec, expect_power=False).errors
+    assert not validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=False).errors
     assert placement.stats["pose_count"] == 1.0
 
 
@@ -9105,19 +9156,22 @@ def test_trivial_proliferated_boundary_splitter_keeps_a_viable_frame() -> None:
         spray_lanes={"iron-ore": True},
     )
     placement = SequencePairLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
     ).lay_out(spec, time_budget_s=2.0)
 
     assert placement.frame is not None
     assert any(building.item_id == catalog.SPLITTER_ID for building in placement.buildings)
-    assert validate.certify(placement, spec, expect_power=True).ok
+    assert validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True).ok
 
 
 def test_proliferated_closed_loop_routes_elevated_supply_without_coater_sorter() -> None:
     spec = proliferated_spec()
 
     placement = SequencePairLayout(
-        band_policy=BandPolicy("portable"), config=SequenceSolverConfig.test()
+        belt_rules=_BELT_RULES,
+        band_policy=BandPolicy("portable"),
+        config=SequenceSolverConfig.test(),
     ).lay_out(
         spec,
         time_budget_s=2.0,
@@ -9149,7 +9203,7 @@ def test_proliferated_closed_loop_routes_elevated_supply_without_coater_sorter()
             for building in placement.buildings
             if catalog.is_belt(building.item_id)
         )
-    assert not validate.certify(placement, spec, expect_power=False).errors
+    assert not validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=False).errors
     assert placement.stats["elevated_coater_routes"] == float(len(coaters))
 
 
@@ -9232,6 +9286,7 @@ def test_selected_port_variant_reaches_shared_prepared_docking_geometry() -> Non
 def test_sequence_preparation_consumes_elevated_machine_and_tesla_junction_bans() -> None:
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=True,
@@ -9260,15 +9315,15 @@ def test_sequence_preparation_consumes_elevated_machine_and_tesla_junction_bans(
         for building in prepared.building_templates
         if catalog.is_belt(building.item_id) or catalog.is_sorter(building.item_id)
     )
-    machine_ban = freeform_module._prepared_junction_ban(static_buildings, ())
-    tesla_ban = freeform_module._prepared_junction_ban((), prepared.power_sites)
+    machine_ban = routing_domain._prepared_junction_ban(static_buildings, ())
+    tesla_ban = routing_domain._prepared_junction_ban((), prepared.power_sites)
     expected_ban = machine_ban | tesla_ban
 
     assert machine_ban
     assert tesla_ban
     assert any(level > 0 for _x, _y, level in machine_ban)
     assert any(level > 0 for _x, _y, level in tesla_ban)
-    assert freeform_module._prepared_junction_ban(transport_buildings, ()) == frozenset()
+    assert routing_domain._prepared_junction_ban(transport_buildings, ()) == frozenset()
     assert prepared.junction_ban == expected_ban
     assert workspace.canvas.junction_geometry_prepared
     assert workspace.canvas.junction_ban == set(expected_ban)
@@ -9278,7 +9333,9 @@ def test_ray_receiver_sequence_closed_loop_routes_and_validates_exactly() -> Non
     spec = ray_receiver_spec()
 
     placement = SequencePairLayout(
-        band_policy=BandPolicy("portable"), config=SequenceSolverConfig.test()
+        belt_rules=_BELT_RULES,
+        band_policy=BandPolicy("portable"),
+        config=SequenceSolverConfig.test(),
     ).lay_out(
         spec,
         time_budget_s=2.0,
@@ -9292,7 +9349,7 @@ def test_ray_receiver_sequence_closed_loop_routes_and_validates_exactly() -> Non
     ]
 
     assert len(docks) == 2
-    assert not validate.certify(placement, spec, expect_power=True).errors
+    assert not validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True).errors
 
 
 @pytest.mark.slow
@@ -9301,6 +9358,7 @@ def test_sequence_pair_plastic_projection_pitch_feedback_finalizes_cleanly() -> 
     policy = BandPolicy("portable")
 
     placement = SequencePairLayout(
+        belt_rules=_BELT_RULES,
         band_policy=policy,
         islands=1,
     ).lay_out(
@@ -9308,7 +9366,7 @@ def test_sequence_pair_plastic_projection_pitch_feedback_finalizes_cleanly() -> 
         time_budget_s=4.0,
     )
 
-    assert validate.certify(placement, spec, expect_power=True).ok
+    assert validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True).ok
     finalize.finalize_placement(placement, policy)
     chemical_by_owner: dict[int, list[PlacedBuilding]] = {}
     for building in placement.buildings:
@@ -9332,6 +9390,7 @@ def test_sequence_pair_routes_self_consuming_pinned_flow(
     refined_oil_feedback_spec: BuildSpec,
 ) -> None:
     placement = SequencePairLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         islands=1,
     ).lay_out(
@@ -9341,6 +9400,7 @@ def test_sequence_pair_routes_self_consuming_pinned_flow(
     assert validate.certify(
         placement,
         refined_oil_feedback_spec,
+        belt_rules=_BELT_RULES,
         expect_power=True,
     ).ok
 
@@ -9348,9 +9408,9 @@ def test_sequence_pair_routes_self_consuming_pinned_flow(
 @pytest.mark.slow
 def test_production_stats_carry_the_operator_telemetry() -> None:
     spec = plastic_spec()
-    placement = SequencePairLayout(band_policy=BandPolicy.parse("portable")).lay_out(
-        spec, time_budget_s=15.0
-    )
+    placement = SequencePairLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy.parse("portable")
+    ).lay_out(spec, time_budget_s=15.0)
     for key in (
         "feasibility_restart_batches",
         "alns_choices",
@@ -9381,9 +9441,9 @@ def test_production_counts_every_candidate_that_reached_the_detailed_router() ->
     A production solve always routes at least one candidate in detail, so a zero
     here means the counter was never wired into the adapter closure.
     """
-    placement = SequencePairLayout(band_policy=BandPolicy.parse("portable")).lay_out(
-        plastic_spec(), time_budget_s=15.0
-    )
+    placement = SequencePairLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy.parse("portable")
+    ).lay_out(plastic_spec(), time_budget_s=15.0)
     assert placement.stats["alns_evaluations"] >= 1.0
     assert placement.stats["alns_evaluations"] == placement.stats["detailed_routes"]
 
@@ -9417,6 +9477,7 @@ def test_reported_sequence_output_products_keeps_machine_inputs_separate() -> No
     ).candidates[0]
 
     placement = SequencePairLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         islands=1,
     ).lay_out(
@@ -9424,7 +9485,7 @@ def test_reported_sequence_output_products_keeps_machine_inputs_separate() -> No
         time_budget_s=10.0,
     )
 
-    assert validate.certify(placement, spec, expect_power=True).ok
+    assert validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True).ok
     assert _machines_with_mixed_input_belts(placement) == {}
     min_x, min_y, max_x, max_y = placement.bounds
     output_terminals = [
@@ -9458,12 +9519,12 @@ def test_production_forwards_fixed_band_through_initial_compact_and_coarsen_plan
         minimum_pitch_x: Mapping[StripPoseId, int] | None = None,
         families: Sequence[StripFamily] | None = None,
         minimum_staged_static_clearance: Mapping[
-            freeform_module.StagedStaticClearanceKey,
+            routing_domain.StagedStaticClearanceKey,
             int,
         ]
         | None = None,
         cancelled: Callable[[], bool] | None = None,
-    ) -> list[freeform_module.Strip]:
+    ) -> list[routing_domain.Strip]:
         plan_calls.append((strip_len, band_policy))
         return real_plan_strips(
             spec,
@@ -9479,19 +9540,19 @@ def test_production_forwards_fixed_band_through_initial_compact_and_coarsen_plan
 
     def track_coarsen(
         spec: BuildSpec,
-        strips: list[freeform_module.Strip],
+        strips: list[routing_domain.Strip],
         *,
         strip_len: int,
         band_policy: BandPolicy = _PORTABLE_BAND_POLICY,
         minimum_pitch_x: Mapping[StripPoseId, int] | None = None,
         families: Sequence[StripFamily] | None = None,
         minimum_staged_static_clearance: Mapping[
-            freeform_module.StagedStaticClearanceKey,
+            routing_domain.StagedStaticClearanceKey,
             int,
         ]
         | None = None,
         cancelled: Callable[[], bool] | None = None,
-    ) -> tuple[list[freeform_module.Strip], int]:
+    ) -> tuple[list[routing_domain.Strip], int]:
         coarsen_calls.append(band_policy)
         return real_coarsen(
             spec,
@@ -9527,6 +9588,7 @@ def test_production_forwards_fixed_band_through_initial_compact_and_coarsen_plan
 
     _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=policy,
         time_budget_s=2.0,
         power=False,
@@ -9554,12 +9616,12 @@ def test_production_forwards_fixed_band_through_fallback_replan(
         minimum_pitch_x: Mapping[StripPoseId, int] | None = None,
         families: Sequence[StripFamily] | None = None,
         minimum_staged_static_clearance: Mapping[
-            freeform_module.StagedStaticClearanceKey,
+            routing_domain.StagedStaticClearanceKey,
             int,
         ]
         | None = None,
         cancelled: Callable[[], bool] | None = None,
-    ) -> list[freeform_module.Strip]:
+    ) -> list[routing_domain.Strip]:
         plan_calls.append((strip_len, band_policy))
         if len(plan_calls) == 1:
             raise ValueError("force production fallback")
@@ -9579,6 +9641,7 @@ def test_production_forwards_fixed_band_through_fallback_replan(
 
     _production_run(
         spec,
+        belt_rules=_BELT_RULES,
         band_policy=policy,
         time_budget_s=2.0,
         power=False,
@@ -9605,6 +9668,7 @@ def test_sequence_band_policy_height_reserves_one_band_120_boundary_slot() -> No
     """
     portable = _production_run(
         band_120_control_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -9613,6 +9677,7 @@ def test_sequence_band_policy_height_reserves_one_band_120_boundary_slot() -> No
     ).heights
     fixed = _production_run(
         band_120_control_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("120"),
         time_budget_s=2.0,
         power=False,
@@ -9649,6 +9714,7 @@ def test_sequence_band_120_dropped_height_has_actual_clean_layout_control(
     assert pack is not None
     run = _production_run(
         spec,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy(selection),
         time_budget_s=5.0,
         power=False,
@@ -9671,7 +9737,7 @@ def test_sequence_band_120_dropped_height_has_actual_clean_layout_control(
 
     assert detailed.routing.status is DetailedRouteStatus.ROUTED
     assert detailed.placement is not None
-    assert validate.certify(detailed.placement, spec, expect_power=False).ok
+    assert validate.certify(detailed.placement, spec, belt_rules=_BELT_RULES, expect_power=False).ok
     assert (
         finalize.finalize_placement(
             detailed.placement,
@@ -9697,6 +9763,7 @@ def test_sequence_band_policy_height_remaps_protected_followup_slot(
 
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("120"),
         time_budget_s=2.0,
         power=False,
@@ -9738,6 +9805,7 @@ def test_sequence_band_policy_height_derives_topology_role_after_substitution(
 
     run = _production_run(
         band_120_control_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("120"),
         time_budget_s=2.0,
         power=False,
@@ -9770,7 +9838,7 @@ def test_sequence_band_policy_height_derives_shared_pack_role_after_substitution
     )
 
     def capture_shared_pack(
-        _strips: list[freeform_module.Strip],
+        _strips: list[routing_domain.Strip],
         *,
         height: int,
         **_kwargs: object,
@@ -9782,6 +9850,7 @@ def test_sequence_band_policy_height_derives_shared_pack_role_after_substitution
 
     run = _production_run(
         band_120_control_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("120"),
         time_budget_s=2.0,
         power=False,
@@ -9804,6 +9873,7 @@ def test_sequence_portable_schedule_is_unchanged() -> None:
 
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -9835,12 +9905,12 @@ def test_sequence_extent_gate_stops_before_preparation_and_detailed_routing(
         lambda _strips: [19, 18, 17, 16, 15, 14, 13, 595],
     )
     monkeypatch.setattr(
-        freeform_module,
+        routing_domain,
         "_power_plan",
         lambda *_args, **_kwargs: pytest.fail("infeasible extent reached power planning"),
     )
     monkeypatch.setattr(
-        freeform_module,
+        routing_domain,
         "_core_bounds",
         lambda _canvas: (0, 0, core_width - 1, core_height - 1),
     )
@@ -9851,6 +9921,7 @@ def test_sequence_extent_gate_stops_before_preparation_and_detailed_routing(
     )
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("120"),
         time_budget_s=2.0,
         power=True,
@@ -9894,6 +9965,7 @@ def test_sequence_extent_gate_uses_realized_core_not_nominal_outline(
     )
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("120"),
         time_budget_s=2.0,
         power=False,
@@ -10041,6 +10113,7 @@ def test_production_certify_maps_projection_cancellation_to_budget(
 
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -10049,8 +10122,8 @@ def test_production_certify_maps_projection_cancellation_to_budget(
     )
     observed_cancelled: list[Callable[[], bool]] = []
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: SimpleNamespace(errors=()),
     )
 
@@ -10076,7 +10149,7 @@ def test_production_certify_maps_projection_cancellation_to_budget(
     assert verdict.projection_failures == ()
 
 
-def test_legacy_finalizer_crossing_deadline_returns_incomplete_budget(
+def test_projection_crossing_deadline_returns_incomplete_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from types import SimpleNamespace
@@ -10084,6 +10157,7 @@ def test_legacy_finalizer_crossing_deadline_returns_incomplete_budget(
     deadline = time.monotonic() + 100.0
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -10092,28 +10166,25 @@ def test_legacy_finalizer_crossing_deadline_returns_incomplete_budget(
         absolute_deadline=deadline,
     )
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: SimpleNamespace(errors=()),
     )
-    monkeypatch.setattr(
-        finalize,
-        "finalize_placement",
-        lambda placement, _policy: placement,
-    )
-    completion_deadline = deadline + sequence_solver_module.ATOMIC_COMPLETION_GRACE_S
-    clock = iter(
-        (
-            completion_deadline - 1.0,
-            completion_deadline - 1.0,
-            completion_deadline + 1.0,
-        )
-    )
-    monkeypatch.setattr(
-        time,
-        "monotonic",
-        lambda: next(clock, completion_deadline + 1.0),
-    )
+    now = deadline - 1.0
+
+    def project(
+        placement: Placement,
+        _policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Placement:
+        nonlocal now
+        assert cancelled is not None and not cancelled()
+        now = deadline + sequence_solver_module.ATOMIC_COMPLETION_GRACE_S + 1.0
+        return placement
+
+    monkeypatch.setattr(finalize, "finalize_placement", project)
+    monkeypatch.setattr(time, "monotonic", lambda: now)
 
     verdict = run.solver.adapters.validate(_placement(area=20, belt_tiles=4))
 
@@ -10602,6 +10673,7 @@ def test_the_stage_boundary_repair_scores_congestion_against_the_pre_update_feed
 def _band_target_run() -> _ProductionRun:
     return _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -10877,6 +10949,7 @@ def test_lay_out_solver_factory_branch_asks_the_solver_to_continue() -> None:
 
     with pytest.raises(RuntimeError, match="captured search keywords"):
         SequencePairLayout(
+            belt_rules=_BELT_RULES,
             band_policy=_PORTABLE_BAND_POLICY,
             solver_factory=factory,
         ).lay_out(two_stage_spec(), time_budget_s=2.0)
@@ -10905,7 +10978,7 @@ def test_lay_out_production_branch_asks_the_solver_to_continue(
     )
 
     with pytest.raises(RuntimeError, match="captured search keywords"):
-        SequencePairLayout(band_policy=_PORTABLE_BAND_POLICY).lay_out(
+        SequencePairLayout(belt_rules=_BELT_RULES, band_policy=_PORTABLE_BAND_POLICY).lay_out(
             two_stage_spec(), time_budget_s=2.0
         )
 
@@ -10953,7 +11026,7 @@ def test_variant_direct_eligibility_polls_its_cancel_more_than_once() -> None:
 
 def _expected_eligibility_polls(
     spec: BuildSpec,
-    strips: list[freeform_module.Strip],
+    strips: list[routing_domain.Strip],
     problem: PlacementProblem,
     policy: BandPolicy,
 ) -> int:
@@ -11066,6 +11139,7 @@ def test_the_eligibility_scan_is_bound_to_the_compact_share_not_the_whole_deadli
     with pytest.raises(_StopProduction):
         _production_run(
             two_stage_spec(),
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             time_budget_s=30.0,
             power=False,
@@ -11107,6 +11181,7 @@ def test_the_eligibility_scan_is_declined_when_the_compact_share_is_nearly_gone(
 
     run = _production_run(
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         time_budget_s=30.0,
         power=False,
@@ -11169,7 +11244,7 @@ def test_archive_routing_prepares_every_elite_while_the_clock_holds(
 
 def test_sequence_lay_out_honours_an_absolute_deadline_from_another_process() -> None:
     """The parent's wall, not a fresh budget started spawn-cost seconds late."""
-    layout = SequencePairLayout(band_policy=BandPolicy("portable"))
+    layout = SequencePairLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"))
     started = time.monotonic()
 
     with pytest.raises(NoValidLayout):
@@ -11409,12 +11484,14 @@ def test_the_portable_band_core_boundary_is_the_number_the_helper_is_given() -> 
     gives the identical value, and this test reads it off `freeform` because
     that is where the perimeter is authored.
     """
-    from flab2bp.layout import freeform
+    from flab2bp.layout import routing_domain
     from flab2bp.layout.finalize import band_policy_search_envelope
 
-    envelope = band_policy_search_envelope(BandPolicy("portable"), perimeter=freeform._ENTRY_RING)
+    envelope = band_policy_search_envelope(
+        BandPolicy("portable"), perimeter=routing_domain._ENTRY_RING
+    )
 
-    assert freeform._ENTRY_RING == 3
+    assert routing_domain._ENTRY_RING == 3
     assert envelope.boundary_core_height == 154
     assert (
         max(
@@ -11444,14 +11521,16 @@ def test_a_decomposed_mall_block_never_crashes_the_stage_boundary_transform(
     )
 
     layout = SequencePairLayout(
-        belt_vertical_construction=vertical, islands=1, band_policy=BandPolicy.parse("portable")
+        belt_rules=replace(_BELT_RULES, vertical_construction=vertical),
+        islands=1,
+        band_policy=BandPolicy.parse("portable"),
     )
     try:
         placement = layout.lay_out(sub, time_budget_s=12.0)
     except NoValidLayout:
         return
 
-    assert validate.certify(placement, sub, expect_power=True).ok
+    assert validate.certify(placement, sub, belt_rules=_BELT_RULES, expect_power=True).ok
 
 
 @pytest.fixture
@@ -11476,6 +11555,7 @@ class _RecordingObserver:
 def test_sequence_pair_reports_stage_observations_and_incumbents(small_spec: BuildSpec) -> None:
     observer = _RecordingObserver()
     layout = SequencePairLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         config=SequenceSolverConfig.test(),
         islands=1,
@@ -11524,6 +11604,7 @@ def test_sequence_pair_islands_report_no_island_index(
     )
     observer = _RecordingObserver()
     SequencePairLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         config=SequenceSolverConfig.test(),
         islands=2,

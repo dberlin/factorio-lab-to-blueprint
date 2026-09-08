@@ -2,11 +2,12 @@
 
     uv run python scripts/audit_compare.py BASELINE.jsonl CANDIDATE.jsonl
 
-A cell is ``(strategy, url_id, spec_index)``.  The verdict passes only when
-the candidate covers every cell the baseline has, holds the expected number of
-rows, has zero REFUSED / INVALID / CRASH rows, its p95 wall per cell is at or
-under ``--p95-seconds``, and the geometric mean area ratio over cells clean in
-BOTH files is at most ``1 + noise_area``.  ``--noise-area`` defaults to the
+A cell includes strategy, URL, candidate index AND label, budget, and power.
+The verdict passes only when the candidate covers every baseline cell and
+holds the expected number of rows, has zero REFUSED / INVALID / CRASH rows,
+its p95 wall per cell is at or under ``--p95-seconds``, and the geometric mean
+area ratio over cells clean in BOTH files is at most ``1 + noise_area``.
+``--noise-area`` defaults to the
 1.3% same-arm median measured in ``docs/BACKLOG.md``.
 
 A CELL THE CANDIDATE NEVER RAN IS A FAILURE, not an absence of evidence.  The
@@ -28,7 +29,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-CellKey = tuple[str, str, int]
+from flab2bp.bench.identity import TREATMENT_FIELDS, index_audit_cells, pair_audit_cells
 
 
 @dataclass(frozen=True)
@@ -48,10 +49,6 @@ class Verdict:
         return not self.reasons
 
 
-def _key(row: Mapping[str, object]) -> CellKey:
-    return (str(row["strategy"]), str(row["url_id"]), int(str(row["spec_index"])))
-
-
 def _p95(values: Sequence[float]) -> float:
     if not values:
         return 0.0
@@ -69,31 +66,32 @@ def compare(
     expect_cells: int | None = None,
     regressions_only: bool = False,
     require_clean: frozenset[str] = frozenset(),
+    treatment_fields: frozenset[str] = frozenset(),
 ) -> Verdict:
-    base_by_key = {_key(row): row for row in baseline}
-    candidate_rows = list(candidate)
-    candidate_keys = {_key(row) for row in candidate_rows}
+    base_by_key = index_audit_cells(baseline)
+    candidate_by_key = index_audit_cells(candidate)
+    pairs = pair_audit_cells(base_by_key, candidate_by_key, treatment_fields=treatment_fields)
     counts: dict[str, int] = {}
     reasons: list[str] = []
     notes: list[str] = []
     log_ratios: list[float] = []
     seconds: list[float] = []
     required_seen: set[str] = set()
-    for row in candidate_rows:
+    for key, row in candidate_by_key.items():
         status = str(row["status"])
         counts[status] = counts.get(status, 0) + 1
         seconds.append(float(str(row["seconds"])))
         label = f"{row['strategy']} {row['url_id']}/{row['spec_label']}: {row['detail']}"
         name = f"{row['strategy']}/{row['url_id']}/{row['spec_label']}"
         required_seen.add(name)
-        base = base_by_key.get(_key(row))
+        base_key = pairs.get(key)
+        base = base_by_key[base_key] if base_key is not None else None
         if status != "CLEAN":
             if name in require_clean:
                 reasons.append(f"NOT CLEAN: {label}")
-            elif not regressions_only or status in {"INVALID", "CRASH"}:
-                # INVALID and CRASH are never "carried over": the gate demands
-                # zero of each outright, and a phase that corrupts a round
-                # would show up here first.
+            elif not regressions_only or status != "REFUSED":
+                # Only an observed refusal can be carried. Lost, terminated,
+                # malformed, or unattempted work never becomes a clean gate.
                 reasons.append(f"{status}: {label}")
             elif base is not None and str(base["status"]) == "CLEAN":
                 reasons.append(f"REGRESSION: {label}")
@@ -106,16 +104,19 @@ def compare(
         cand_area = float(str(row["area"]))
         if base_area > 0 and cand_area > 0:
             log_ratios.append(math.log(cand_area / base_area))
-    for key in sorted(base_by_key.keys() - candidate_keys):
-        strategy, url_id, _index = key
-        missing_label = base_by_key[key]["spec_label"]
-        reasons.append(f"MISSING: {strategy} {url_id}/{missing_label}")
+    for key in sorted(base_by_key.keys() - set(pairs.values())):
+        reasons.append(
+            f"MISSING: {key.strategy} {key.url_id}/{key.spec_label} "
+            f"budget={key.budget:g}s power={int(key.power)}"
+        )
+    for key in sorted(candidate_by_key.keys() - pairs.keys()):
+        reasons.append(f"UNPAIRED: {key}")
     for name in sorted(require_clean - required_seen):
         # A required cell the candidate never attempted cannot be CLEAN; this
         # also catches a mistyped --require-clean name.
         reasons.append(f"MISSING (required): {name}")
-    if expect_cells is not None and len(candidate_rows) != expect_cells:
-        reasons.append(f"candidate has {len(candidate_rows)} rows, expected {expect_cells}")
+    if expect_cells is not None and len(candidate_by_key) != expect_cells:
+        reasons.append(f"candidate has {len(candidate_by_key)} rows, expected {expect_cells}")
     ratio = math.exp(sum(log_ratios) / len(log_ratios)) if log_ratios else 1.0
     p95 = _p95(seconds)
     if ratio > 1.0 + noise_area:
@@ -157,16 +158,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     ap.add_argument("--regressions-only", action="store_true")
     ap.add_argument("--require-clean", action="append", default=[])
-    args = ap.parse_args(argv)
-    verdict = compare(
-        _read(args.baseline),
-        _read(args.candidate),
-        noise_area=args.noise_area,
-        p95_seconds=args.p95_seconds,
-        expect_cells=args.expect_cells or None,
-        regressions_only=args.regressions_only,
-        require_clean=frozenset(args.require_clean),
+    ap.add_argument(
+        "--treatment",
+        action="append",
+        default=[],
+        choices=sorted(TREATMENT_FIELDS),
+        help="configuration field deliberately changed by this experiment; repeatable",
     )
+    args = ap.parse_args(argv)
+    try:
+        verdict = compare(
+            _read(args.baseline),
+            _read(args.candidate),
+            noise_area=args.noise_area,
+            p95_seconds=args.p95_seconds,
+            expect_cells=args.expect_cells or None,
+            regressions_only=args.regressions_only,
+            require_clean=frozenset(args.require_clean),
+            treatment_fields=frozenset(args.treatment),
+        )
+    except ValueError as exc:
+        print(f"FAIL {exc}")
+        return 1
     print(
         f"clean {verdict.candidate_clean}  refused {verdict.candidate_refused}  "
         f"invalid {verdict.candidate_invalid}  crashed {verdict.candidate_crashed}  "

@@ -9,6 +9,7 @@ import pytest
 
 from flab2bp import cli, pipeline
 from flab2bp.lab.schema import Dataset
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout import strategy_race
 from flab2bp.layout.band_policy import BAND_SELECTIONS, BandPolicy, BandSelection
 from flab2bp.layout.base import (
@@ -19,6 +20,8 @@ from flab2bp.layout.base import (
 )
 from flab2bp.rates.candidates import CandidatePolicy
 from flab2bp.rates.machine_choice import MachineRank
+
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
 
 
 class _BuildKwargs(TypedDict, total=False):
@@ -600,7 +603,7 @@ def test_hierarchical_is_an_explicit_strategy_but_not_part_of_best() -> None:
     assert pipeline.resolve_sequence_islands("hierarchical", 16, None) == 1
     layout = pipeline._new_layout(
         "hierarchical",
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=8,
     )

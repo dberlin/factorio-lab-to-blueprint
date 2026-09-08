@@ -9,21 +9,25 @@ from dataclasses import replace
 import pytest
 
 from flab2bp import spec
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout import validate
 from flab2bp.layout.base import PlacedBuilding
-from flab2bp.layout.freeform import (
-    LEVELS,
-    _PreparedNet,
-    _PreparedPort,
-    _PreparedRoutingProblem,
-    _with_sibling_groups,
-)
 from flab2bp.layout.global_router import (
     GlobalRouteResult,
     route_global,
     route_global_once,
 )
 from flab2bp.layout.route_feedback import Cell, FeedbackState, NetId, NetRole
+from flab2bp.layout.routing_domain import (
+    LEVELS,
+    _PreparedNet,
+    _PreparedPort,
+    _PreparedRoutingProblem,
+    _with_sibling_groups,
+)
+
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+
 
 NetSpec = tuple[
     NetId,
@@ -649,6 +653,7 @@ def test_zero_overflow_proxy_cannot_be_certified_as_a_placement() -> None:
         validate.certify(
             result,  # type: ignore[arg-type]
             spec.BuildSpec(groups=()),
+            belt_rules=_BELT_RULES,
             expect_power=False,
         )
 

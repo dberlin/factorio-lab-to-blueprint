@@ -27,7 +27,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import Literal, cast
 from urllib.parse import urlsplit
 
 from flab2bp import pipeline
@@ -39,7 +39,12 @@ from flab2bp.layout.base import (
     PlacementStats,
 )
 from flab2bp.layout.observe import SearchObserver
-from flab2bp.layout.observe_channel import TRACE_QUEUE_MAXSIZE
+from flab2bp.layout.observe_channel import (
+    TRACE_QUEUE_MAXSIZE,
+    close_trace_queue,
+    finish_trace_producers,
+    prepare_trace_queue,
+)
 from flab2bp.layout.strategy_race import RACE_COMPLETION_GRACE_S
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
 from flab2bp.rates.adjust import ProliferatorTier
@@ -487,8 +492,12 @@ class Builder:
         self._pool.shutdown(wait=False, cancel_futures=True)
 
     def _evict(self) -> None:
-        """Drop the oldest finished jobs. Never drops one still running."""
-        finished = [jid for jid, j in self._jobs.items() if j.done]
+        """Drop finished jobs only after their trace reader has settled."""
+        finished = [
+            jid
+            for jid, job in self._jobs.items()
+            if job.done and (job.trace is None or job.trace.closed or job.trace.error is not None)
+        ]
         while len(self._jobs) > self._history and finished:
             del self._jobs[finished.pop(0)]
 
@@ -526,6 +535,7 @@ class Builder:
                     trace_queue = multiprocessing.get_context("spawn").Queue(
                         maxsize=TRACE_QUEUE_MAXSIZE
                     )
+                    prepare_trace_queue(trace_queue)
                     collector = TraceCollector(
                         TraceRing(), started_at=time.monotonic(), queue=trace_queue
                     )
@@ -571,26 +581,15 @@ class Builder:
                     job.result = result
                     job.finished_at = time.monotonic()
         finally:
-            # `collector.stop()` FIRST: it joins the daemon thread that reads
-            # `trace_queue`, so closing the queue before that thread has
-            # actually stopped risks a race between "stop reading" and
-            # "close the pipe underneath the reader."
-            #
-            # Nested in its own `finally` (fix round, Critical 1): `stop()`
-            # should not raise now that `TraceCollector.start()` only binds
-            # `self._thread` after a successful `thread.start()`, but the
-            # queue release below must run even if it somehow does -- an
-            # unread `multiprocessing.Queue` with buffered data blocks its
-            # process's exit, and a long-lived web process is exactly the
-            # process that must never be left waiting on one.
-            try:
-                if collector is not None:
-                    collector.stop()
-            finally:
-                if trace_queue is not None:
-                    # Owned here because created here (see above).
-                    cast(Any, trace_queue).cancel_join_thread()
-                    cast(Any, trace_queue).close()
+            # Every candidate race has released its children and feeders,
+            # including normal process exits that abandon a buffered trace.
+            # Close only the write end: native receive state distinguishes
+            # clean exhaustion from interrupted framing while the reader drains.
+            finish_trace_producers(trace_queue)
+            if collector is not None and not collector.stop():
+                collector.stop(timeout=None)
+            if trace_queue is not None:
+                close_trace_queue(trace_queue)
 
     def snapshot(self, job: Job) -> Json:
         """The job as JSON, including where it is if it is not finished."""
@@ -653,7 +652,13 @@ class Builder:
             done = job.done
         if collector is None:
             return {"frames": [], "next": cursor, "dropped": 0, "evicted": 0, "complete": done}
+        # Observe closure BEFORE the ring snapshot. Reading it afterwards could
+        # miss a final append between an empty snapshot and closure publication.
+        closed = collector.closed
+        error = collector.error
         frames, nxt = collector.ring.since(cursor)
+        if not frames and error is not None:
+            return {"error": error}
         return {
             "frames": cast(JsonValue, frames),
             "next": nxt,
@@ -671,7 +676,7 @@ class Builder:
             # non-alarming figure rather than folded into `dropped` where it
             # would read as data the search lost.
             "evicted": collector.ring.dropped,
-            "complete": done and not frames,
+            "complete": closed and not frames,
         }
 
 

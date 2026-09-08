@@ -39,8 +39,17 @@ except ImportError:  # pragma: no cover - exercised on non-POSIX platforms
     resource = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
+    from multiprocessing.connection import _ConnectionBase
+
     from flab2bp.layout.freeform import FreeformLayout
     from flab2bp.layout.sequence_solver import SequencePairLayout
+
+    class _OwnedQueueEndpoints(Protocol):
+        """Native pipe endpoints omitted from the public Queue stubs."""
+
+        _reader: _ConnectionBase
+        _writer: _ConnectionBase
+
 
 from flab2bp.dsp import catalog
 from flab2bp.layout.band_policy import BandPolicy
@@ -321,10 +330,8 @@ class _StrategyRaceRequest:
     #: ``absolute_deadline``.
     soft_deadline: float
     band_policy: BandPolicy
-    belt_vertical_construction: bool
-    #: For the child's OWN ``validate.validate`` before it publishes an
-    #: incumbent: the bound must meet the standard the parent will apply.
-    max_belt_z: Fraction
+    #: The same save policy for strategy completion and published bounds.
+    belt_rules: catalog.BeltAltitudeRules
     workers: int
     arrangements: int | None
     sequence_islands: int
@@ -404,11 +411,6 @@ def _ordered(outcomes: Sequence[_StrategyRaceOutcome]) -> tuple[_StrategyRaceOut
     return tuple(by_strategy[name] for name in RACE_STRATEGIES if name in by_strategy)
 
 
-#: Referenced so ``catalog`` is not an unused import: the default belt ceiling a
-#: caller gets when it does not know the URL's technology set.
-DEFAULT_RACE_MAX_BELT_Z = catalog.DEFAULT_MAX_BELT_Z
-
-
 #: Set by the pool initializer in each child; ``None`` in the parent and when
 #: sharing is off.  A module global rather than a request field because a
 #: ``multiprocessing.Queue`` cannot be pickled as a TASK argument -- it reaches a
@@ -477,14 +479,14 @@ def _build_layout(
             band_policy=request.band_policy,
             workers=request.workers,
             arrangements=request.arrangements,
-            belt_vertical_construction=request.belt_vertical_construction,
+            belt_rules=request.belt_rules,
             portfolio_incumbent=portfolio_incumbent,
             publish_incumbent=publish_incumbent,
             observer=observer,
         )
     return SequencePairLayout(
         band_policy=request.band_policy,
-        belt_vertical_construction=request.belt_vertical_construction,
+        belt_rules=request.belt_rules,
         config=request.config,
         compact_seed_config=request.compact_seed_config,
         islands=request.sequence_islands,
@@ -577,13 +579,12 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
         # the parent will reject would prune the other arm on a promise nobody
         # keeps.  One extra validation per PUBLISHED incumbent, off the parent's
         # critical path.
-        report = validate.validate(
+        report = validate.judge_placement(
             placement,
             request.spec,
             ids=validate.id_map(request.spec),
             expect_power=True,
-            max_belt_z=request.max_belt_z,
-            belt_vertical_construction=request.belt_vertical_construction,
+            belt_rules=request.belt_rules,
         )
         if not report.ok:
             return
@@ -703,21 +704,42 @@ def _terminate_executor(
     executor: object,
     futures: Sequence[Future[_StrategyRaceOutcome]],
 ) -> None:
-    """Stop whatever is still running, without waiting for its solve ceiling.
+    """Terminate owned children, then settle the executor's transport reader.
 
-    Copied from ``sequence_islands._terminate_executor`` rather than imported:
-    the two callers have the same need today, and a change made for islands must
-    not silently change what racing does to a live CP-SAT child.
+    Python 3.14's force-shutdown API signals workers but returns before they
+    exit, discarding the executor's resource references. Retain those owners:
+    a manager can itself be blocked reading a result whose producer died
+    mid-message. Once every child exits, closing only the parent's result
+    writer makes that read fail without closing underneath its reader.
     """
-    for future in futures:
-        _ = future.cancel()
+    processes = getattr(executor, "_processes", None)
+    manager = getattr(executor, "_executor_manager_thread", None)
+    result_queue = getattr(executor, "_result_queue", None)
+    force_kill = False
     try:
-        cast(ProcessPoolExecutor, executor).terminate_workers()
-    except BaseException:
+        for future in futures:
+            _ = future.cancel()
         try:
-            cast(ProcessPoolExecutor, executor).kill_workers()
+            cast(ProcessPoolExecutor, executor).terminate_workers()
         except BaseException:
-            cast(ProcessPoolExecutor, executor).shutdown(wait=False, cancel_futures=True)
+            force_kill = True
+            try:
+                cast(ProcessPoolExecutor, executor).kill_workers()
+            except BaseException:
+                cast(ProcessPoolExecutor, executor).shutdown(wait=False, cancel_futures=True)
+    finally:
+        # terminate_workers prevents replacement spawning before returning.
+        # Keep the original map, not a pre-termination snapshot that could
+        # miss a replacement admitted while shutdown was acquiring its lock.
+        if processes is not None:
+            for process in tuple(processes.values()):
+                if force_kill and process.is_alive():
+                    process.kill()
+                process.join()
+        if result_queue is not None:
+            result_queue._writer.close()
+        if manager is not None:
+            manager.join()
 
 
 def _pool_submit(
@@ -759,8 +781,15 @@ def _pool_submit(
             max_tasks_per_child=1,
         )
     futures: dict[Future[_StrategyRaceOutcome], str] = {}
-    for request in requests:
-        futures[executor.submit(_run_race_leg, request)] = request.strategy
+    try:
+        for request in requests:
+            futures[executor.submit(_run_race_leg, request)] = request.strategy
+    except BaseException as exc:
+        try:
+            _terminate_executor(executor, tuple(futures))
+        except BaseException as cleanup_error:
+            exc.add_note(f"race submission cleanup failed: {cleanup_error!r}")
+        raise
     return futures, executor
 
 
@@ -769,8 +798,7 @@ def run_strategy_race(
     *,
     time_budget_s: float,
     band_policy: BandPolicy,
-    belt_vertical_construction: bool,
-    max_belt_z: Fraction = DEFAULT_RACE_MAX_BELT_Z,
+    belt_rules: catalog.BeltAltitudeRules,
     workers: int | None = None,
     arrangements: int | None = None,
     sequence_islands: int = 1,
@@ -815,15 +843,6 @@ def run_strategy_race(
         "freeform": freeform_workers,
         "sequence-pair": sequence_workers,
     }
-    channels: dict[str, RaceChannels] = {}
-    if share:
-        context = multiprocessing.get_context("spawn")
-        to_freeform = context.Queue(maxsize=RACE_QUEUE_MAXSIZE)
-        to_sequence_pair = context.Queue(maxsize=RACE_QUEUE_MAXSIZE)
-        channels = {
-            "freeform": RaceChannels(publish=to_sequence_pair, consume=to_freeform),
-            "sequence-pair": RaceChannels(publish=to_freeform, consume=to_sequence_pair),
-        }
     requests = tuple(
         _StrategyRaceRequest(
             spec=spec,
@@ -831,8 +850,7 @@ def run_strategy_race(
             time_budget_s=time_budget_s,
             soft_deadline=soft_deadline,
             band_policy=band_policy,
-            belt_vertical_construction=belt_vertical_construction,
-            max_belt_z=max_belt_z,
+            belt_rules=belt_rules,
             workers=workers_by_strategy[name],
             arrangements=arrangements,
             sequence_islands=sequence_islands,
@@ -845,7 +863,22 @@ def run_strategy_race(
     )
     outcomes: list[_StrategyRaceOutcome] = []
     first_error: BaseException | None = None
+    channels: dict[str, RaceChannels] = {}
+    owned_queues = []
+    executor: object | None = None
+    futures: dict[Future[_StrategyRaceOutcome], str] = {}
+    collected = False
     try:
+        if share:
+            context = multiprocessing.get_context("spawn")
+            to_freeform = context.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+            owned_queues.append(to_freeform)
+            to_sequence_pair = context.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+            owned_queues.append(to_sequence_pair)
+            channels = {
+                "freeform": RaceChannels(publish=to_sequence_pair, consume=to_freeform),
+                "sequence-pair": RaceChannels(publish=to_freeform, consume=to_sequence_pair),
+            }
         # One unconditional 3-argument call, not two shapes (fix round 1, M2):
         # `RaceSubmit`'s third parameter is defaulted, so this is correct for
         # every seam -- a two-shape call keyed on `trace_queue` would exist
@@ -859,21 +892,12 @@ def run_strategy_race(
         # strategy, so a second future for one arm would be silently dropped at
         # one of those two points -- a lost result reported as a complete race.
         if len(strategy_by_future) != len(set(strategy_by_future.values())):
-            # Stop the children BEFORE raising.  `_pool_submit` cannot produce a
-            # duplicate today, but a `submit` seam that did would otherwise leave
-            # two spawned processes solving for their whole ceiling with nobody
-            # left holding their futures.
-            _terminate_executor(executor, tuple(strategy_by_future))
             raise ValueError("each strategy must be raced exactly once")
         done, not_done = wait(
             tuple(strategy_by_future),
             timeout=max(0.0, hard_deadline - monotonic()),
         )
         del done
-        if not_done:
-            _terminate_executor(executor, tuple(strategy_by_future))
-        else:
-            cast(ProcessPoolExecutor, executor).shutdown(wait=True, cancel_futures=False)
         # Walked in RACE_STRATEGIES order, never in `done` order: `done` is a
         # set, and letting its iteration decide which of two crashed arms is
         # re-raised would make a failing race report a different exception run
@@ -913,13 +937,51 @@ def run_strategy_race(
                 )
                 continue
             outcomes.append(future.result())
+        collected = not not_done
+        if first_error is not None and all(outcome.status == "crashed" for outcome in outcomes):
+            raise first_error
     finally:
-        # Always, even on an exception: an unflushed queue holds its feeder
-        # thread, and a held feeder thread holds this process open.
+        original_error = sys.exception()
+        cleanup_error: BaseException | None = None
+        try:
+            if executor is not None:
+                if collected:
+                    try:
+                        cast(ProcessPoolExecutor, executor).shutdown(
+                            wait=True, cancel_futures=False
+                        )
+                    except BaseException as shutdown_error:
+                        try:
+                            _terminate_executor(executor, tuple(futures))
+                        except BaseException as exc:
+                            shutdown_error.add_note(f"race termination failed: {exc!r}")
+                        raise
+                else:
+                    _terminate_executor(executor, tuple(futures))
+        except BaseException as exc:
+            cleanup_error = exc
+        # Parent queues are owned from the instant of creation, even when
+        # acquiring the second queue or submitting the second arm fails.
+        # Children and their feeders settle BEFORE either endpoint closes.
         for side in channels.values():
-            side.close()
-    if first_error is not None and all(outcome.status == "crashed" for outcome in outcomes):
-        raise first_error
+            try:
+                side.close()
+            except BaseException as exc:
+                cleanup_error = cleanup_error or exc
+        for owned_queue in owned_queues:
+            try:
+                if not channels:
+                    owned_queue.cancel_join_thread()
+                owned_queue.close()
+                endpoints = cast("_OwnedQueueEndpoints", owned_queue)
+                endpoints._reader.close()
+                endpoints._writer.close()
+            except BaseException as exc:
+                cleanup_error = cleanup_error or exc
+        if cleanup_error is not None:
+            if original_error is None:
+                raise cleanup_error
+            original_error.add_note(f"race cleanup failed: {cleanup_error!r}")
     return _ordered(outcomes)
 
 
@@ -953,18 +1015,16 @@ class RacingLayout:
         *,
         workers: int | None = None,
         arrangements: int | None = None,
-        belt_vertical_construction: bool = True,
+        belt_rules: catalog.BeltAltitudeRules,
         sequence_islands: int = 1,
         share: bool = True,
-        max_belt_z: Fraction = DEFAULT_RACE_MAX_BELT_Z,
     ) -> None:
         self.band_policy = band_policy
         self.workers = workers
         self.arrangements = arrangements
-        self.belt_vertical_construction = belt_vertical_construction
+        self.belt_rules = belt_rules
         self.sequence_islands = sequence_islands
         self.share = share
-        self.max_belt_z = max_belt_z
 
     def _merge(self, outcomes: Sequence[_StrategyRaceOutcome]) -> Placement:
         """Pick one placement, by quality and then by name -- never by arrival.
@@ -1041,8 +1101,7 @@ class RacingLayout:
                 spec,
                 time_budget_s=time_budget_s,
                 band_policy=self.band_policy,
-                belt_vertical_construction=self.belt_vertical_construction,
-                max_belt_z=self.max_belt_z,
+                belt_rules=self.belt_rules,
                 workers=self.workers,
                 arrangements=self.arrangements,
                 sequence_islands=self.sequence_islands,

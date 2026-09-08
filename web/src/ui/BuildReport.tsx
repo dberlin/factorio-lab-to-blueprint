@@ -10,7 +10,7 @@
  */
 import type {
   Attempt,
-  AttemptDetail,
+  AttemptFacts,
   AttemptFailure,
   BuildResult,
   ProjectionFailure,
@@ -79,21 +79,7 @@ export function BuildReportPanel({
   // only when nothing is selectable — an invalid build withholds every string,
   // and its report is still the thing to show. Build-global facts (flow
   // provenance, belt rules, refusals) stay on `result` regardless.
-  const shown: AttemptDetail = selectedAttempt?.detail ?? {
-    machines: result.machines,
-    machine_rank: result.machine_rank,
-    machine_moves: result.machine_moves,
-    buildings: result.buildings,
-    primary_band: result.primary_band,
-    certified_bands: result.certified_bands,
-    title: result.title,
-    outputs: result.outputs,
-    external_inputs: result.external_inputs,
-    input_markers: result.input_markers,
-    unmarked_inputs: result.unmarked_inputs,
-    belt_tiers: result.belt_tiers,
-    report: result.report,
-  };
+  const shown: AttemptFacts = selectedAttempt?.detail ?? result;
   const strategy = selectedAttempt?.strategy ?? result.strategy;
   const candidate = selectedAttempt?.candidate ?? result.candidate;
   const area = selectedAttempt?.area ?? result.area;
@@ -159,6 +145,12 @@ export function BuildReportPanel({
               } (ceiling ${shown.belt_tiers.ceiling})`
             : ' (the URL unlocks nothing faster)'}
         </dd>
+        <dt>Entry lanes</dt>
+        <dd>
+          {shown.belt_tiers.entry_lanes
+            .map((lane) => `${lane.item}: ${lane.lanes} / ${lane.lanes_needed} needed`)
+            .join(', ') || 'none reported'}
+        </dd>
         {elapsedS !== undefined && (
           <>
             <dt>Solved in</dt>
@@ -166,6 +158,23 @@ export function BuildReportPanel({
           </>
         )}
       </dl>
+
+      {Object.keys(shown.self_loop_seeds).length > 0 && (
+        <section aria-label="PRIME ONCE">
+          <h3>PRIME ONCE</h3>
+          <p>One-time startup items, not a permanent external supply.</p>
+          <ul>
+            {Object.entries(shown.self_loop_seeds).flatMap(([item, seeds]) =>
+              seeds.recipes.map((seed) => (
+                <li key={`${item}/${seed.recipe}/${seed.head?.x}/${seed.head?.y}/${seed.head?.z}`}>
+                  {item}: {seed.seed_items} items — {seed.recipe}, {seed.machines} machines
+                  {seed.head && ` at (${seed.head.x}, ${seed.head.y}, ${seed.head.z})`}
+                </li>
+              )),
+            )}
+          </ul>
+        </section>
+      )}
 
       {shown.unmarked_inputs.length > 0 && (
         // Say it here rather than let someone find it while staring at an

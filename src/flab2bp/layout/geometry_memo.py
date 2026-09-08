@@ -16,7 +16,7 @@ import threading
 from collections import OrderedDict
 from typing import NamedTuple
 
-from flab2bp.layout.freeform import _StagedStaticCache
+from flab2bp.layout.routing_domain import _StagedStaticCache
 from flab2bp.spec import BuildSpec
 
 MEMO_SPECS_RETAINED = 4

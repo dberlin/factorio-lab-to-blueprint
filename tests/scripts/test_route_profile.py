@@ -2,28 +2,28 @@ from __future__ import annotations
 
 import pytest
 
-from flab2bp.layout import freeform
+from flab2bp.layout import routing_domain
 from flab2bp.layout.route_feedback import RouteFailureKind
 from scripts import route_profile
 
 
 def _run_profiled_astar(
     monkeypatch: pytest.MonkeyPatch,
-    result: freeform._PathSearchResult,
-) -> tuple[freeform._PathSearchResult, route_profile.Tally]:
-    monkeypatch.setattr(freeform, "_astar", lambda *args, **kwargs: result)
+    result: routing_domain._PathSearchResult,
+) -> tuple[routing_domain._PathSearchResult, route_profile.Tally]:
+    monkeypatch.setattr(routing_domain, "_astar", lambda *args, **kwargs: result)
     tally = route_profile.Tally()
     restore = route_profile.install(tally)
-    canvas = object.__new__(freeform._Canvas)
+    canvas = object.__new__(routing_domain._Canvas)
     try:
-        returned = freeform._astar(canvas, [], set(), {}, 0.0, (0, 0, 0, 0))
+        returned = routing_domain._astar(canvas, [], set(), {}, 0.0, (0, 0, 0, 0))
     finally:
         restore()
     return returned, tally
 
 
 def test_install_records_successful_path_result(monkeypatch: pytest.MonkeyPatch) -> None:
-    result = freeform._PathSearchResult(
+    result = routing_domain._PathSearchResult(
         path=((0, 0, 0),),
         kind=None,
         wall=(),
@@ -40,7 +40,7 @@ def test_install_records_successful_path_result(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_install_records_failed_path_result(monkeypatch: pytest.MonkeyPatch) -> None:
-    result = freeform._PathSearchResult(
+    result = routing_domain._PathSearchResult(
         path=None,
         kind=RouteFailureKind.SEALED_POCKET,
         wall=(),
@@ -70,10 +70,10 @@ def test_install_forwards_merge_frontier_belt_prefab(
         received.append(belt_prefab)
         return expected
 
-    monkeypatch.setattr(freeform, "_merge_frontier", merge)
+    monkeypatch.setattr(routing_domain, "_merge_frontier", merge)
     restore = route_profile.install(route_profile.Tally())
     try:
-        returned = freeform._merge_frontier(
+        returned = routing_domain._merge_frontier(
             object(),  # type: ignore[arg-type]
             {},
             (),

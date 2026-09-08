@@ -63,16 +63,21 @@ picked up last leaves fifteen cores idle waiting for it.
 from __future__ import annotations
 
 import argparse
+import multiprocessing as mp
 import os
+import signal
 import subprocess
 import sys
 import time
 from collections import Counter
-from collections.abc import Callable, Mapping
-from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from collections.abc import Callable, Mapping, MutableSequence
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field, replace
-from fractions import Fraction
+from multiprocessing.synchronize import Lock
 from pathlib import Path
+from time import perf_counter
+from typing import cast
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
@@ -114,34 +119,29 @@ from flab2bp.rates.machine_choice import MachineRank  # noqa: E402
 from flab2bp.spec import BuildSpec  # noqa: E402
 
 _TIER_ORDER = (Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS)
-#: The third argument is the CELL'S belt ceiling.  ``run_cell`` validates the
-#: winner at ``belt_rules.max_z``, and a raced child that validates its own
-#: incumbent at a DIFFERENT ceiling would publish a bound this cell then
-#: rejects.  The two explicit lambdas ignore it -- neither layout takes a belt
-#: ceiling, and only the racing child validates on its own.
-_StrategyFactory = Callable[[int, bool, Fraction], LayoutStrategy]
+#: The same complete policy reaches construction and final judgment.
+_StrategyFactory = Callable[[int, catalog.BeltAltitudeRules], LayoutStrategy]
 _STRATEGIES: dict[str, _StrategyFactory] = {
-    "freeform": lambda workers, vertical, _max_belt_z: FreeformLayout(
+    "freeform": lambda workers, rules: FreeformLayout(
         band_policy=BandPolicy("portable"),
         workers=workers,
-        belt_vertical_construction=vertical,
+        belt_rules=rules,
     ),
     #: Islands, at the same count production runs, so the gate MEASURES the
     #: default rather than a shape no user gets.  `resolve_sequence_islands`
     #: bounds them by this cell's own CP-SAT worker share, so a wide `--jobs`
     #: run -- which gives each cell fewer workers -- narrows the islands with it
     #: instead of oversubscribing the box N times over.
-    "sequence-pair": lambda workers, vertical, _max_belt_z: SequencePairLayout(
+    "sequence-pair": lambda workers, rules: SequencePairLayout(
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=vertical,
+        belt_rules=rules,
         islands=resolve_sequence_islands("sequence-pair", workers, None),
     ),
-    "best": lambda workers, vertical, max_belt_z: RacingLayout(
+    "best": lambda workers, rules: RacingLayout(
         BandPolicy("portable"),
         workers=workers,
-        belt_vertical_construction=vertical,
+        belt_rules=rules,
         sequence_islands=resolve_sequence_islands("best", workers, None),
-        max_belt_z=max_belt_z,
     ),
 }
 _DEFAULT_STRATEGIES = ("freeform", "sequence-pair")
@@ -192,10 +192,10 @@ class Job:
 
 @dataclass(frozen=True)
 class Result:
-    """What a worker sends back. No Placement -- it does not need to travel."""
+    """A job-owned terminal outcome; no Placement needs to travel to the supervisor."""
 
     job: Job
-    status: str  # CLEAN | REFUSED | INVALID | CRASH | SPEC
+    status: str  # CLEAN | REFUSED | INVALID | CRASH | SPEC | TERMINATED | NOT_RUN
     spec_label: str
     detail: str
     checks: tuple[str, ...]
@@ -256,6 +256,8 @@ class Result:
 
     @property
     def label(self) -> str:
+        if self.spec_label == "?":
+            return self.job.label
         return (
             f"{self.job.url_id}/{self.spec_label} power={int(self.job.power)} "
             f"budget={self.job.budget:g}s"
@@ -330,7 +332,7 @@ def _belt_rules_for(url: str) -> catalog.BeltAltitudeRules:
     return belt_rules_for_url(url, load_vendored())
 
 
-def run_cell(job: Job) -> Result:
+def run_cell(job: Job, *, belt_rules: catalog.BeltAltitudeRules) -> Result:
     """Lay one cell out and judge it. Runs in a worker process."""
     t0 = time.monotonic()
     try:
@@ -347,7 +349,6 @@ def run_cell(job: Job) -> Result:
     spec = specs[job.spec_index]
     label = spec.label
 
-    belt_rules = _belt_rules_for(job.url)
     make_strategy = _STRATEGIES[job.strategy]
     strategy: LayoutStrategy
     #: Everything from here on is the attempt: the search AND the completion,
@@ -377,14 +378,10 @@ def run_cell(job: Job) -> Result:
                 band_policy=BandPolicy("portable"),
                 workers=job.workers,
                 arrangements=job.arrangements,
-                belt_vertical_construction=belt_rules.vertical_construction,
+                belt_rules=belt_rules,
             )
         else:
-            strategy = make_strategy(
-                job.workers,
-                belt_rules.vertical_construction,
-                belt_rules.max_z,
-            )
+            strategy = make_strategy(job.workers, belt_rules)
         placement = strategy.lay_out(
             spec,
             time_budget_s=job.budget,
@@ -415,6 +412,7 @@ def run_cell(job: Job) -> Result:
             placement,
             spec,
             expect_power=True,
+            belt_rules=belt_rules,
         )
         try:
             placement = finalize.finalize_placement(placement, BandPolicy("portable"))
@@ -458,13 +456,12 @@ def run_cell(job: Job) -> Result:
     projection_power_pairs = int(placement.stats.get("projection_power_pairs", 0))
     projection_sorters = int(placement.stats.get("projection_sorters", 0))
 
-    report = validate.validate(
+    report = validate.judge_placement(
         placement,
         spec,
         ids=validate.id_map(spec),
         expect_power=True,
-        max_belt_z=belt_rules.max_z,
-        belt_vertical_construction=belt_rules.vertical_construction,
+        belt_rules=belt_rules,
     )
     now = time.monotonic()
     elapsed = now - t0
@@ -654,6 +651,8 @@ def build_jobs(
                             power_tower=power_tower,
                         )
                     )
+    if len(set(jobs)) != len(jobs):
+        raise ValueError("duplicate selected audit job")
     return jobs
 
 
@@ -671,13 +670,15 @@ def _available_cores() -> int:
     return os.cpu_count() or 4
 
 
-def _head_commit() -> str:
+def _head_commit(*, timeout_s: float = 10.0) -> str:
     """The tree under audit, or ``"unknown"`` when git cannot say.
 
     An audit JSONL outlives the checkout that produced it.  Without this field a
     comparison of two files is a comparison of two anonymous runs, and the only
     way back to the code is the file's mtime.
     """
+    if timeout_s <= 0:
+        return "unknown"
     try:
         finished = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -685,7 +686,7 @@ def _head_commit() -> str:
             capture_output=True,
             text=True,
             check=True,
-            timeout=10.0,
+            timeout=min(10.0, timeout_s),
         )
     except OSError, subprocess.SubprocessError:
         return "unknown"
@@ -714,6 +715,7 @@ def record(tallies: dict[str, Tally], r: Result) -> None:
         "power_towers": r.power_towers,
         "budget": r.job.budget,
         "machine_rank": r.job.machine_rank,
+        "arrangements": r.job.arrangements,
         "status": r.status,
         "area": r.area,
         "seconds": r.seconds,
@@ -754,11 +756,226 @@ def record(tallies: dict[str, Tally], r: Result) -> None:
         t.invalid += 1
     elif r.status == "CRASH":
         t.crashed += 1
+    elif r.status in {"TERMINATED", "NOT_RUN"}:
+        t.not_run += 1
     else:  # SPEC failure is not the layout's fault, but it is still not clean.
         t.crashed += 1
     for c in r.checks:
         t.checks[c] += 1
     t.misses.append(f"{r.status:<8} {r.label}  {r.detail}")
+
+
+_JOB_STARTED: MutableSequence[int] | None = None
+
+
+def _initialize_audit_worker(
+    groups: MutableSequence[int], lock: Lock, started: MutableSequence[int]
+) -> None:
+    """Own a session before any preparation or nested layout work can start."""
+    global _JOB_STARTED
+    os.setsid()
+    with lock:
+        groups[next(index for index, pid in enumerate(groups) if pid == 0)] = os.getpid()
+    _JOB_STARTED = started
+
+
+def _run_started_cell(job_id: int, job: Job, belt_rules: catalog.BeltAltitudeRules) -> Result:
+    assert _JOB_STARTED is not None
+    _JOB_STARTED[job_id] = 1
+    return run_cell(job, belt_rules=belt_rules)
+
+
+def _stop_audit_workers(
+    pool: ProcessPoolExecutor, groups: MutableSequence[int], prior_children: frozenset[int]
+) -> None:
+    """Stop owned sessions, then release the executor's interrupted result reader."""
+    # Python 3.14 force shutdown discards these handles before its manager exits.
+    # Retain the owners just as the production race teardown does.
+    manager = getattr(pool, "_executor_manager_thread", None)
+    result_queue = getattr(pool, "_result_queue", None)
+    children = [child for child in mp.active_children() if child.pid not in prior_children]
+    # Each registered group was created by our initializer, never guessed from
+    # a process listing. Nested spawn/island/race children inherit that group.
+    for pid in groups:
+        if pid:
+            with suppress(ProcessLookupError):
+                os.killpg(pid, signal.SIGKILL)
+    pool.kill_workers()
+    stop_by = perf_counter() + 1.0
+    for child in children:
+        child.join(timeout=max(0.0, stop_by - perf_counter()))
+    # Close the initializer-registration race: all direct workers have now
+    # stopped, so no worker can create or register another session.
+    for pid in groups:
+        if pid:
+            with suppress(ProcessLookupError):
+                os.killpg(pid, signal.SIGKILL)
+    if any(child.is_alive() for child in children):
+        raise RuntimeError("audit workers did not stop within the bounded teardown")
+    # All producer processes have exited. Half-close only our writer so a
+    # manager blocked on a partial result receives EOF on its still-owned reader.
+    if result_queue is not None:
+        result_queue._writer.close()
+    if manager is not None:
+        manager.join(timeout=max(0.0, stop_by - perf_counter()))
+        if manager.is_alive():
+            raise RuntimeError("audit result manager did not stop within the bounded teardown")
+
+
+def _run_jobs(
+    jobs: list[Job],
+    *,
+    workers: int,
+    deadline: float,
+    publish: Callable[[Result], None],
+) -> dict[int, Result]:
+    """Own selected-job outcomes from URL preparation through process teardown."""
+    terminal: dict[int, Result] = {}
+    context = mp.get_context("spawn")
+    groups = cast(MutableSequence[int], context.RawArray("q", workers))
+    started = cast(MutableSequence[int], context.RawArray("b", len(jobs)))
+    by_url: dict[str, list[int]] = {}
+    for job_id, job in enumerate(jobs):
+        by_url.setdefault(job.url, []).append(job_id)
+
+    def settle(job_id: int, result: Result) -> None:
+        if job_id in terminal:
+            raise RuntimeError(f"duplicate terminal audit job: {job_id}")
+        if result.job != jobs[job_id]:
+            result = Result(
+                jobs[job_id],
+                "CRASH",
+                "?",
+                "worker returned a different selected job",
+                ("<crash>",),
+                0.0,
+            )
+        terminal[job_id] = result
+        publish(result)
+
+    def failed_url(url: str, exc: Exception) -> None:
+        for job_id in by_url[url]:
+            settle(
+                job_id,
+                Result(
+                    jobs[job_id],
+                    "SPEC",
+                    "?",
+                    f"{type(exc).__name__}: {exc}",
+                    (),
+                    0.0,
+                ),
+            )
+
+    if time.monotonic() < deadline:
+        if os.name != "posix":
+            raise RuntimeError("hard audit process caps require POSIX process-group ownership")
+        prior_children = frozenset(
+            child.pid for child in mp.active_children() if child.pid is not None
+        )
+        pool = ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=context,
+            initializer=_initialize_audit_worker,
+            initargs=(groups, context.Lock(), started),
+        )
+        preparing: dict[Future[catalog.BeltAltitudeRules], str] = {}
+        running: dict[Future[Result], int] = {}
+
+        def harvest(future: Future[Result]) -> None:
+            job_id = running.pop(future)
+            try:
+                result = future.result()
+            except Exception as exc:  # Worker failure is an outcome, not a lost row.
+                result = Result(
+                    jobs[job_id],
+                    "CRASH",
+                    "?",
+                    f"{type(exc).__name__}: {exc}",
+                    ("<crash>",),
+                    0.0,
+                )
+            settle(job_id, result)
+
+        try:
+            for url in by_url:
+                if time.monotonic() >= deadline:
+                    break
+                try:
+                    preparing[pool.submit(_belt_rules_for, url)] = url
+                except Exception as exc:
+                    failed_url(url, exc)
+            while preparing or running:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    break
+                finished, _ = wait(
+                    cast(
+                        "tuple[Future[catalog.BeltAltitudeRules | Result], ...]",
+                        (*preparing, *running),
+                    ),
+                    timeout=left,
+                    return_when=FIRST_COMPLETED,
+                )
+                for future in finished:
+                    if future in running:
+                        harvest(cast(Future[Result], future))
+                        continue
+                    prepared = cast(Future[catalog.BeltAltitudeRules], future)
+                    url = preparing.pop(prepared)
+                    try:
+                        rules = prepared.result()
+                    except Exception as exc:
+                        failed_url(url, exc)
+                        continue
+                    for job_id in by_url[url]:
+                        if time.monotonic() >= deadline:
+                            break
+                        try:
+                            running[pool.submit(_run_started_cell, job_id, jobs[job_id], rules)] = (
+                                job_id
+                            )
+                        except Exception as exc:
+                            settle(
+                                job_id,
+                                Result(
+                                    jobs[job_id],
+                                    "CRASH",
+                                    "?",
+                                    f"{type(exc).__name__}: {exc}",
+                                    ("<crash>",),
+                                    0.0,
+                                ),
+                            )
+            # A wait timeout is not a reliable terminal snapshot. Harvest every
+            # already-published result once before terminating outstanding work.
+            for completed_future in tuple(running):
+                if completed_future.done():
+                    harvest(completed_future)
+            for prepared, url in preparing.items():
+                if prepared.done():
+                    try:
+                        prepared.result()
+                    except Exception as exc:
+                        failed_url(url, exc)
+        finally:
+            _stop_audit_workers(pool, groups, prior_children)
+
+    for job_id, job in enumerate(jobs):
+        if job_id not in terminal:
+            status = "TERMINATED" if started[job_id] else "NOT_RUN"
+            settle(
+                job_id,
+                Result(
+                    job,
+                    status,
+                    "?",
+                    "whole-audit cap exhausted",
+                    (),
+                    0.0,
+                ),
+            )
+    return terminal
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -801,8 +1018,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-seconds",
         type=float,
         default=900.0,
-        help="hard cap on the whole run; unreached cells report NOT RUN and the "
-        "gate fails, because a truncated audit is not a clean one",
+        help="hard cap including preparation and nested layout work; outstanding "
+        "jobs report TERMINATED or NOT_RUN, followed by bounded process teardown",
     )
     ap.add_argument(
         "--only",
@@ -836,10 +1053,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    t0 = time.monotonic()
     ap = build_parser()
     args = ap.parse_args()
     global _COMMIT
-    _COMMIT = _head_commit()
+    deadline = t0 + args.max_seconds
+    _COMMIT = _head_commit(timeout_s=deadline - time.monotonic())
+    _JSONL.clear()
     candidate_policies = candidate_policies_from_args(ap, args)
 
     cutoff = _TIER_ORDER.index(Tier(args.tier))
@@ -878,52 +1098,22 @@ def main() -> int:
     )
 
     tallies = {name: Tally() for name in names}
-    t0 = time.monotonic()
     done = 0
-    expired = False
 
-    if jobs_n == 1:
-        for job in jobs:
-            if time.monotonic() - t0 > args.max_seconds:
-                expired = True
-                break
-            r = run_cell(job)
+    def publish(result: Result) -> None:
+        nonlocal done
+        if result.status not in {"TERMINATED", "NOT_RUN"}:
             done += 1
-            record(tallies, r)
-            _echo(r, done, len(jobs), time.monotonic() - t0)
-        remaining = len(jobs) - done
-    else:
-        with ProcessPoolExecutor(max_workers=jobs_n) as pool:
-            futures = {pool.submit(run_cell, j): j for j in jobs}
-            pending = set(futures)
-            while pending:
-                left = args.max_seconds - (time.monotonic() - t0)
-                if left <= 0:
-                    expired = True
-                    break
-                finished, pending = wait(pending, timeout=left, return_when=FIRST_COMPLETED)
-                for fut in finished:
-                    r = fut.result()
-                    done += 1
-                    record(tallies, r)
-                    _echo(r, done, len(jobs), time.monotonic() - t0)
-            for fut in pending:
-                fut.cancel()
-            remaining = len(pending)
-        if expired and remaining:
-            # Cancelling does not stop a cell already running, so the pool's
-            # shutdown may have let a few more land. Trust `done`.
-            remaining = len(jobs) - done
+        record(tallies, result)
+        _echo(result, done, len(jobs), time.monotonic() - t0)
 
-    if expired:
-        # Charge the unreached cells to whichever strategies were being audited.
-        # Spreading them evenly would be a guess; naming the count is not.
-        unreached = Counter(job.strategy for job in jobs[done:])
-        for name in names:
-            tallies[name].not_run += unreached[name]
+    terminal = _run_jobs(jobs, workers=jobs_n, deadline=deadline, publish=publish)
+    terminated = sum(result.status == "TERMINATED" for result in terminal.values())
+    unreached = sum(result.status == "NOT_RUN" for result in terminal.values())
+    if terminated or unreached:
         print(
             f"\n!! WALL-CLOCK CAP HIT at {args.max_seconds:g}s with "
-            f"{len(jobs) - done} cells unreached.",
+            f"{terminated} cells terminated and {unreached} unreached.",
             flush=True,
         )
 

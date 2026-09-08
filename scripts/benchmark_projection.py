@@ -17,6 +17,11 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
+from flab2bp.bench.identity import (  # noqa: E402
+    AuditCellKey,
+    index_audit_cells,
+    pair_audit_cells,
+)
 from flab2bp.layout import finalize  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
 from flab2bp.layout.base import PlacedBuilding, Placement, PlacementStats  # noqa: E402
@@ -139,7 +144,6 @@ _BUILD_COUNTERS = (
     "projection_power_pairs",
     "projection_sorters",
 )
-_BuildKey = tuple[str, str, int, str, bool, float]
 
 
 def _object(value: object, *, label: str) -> Mapping[str, object]:
@@ -477,28 +481,15 @@ def compare_projection_results(
     )
 
 
-def _build_identity(
-    record: Mapping[str, object],
-    *,
-    label: str,
-) -> tuple[_BuildKey, BuildCaseIdentity]:
-    identity = BuildCaseIdentity(
-        strategy=_string(record["strategy"], label=f"{label}.strategy"),
-        url_id=_string(record["url_id"], label=f"{label}.url_id"),
-        spec_index=_integer(record["spec_index"], label=f"{label}.spec_index"),
-        spec_label=_string(record["spec_label"], label=f"{label}.spec_label"),
-        power=_boolean(record["power"], label=f"{label}.power"),
-        budget=_number(record["budget"], label=f"{label}.budget"),
+def _build_identity(key: AuditCellKey) -> BuildCaseIdentity:
+    return BuildCaseIdentity(
+        strategy=key.strategy,
+        url_id=key.url_id,
+        spec_index=key.spec_index,
+        spec_label=key.spec_label,
+        power=key.power,
+        budget=key.budget,
     )
-    key = (
-        identity["strategy"],
-        identity["url_id"],
-        identity["spec_index"],
-        identity["spec_label"],
-        identity["power"],
-        identity["budget"],
-    )
-    return key, identity
 
 
 def _build_metrics(record: Mapping[str, object], *, label: str) -> BuildMetrics:
@@ -532,41 +523,24 @@ def _build_metrics(record: Mapping[str, object], *, label: str) -> BuildMetrics:
     )
 
 
-def _index_build_records(
-    records: Sequence[Mapping[str, object]],
-    *,
-    label: str,
-) -> tuple[list[_BuildKey], dict[_BuildKey, tuple[BuildCaseIdentity, BuildMetrics]]]:
-    order: list[_BuildKey] = []
-    indexed: dict[_BuildKey, tuple[BuildCaseIdentity, BuildMetrics]] = {}
-    for index, record in enumerate(records):
-        record_label = f"{label}[{index}]"
-        key, identity = _build_identity(record, label=record_label)
-        if key in indexed:
-            raise ValueError(f"{record_label} duplicates build case {identity}")
-        order.append(key)
-        indexed[key] = (identity, _build_metrics(record, label=record_label))
-    return order, indexed
-
-
 def compare_build_results(
     baseline: Sequence[Mapping[str, object]],
     after: Sequence[Mapping[str, object]],
 ) -> BuildComparison:
-    order, baseline_cases = _index_build_records(baseline, label="baseline")
-    _, after_cases = _index_build_records(after, label="after")
-    baseline_keys = set(baseline_cases)
-    after_keys = set(after_cases)
-    if baseline_keys != after_keys:
+    baseline_cases = index_audit_cells(baseline)
+    after_cases = index_audit_cells(after)
+    pairs = pair_audit_cells(baseline_cases, after_cases)
+    if len(pairs) != len(baseline_cases) or len(pairs) != len(after_cases):
         raise ValueError(
             "build cases differ: "
-            f"baseline-only={len(baseline_keys - after_keys)}, "
-            f"after-only={len(after_keys - baseline_keys)}"
+            f"baseline-only={len(baseline_cases) - len(pairs)}, "
+            f"after-only={len(after_cases) - len(pairs)}"
         )
     cases: list[BuildCaseComparison] = []
-    for key in order:
-        identity, baseline_metrics = baseline_cases[key]
-        _, after_metrics = after_cases[key]
+    for key, record in baseline_cases.items():
+        identity = _build_identity(key)
+        baseline_metrics = _build_metrics(record, label=f"baseline {key}")
+        after_metrics = _build_metrics(after_cases[key], label=f"after {key}")
         baseline_wall_time = baseline_metrics["build_wall_time_s"]
         if baseline_wall_time <= 0.0:
             raise ValueError(f"baseline build wall time must be positive for {identity}")

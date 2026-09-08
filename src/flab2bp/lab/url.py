@@ -335,11 +335,13 @@ def _parse_objectives(
             table = mh.recipes if unit is ObjectiveUnit.Machines else mh.items
             target_id = P.parse_n_string(target_id, table) or ""
 
+        parsed_value = P.parse_rational(_get(f, 1))
+        value = Fraction(1) if parsed_value is None else parsed_value
         out.append(
             Objective(
                 id=str(index),
                 target_id=target_id,
-                value=P.parse_rational(_get(f, 1)) or Fraction(1),
+                value=value,
                 unit=unit,
                 type=obj_type,
                 machine_id=P.parse_string(_get(f, 4), mh.machines if mh else None),

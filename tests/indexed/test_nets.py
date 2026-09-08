@@ -162,8 +162,8 @@ def test_replacing_phase_endpoints_preserves_old_queries_and_payload_identity() 
 
     import pytest
 
-    from flab2bp.layout.freeform import _Net, _Port
     from flab2bp.layout.route_feedback import NetId, NetRole
+    from flab2bp.layout.routing_domain import _Net, _Port
 
     net_id = NetId(0, 1, "gear", NetRole.INTERNAL, 0)
     first = _Net(_Port(0, 0, 0), _Port(1, 4, 0), "gear", net_id=net_id)

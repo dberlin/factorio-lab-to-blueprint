@@ -74,13 +74,21 @@ def frame_json(seq: int, at_s: float, event: SearchEvent) -> Json:
     """
     placement = event.placement
     buildings = () if placement is None else placement.buildings
-    truncated = len(buildings) > TRACE_MAX_BUILDINGS
-    if truncated:
-        # Every Nth building rather than the first N: a prefix of a packed
-        # placement is one corner of it, which reads as a smaller layout instead
-        # of a sampled one.
-        step = (len(buildings) + TRACE_MAX_BUILDINGS - 1) // TRACE_MAX_BUILDINGS
-        buildings = buildings[::step]
+    original_count = len(buildings)
+    truncated = original_count > TRACE_MAX_BUILDINGS
+    # Uniform-stride sampling keeps the whole layout in view. Links belong to
+    # this dense wire scene, not to the unsampled placement's index space.
+    step = (original_count + TRACE_MAX_BUILDINGS - 1) // TRACE_MAX_BUILDINGS if truncated else 1
+    rows: list[list[float]] = []
+    for index in range(0, original_count, step):
+        row = building_row(buildings[index])
+        if truncated:
+            for field_index in (8, 9):
+                target = int(row[field_index])
+                row[field_index] = (
+                    target // step if 0 <= target < original_count and target % step == 0 else -1
+                )
+        rows.append(row)
     return {
         "seq": seq,
         "t": at_s,
@@ -99,7 +107,7 @@ def frame_json(seq: int, at_s: float, event: SearchEvent) -> Json:
         "incumbent": event.incumbent,
         "reason": event.reason,
         "bounds": list(placement.bounds) if placement is not None else [0, 0, 0, 0],
-        "buildings": cast(Json, [building_row(b) for b in buildings]),
+        "buildings": cast(Json, rows),
         "truncated": truncated,
         "stranded": [list(pair) for pair in event.stranded],
         "no_goods": [list(group) for group in event.no_goods],
@@ -199,6 +207,9 @@ class TraceCollector:
     _dropped: int = field(default=0, init=False)
     _seq: int = field(default=0, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
+    _closed: threading.Event = field(default_factory=threading.Event, init=False)
+    _failed: threading.Event = field(default_factory=threading.Event, init=False)
+    _error: str | None = field(default=None, init=False)
     _thread: threading.Thread | None = field(default=None, init=False)
     observer: SampledObserver = field(init=False)
 
@@ -218,6 +229,16 @@ class TraceCollector:
         """
         return self._dropped
 
+    @property
+    def closed(self) -> bool:
+        """Publication finished successfully; no later frame can appear."""
+        return self._closed.is_set()
+
+    @property
+    def error(self) -> str | None:
+        """A reader/projection failure, published separately from clean closure."""
+        return self._error if self._failed.is_set() else None
+
     def _offer(self, event: SearchEvent) -> None:
         """The sink.  One deque append; a bounded deque evicts silently, so the
         eviction is counted here rather than discovered later."""
@@ -226,27 +247,31 @@ class TraceCollector:
         self._pending.append(event)
 
     def drain_once(self) -> None:
-        if self.queue is not None:
-            for event in drain_trace(cast(MessageQueue, self.queue)):
-                # Same overflow accounting `_offer` uses: a bounded deque
-                # evicts silently, so an eviction forced by a queue-sourced
-                # event must be counted here too or it is discovered later.
-                if len(self._pending) == self._pending.maxlen:
-                    self._dropped += 1
-                self._pending.append(event)
-        while self._pending:
-            event = self._pending.popleft()
-            # `event.monotonic_s`, a CHILD-originated timestamp captured where
-            # the event was created (`SearchEvent`'s own `default_factory`,
-            # observe.py) -- never the time THIS thread happened to forward or
-            # drain it. A raced arm's whole burst of events would otherwise
-            # collapse onto the one instant this thread got around to them,
-            # which is exactly candidate-settlement time for a queue-sourced
-            # burst and defeats a shared `t` axis across strategies.
-            self.ring.append(
-                frame_json(self._seq, round(event.monotonic_s - self.started_at, 3), event)
-            )
-            self._seq += 1
+        try:
+            if self.queue is not None:
+                for event in drain_trace(cast(MessageQueue, self.queue)):
+                    # Same overflow accounting `_offer` uses: a bounded deque
+                    # evicts silently, so an eviction forced by a queue-sourced
+                    # event must be counted here too or it is discovered later.
+                    if len(self._pending) == self._pending.maxlen:
+                        self._dropped += 1
+                    self._pending.append(event)
+        finally:
+            # A later transport failure cannot discard earlier dequeues or
+            # serial events already retained in the sole stage-1 buffer.
+            while self._pending:
+                event = self._pending.popleft()
+                # `event.monotonic_s`, a CHILD-originated timestamp captured where
+                # the event was created (`SearchEvent`'s own `default_factory`,
+                # observe.py) -- never the time THIS thread happened to forward or
+                # drain it. A raced arm's whole burst of events would otherwise
+                # collapse onto the one instant this thread got around to them,
+                # which is exactly candidate-settlement time for a queue-sourced
+                # burst and defeats a shared `t` axis across strategies.
+                self.ring.append(
+                    frame_json(self._seq, round(event.monotonic_s - self.started_at, 3), event)
+                )
+                self._seq += 1
 
     def start(self) -> None:
         thread = threading.Thread(target=self._run, name="flab2bp-trace", daemon=True)
@@ -264,20 +289,45 @@ class TraceCollector:
         self._thread = thread
 
     def _run(self) -> None:
-        while not self._stop.is_set():
-            self.drain_once()
-            self._stop.wait(TRACE_DRAIN_INTERVAL_S)
-        self.drain_once()
+        try:
+            while not self._stop.is_set():
+                self.drain_once()
+                self._stop.wait(TRACE_DRAIN_INTERVAL_S)
+            self._finish()
+        except Exception as exc:
+            self._record_failure(exc)
 
-    def stop(self) -> None:
+    def _record_failure(self, exc: Exception) -> None:
+        self._error = f"trace collection failed: {exc}"
+        self._failed.set()
+
+    def _finish(self) -> None:
+        try:
+            # A queue pass is bounded. Once producers have stopped, keep
+            # draining until a pass publishes nothing, not just one last batch.
+            while True:
+                previous_seq = self._seq
+                self.drain_once()
+                if self._seq == previous_seq:
+                    break
+        except Exception as exc:
+            self._record_failure(exc)
+        else:
+            self._closed.set()
+
+    def stop(self, *, timeout: float | None = 2.0) -> bool:
+        """Stop after producers finish; false means timeout or a reported error.
+
+        A timeout leaves the reader and its queue owned and alive. The queue
+        owner must wait for reader termination before releasing its resources;
+        ``timeout=None`` performs that wait without changing solver job state.
+        """
         self._stop.set()
         thread = self._thread
         if thread is not None:
-            thread.join(timeout=2.0)
-        # Only drain here if the daemon thread is gone: `frame_json` reads and
-        # then increments `self._seq`, and if the join above timed out (a
-        # wedged thread), that thread could still be mid-drain -- draining
-        # again concurrently from this thread would race on `_seq` and could
-        # emit two frames with the same seq, or lose an increment.
-        if thread is None or not thread.is_alive():
-            self.drain_once()
+            thread.join(timeout=timeout)
+            if thread.is_alive():
+                return False
+        elif not self.closed and self.error is None:
+            self._finish()
+        return self.closed

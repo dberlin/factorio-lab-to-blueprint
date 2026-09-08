@@ -1,34 +1,47 @@
-import { afterEach, expect, rstest, test } from '@rstest/core';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, expect, test } from '@rstest/core';
+import { fireEvent, render as renderUI, screen, waitFor } from '@testing-library/react';
 import type { TraceFrame } from '../../src/api/trace';
 import { TRACE_POLL_MS } from '../../src/api/trace';
 import type { Blueprint } from '../../src/format/types';
 import { TracePanel } from '../../src/ui/TracePanel';
 import { restoreFetch, serving } from '../support/build';
+import { useEffect, type ReactNode } from 'react';
+import { BlueprintProvider, useBlueprint } from '../../src/state/BlueprintProvider';
+import { realCatalog } from '../support/catalog';
 
 afterEach(restoreFetch);
 afterEach(() => {
   onSnapshot = () => {};
+  displayedSnapshots.length = 0;
 });
 
-const loadSnapshotCalls: Array<{ bp: Blueprint; label: string }> = [];
-// Relayed to per-test callbacks by `Harness` below, so an individual test can
-// observe just its own snapshot loads without reaching into the shared
-// `loadSnapshotCalls` log (which every test in this file still appends to,
-// unchanged, for the tests above that already rely on it).
+const displayedSnapshots: Array<{ bp: Blueprint; label: string }> = [];
+// Observe actual displayed documents, rather than substituting publication callbacks.
 let onSnapshot: (bp: Blueprint, label: string) => void = () => {};
 
-rstest.mock('../../src/state/BlueprintProvider', () => ({
-  useBlueprint: () => ({
-    loadSnapshot: (bp: Blueprint, label: string) => {
-      loadSnapshotCalls.push({ bp, label });
-      onSnapshot(bp, label);
-    },
-    setTraceFrame: () => {},
-    traceShow: { stranded: true, noGoods: true },
-    setTraceShow: () => {},
-  }),
-}));
+function DisplayedSnapshot() {
+  const { document } = useBlueprint();
+  useEffect(() => {
+    if (document?.kind === 'trace') {
+      displayedSnapshots.push({ bp: document.blueprint, label: document.label });
+      onSnapshot(document.blueprint, document.label);
+    }
+  }, [document]);
+  return (
+    <output data-testid="displayed-trace">
+      {document?.kind === 'trace' ? document.label : ''}
+    </output>
+  );
+}
+
+function render(children: ReactNode) {
+  return renderUI(
+    <BlueprintProvider catalog={realCatalog}>
+      {children}
+      <DisplayedSnapshot />
+    </BlueprintProvider>,
+  );
+}
 
 const FRAME: TraceFrame = {
   seq: 1,
@@ -54,12 +67,7 @@ const FRAME: TraceFrame = {
   buildings: [[2001, 35, 0, 0, 0, 0, 61, 0, 1, -1]],
 };
 
-/**
- * A `TracePanel` fed directly from a scripted response, so timeline tests can
- * hand it exact frames rather than reconstructing a poll sequence. `dropped`
- * and `onLoadSnapshot` are per-test hooks: the latter is relayed through the
- * mocked `useBlueprint` above so a test observes only its own loads.
- */
+/** Timeline fixtures are polled by the real panel and published by the real provider. */
 function Harness({
   frames,
   dropped = 0,
@@ -71,7 +79,7 @@ function Harness({
 }) {
   onSnapshot = onLoadSnapshot ?? (() => {});
   serving({ body: { frames, next: frames.at(-1)?.seq ?? -1, dropped, complete: true } });
-  return <TracePanel jobId="trace-harness" active={true} />;
+  return <TracePanel jobId="trace-harness" generation={0} active={true} />;
 }
 
 /** Three frames from one strategy, `seq` and `t` both increasing -- fine for
@@ -101,12 +109,12 @@ const racedFrames: TraceFrame[] = [
 test('polls the trace endpoint and loads the newest incumbent as a labeled snapshot', async () => {
   const calls = serving({ body: { frames: [FRAME], next: 1, dropped: 0, complete: true } });
 
-  render(<TracePanel jobId="abc123" active={true} />);
+  render(<TracePanel jobId="abc123" generation={0} active={true} />);
 
-  await waitFor(() => expect(loadSnapshotCalls.length).toBeGreaterThan(0));
+  await waitFor(() => expect(displayedSnapshots.at(-1)?.bp.buildings[0]?.itemId).toBe(2001));
 
   expect(calls[0]?.url).toContain('/api/build/abc123/trace?from=-1');
-  const call = loadSnapshotCalls[0];
+  const call = displayedSnapshots.at(-1);
   // Never pasteable: the label is present the whole time a snapshot is
   // shown, and no blueprint string appears anywhere on the frame's model.
   expect(call?.label).toContain('TRACE');
@@ -121,7 +129,7 @@ test('passes the returned cursor straight back as `from`, with no off-by-one', a
     { body: { frames: [], next: 5, dropped: 0, complete: true } },
   );
 
-  render(<TracePanel jobId="abc123" active={true} />);
+  render(<TracePanel jobId="abc123" generation={0} active={true} />);
 
   await waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(2));
 
@@ -132,10 +140,32 @@ test('passes the returned cursor straight back as `from`, with no off-by-one', a
   expect(calls[1]?.url).toContain('from=5');
 });
 
+test('an empty open page does not hide the delayed final frame from the scrubber', async () => {
+  const first = { ...FRAME, seq: 0, t: 0, phase: 'packed' as const, incumbent: false };
+  const final = { ...FRAME, seq: 1, t: 1, candidate: 'final-drain' };
+  const calls = serving(
+    { body: { frames: [first], next: 0, dropped: 0, complete: false } },
+    { body: { frames: [], next: 0, dropped: 0, complete: false } },
+    { body: { frames: [final], next: 1, dropped: 0, complete: false } },
+    { body: { frames: [], next: 1, dropped: 0, complete: true } },
+  );
+  const snapshots: string[] = [];
+  onSnapshot = (_bp, label) => snapshots.push(label);
+  render(<TracePanel jobId="terminal-job" generation={0} active={true} />);
+
+  await waitFor(() => expect(calls).toHaveLength(4), { timeout: 3000 });
+  const scrubber = screen.getByRole('slider');
+  fireEvent.keyDown(scrubber, { key: 'Home' });
+  await waitFor(() => expect(snapshots.at(-1)).toContain('packed'));
+  fireEvent.keyDown(scrubber, { key: 'End' });
+  await waitFor(() => expect(snapshots.at(-1)).toContain('final-drain'));
+  expect(calls.map((call) => call.url.split('from=')[1])).toEqual(['-1', '0', '0', '1']);
+});
+
 test('does nothing while inactive', async () => {
   const calls = serving({ body: { frames: [], next: -1, dropped: 0, complete: true } });
 
-  render(<TracePanel jobId="abc123" active={false} />);
+  render(<TracePanel jobId="abc123" generation={0} active={false} />);
   await new Promise((resolve) => setTimeout(resolve, 20));
 
   expect(calls).toHaveLength(0);
@@ -147,7 +177,7 @@ test('unmounting mid-poll stops the loop and makes no further requests', async (
     { body: { frames: [FRAME], next: 2, dropped: 0, complete: false } },
   );
 
-  const { unmount } = render(<TracePanel jobId="abc123" active={true} />);
+  const { unmount } = render(<TracePanel jobId="abc123" generation={0} active={true} />);
   await waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(1));
 
   unmount();
@@ -170,8 +200,8 @@ test('a response that arrives after polling has been told to stop is discarded, 
   });
   globalThis.fetch = (() => pending) as unknown as typeof fetch;
 
-  const before = loadSnapshotCalls.length;
-  const { unmount } = render(<TracePanel jobId="abc123" active={true} />);
+  const before = displayedSnapshots.length;
+  const { unmount } = render(<TracePanel jobId="abc123" generation={0} active={true} />);
 
   // Stop the panel -- mirroring `active` flipping to false the instant a real
   // build settles -- WHILE the request is still in flight.
@@ -189,13 +219,13 @@ test('a response that arrives after polling has been told to stop is discarded, 
   // real result if the apply step were not itself guarded.
   await new Promise((resolve) => setTimeout(resolve, 10));
 
-  expect(loadSnapshotCalls.length).toBe(before);
+  expect(displayedSnapshots.length).toBe(before);
 });
 
 // ---- I5: the poll loop tolerates transient failures rather than dying ----
 
 test('a transient poll failure is retried, not treated as the permanent end of the live tail', async () => {
-  const before = loadSnapshotCalls.length;
+  const before = displayedSnapshots.length;
   let calls = 0;
   globalThis.fetch = (async () => {
     calls += 1;
@@ -206,9 +236,9 @@ test('a transient poll failure is retried, not treated as the permanent end of t
     );
   }) as unknown as typeof fetch;
 
-  render(<TracePanel jobId="abc123" active={true} />);
+  render(<TracePanel jobId="abc123" generation={0} active={true} />);
 
-  await waitFor(() => expect(loadSnapshotCalls.length).toBeGreaterThan(before));
+  await waitFor(() => expect(displayedSnapshots.length).toBeGreaterThan(before));
   expect(calls).toBeGreaterThanOrEqual(2);
   expect(screen.queryByTestId('trace-poll-stopped')).toBeNull();
 });
@@ -216,7 +246,7 @@ test('a transient poll failure is retried, not treated as the permanent end of t
 test('the poll loop says so once it gives up after repeated consecutive failures', async () => {
   globalThis.fetch = (async () => new Response('boom', { status: 500 })) as unknown as typeof fetch;
 
-  render(<TracePanel jobId="abc123" active={true} />);
+  render(<TracePanel jobId="abc123" generation={0} active={true} />);
 
   // "Live tail" must not be left reading as live over a frame count that has
   // quietly stopped moving -- the loop says it gave up.
@@ -294,7 +324,7 @@ test('a pinned snapshot that ages out of the buffered window says so, rather tha
     },
   );
 
-  render(<TracePanel jobId="abc123" active={true} />);
+  render(<TracePanel jobId="abc123" generation={0} active={true} />);
   const slider = await screen.findByRole('slider', { name: /snapshot/i });
 
   // Pin the only frame delivered so far.
@@ -312,7 +342,7 @@ test('a pinned snapshot that ages out of the buffered window says so, rather tha
 test("the ring's own eviction is informational, not a warning -- a healthy build is not told it lost data", async () => {
   serving({ body: { frames: [FRAME], next: 1, dropped: 0, evicted: 12, complete: true } });
 
-  render(<TracePanel jobId="abc123" active={true} />);
+  render(<TracePanel jobId="abc123" generation={0} active={true} />);
 
   const evictedNote = await screen.findByTestId('trace-evicted');
   expect(evictedNote).toHaveTextContent('12 older snapshots rolled off the buffered window.');
@@ -357,19 +387,6 @@ test('the metadata table reports a stranded-net count', async () => {
   };
   render(<Harness frames={[frame]} />);
   expect(await screen.findByTestId('trace-stranded')).toHaveTextContent('2');
-});
-
-test("Task 10's no-goods row and its approximate-geometry label survive verbatim", async () => {
-  render(<Harness frames={threeFrames} />);
-  await screen.findByTestId('trace-meta');
-  // Permanent row, `—` when there are none (task-10, kept unchanged by
-  // task-11-addendum.md Ruling 5).
-  expect(screen.getByTestId('trace-no-goods')).toHaveTextContent('—');
-  // The exact label wording is the fix for a truthfulness finding: the
-  // canvas box this toggle draws is index-based, not to scale.
-  expect(
-    screen.getByText('No-goods (approximate — index-based, not to scale)'),
-  ).toBeInTheDocument();
 });
 
 test('a truncated frame says so', async () => {

@@ -14,9 +14,9 @@
  * (controller rulings) governs where it disagrees with the original brief;
  * see the comments below for each place that applies.
  */
-import { useEffect, useId, useState, type KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { pollTrace, TRACE_POLL_MS, type TraceFrame } from '../api/trace';
-import { traceFrameLabel, traceFrameToBlueprint } from '../model/traceScene';
+import { traceFrameLabel } from '../model/traceScene';
 import { useBlueprint } from '../state/BlueprintProvider';
 
 /** I5: the loop gives up once CONSECUTIVE poll failures exceed this many in a
@@ -28,8 +28,17 @@ const MAX_CONSECUTIVE_POLL_FAILURES = 3;
 /** Backoff cap for a failed poll, as a multiple of {@link TRACE_POLL_MS}. */
 const MAX_POLL_BACKOFF_MULTIPLE = 4;
 
-export function TracePanel({ jobId, active }: { jobId: string; active: boolean }) {
-  const { loadSnapshot, setTraceFrame, traceShow, setTraceShow } = useBlueprint();
+export function TracePanel({
+  jobId,
+  active,
+  generation,
+}: {
+  jobId: string;
+  active: boolean;
+  generation: number;
+}) {
+  const { publishTrace, selectTrace, traceShow, setTraceShow } = useBlueprint();
+  const displayGeneration = useRef(generation);
   const [frames, setFrames] = useState<TraceFrame[]>([]);
   const [dropped, setDropped] = useState(0);
   // The ring's OWN eviction (I6) — a bounded window doing its job, reported
@@ -133,14 +142,8 @@ export function TracePanel({ jobId, active }: { jobId: string; active: boolean }
   const pinnedExpired = !tailing && pinnedSeq !== null && pinnedIndex === -1;
 
   useEffect(() => {
-    if (shown) {
-      loadSnapshot(traceFrameToBlueprint(shown), traceFrameLabel(shown));
-      // Kept alongside the reconstructed Blueprint, not inside it: the
-      // overlays read stranded/no_goods straight off the frame, and a
-      // Blueprint has nowhere to carry either.
-      setTraceFrame(shown);
-    }
-  }, [shown, loadSnapshot, setTraceFrame]);
+    if (shown) publishTrace(shown, jobId, displayGeneration.current);
+  }, [shown, jobId, publishTrace]);
 
   if (!shown) {
     return (
@@ -157,6 +160,8 @@ export function TracePanel({ jobId, active }: { jobId: string; active: boolean }
 
   function jumpTo(index: number) {
     const clamped = Math.min(Math.max(index, 0), lastIndex);
+    const frame = frames[clamped];
+    if (frame) displayGeneration.current = selectTrace(frame, jobId);
     setTailing(false);
     setPinnedSeq(frames[clamped]?.seq ?? null);
   }
@@ -221,7 +226,13 @@ export function TracePanel({ jobId, active }: { jobId: string; active: boolean }
           <input
             type="checkbox"
             checked={tailing}
-            onChange={(event) => setTailing(event.target.checked)}
+            onChange={(event) => {
+              const following = event.target.checked;
+              if (following && frames[lastIndex]) {
+                displayGeneration.current = selectTrace(frames[lastIndex], jobId);
+              }
+              setTailing(following);
+            }}
           />
           Live tail
         </label>

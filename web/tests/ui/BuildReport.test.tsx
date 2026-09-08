@@ -1,8 +1,85 @@
-import { expect, test } from '@rstest/core';
-import { render, screen } from '@testing-library/react';
+import { afterEach, expect, test } from '@rstest/core';
+import { render, screen, within } from '@testing-library/react';
 import { BuildReportPanel } from '../../src/ui/BuildReport';
 import type { Attempt } from '../../src/api/build';
 import { anAttempt, anAttemptDetail, aResult } from '../support/build';
+import { pollBuild } from '../../src/api/build';
+import { aJob, restoreFetch, serving } from '../support/build';
+
+afterEach(restoreFetch);
+
+test('decoded winner and losing attempt retain their own priming and entry-lane instructions', async () => {
+  const seed = {
+    seed_items: 7,
+    recipe: 'winner-loop',
+    machines: 2,
+    head: { x: 3, y: 5, z: '1/2' },
+  };
+  const losingSeed = {
+    seed_items: 11,
+    recipe: 'losing-loop',
+    machines: 4,
+    head: { x: -9, y: 8, z: '3/2' },
+  };
+  const result = aResult();
+  const loser = {
+    ...anAttempt({ candidate: 'all-products', chosen: false }),
+    detail: {
+      ...anAttemptDetail(),
+      self_loop_seeds: { hydrogen: { ...losingSeed, recipes: [losingSeed] } },
+      belt_tiers: {
+        ...result.belt_tiers,
+        entry_lanes: [{ item: 'iron-ore', lanes: 3, lanes_needed: 2 }],
+      },
+    },
+  };
+  serving({
+    body: aJob({
+      result: {
+        ...result,
+        self_loop_seeds: { hydrogen: { ...seed, recipes: [seed] } },
+        belt_tiers: {
+          ...result.belt_tiers,
+          entry_lanes: [{ item: 'iron-ore', lanes: 2, lanes_needed: 1 }],
+        },
+        attempts: [loser],
+      },
+    }),
+  });
+  const decoded = (await pollBuild('facts')).result!;
+  const view = render(
+    <BuildReportPanel result={decoded} selectedAttempt={null} onSelectAttempt={() => {}} />,
+  );
+  const prime = () => screen.getByRole('region', { name: 'PRIME ONCE' });
+  expect(prime()).toHaveTextContent('hydrogen');
+  expect(prime()).toHaveTextContent('7');
+  expect(prime()).toHaveTextContent('winner-loop');
+  expect(prime()).toHaveTextContent('2 machines');
+  expect(prime()).toHaveTextContent('(3, 5, 1/2)');
+  expect(screen.getByText('Entry lanes').nextElementSibling).toHaveTextContent(
+    'iron-ore: 2 / 1 needed',
+  );
+  expect(screen.getByText('Belt in').nextElementSibling).not.toHaveTextContent('hydrogen');
+  view.rerender(
+    <BuildReportPanel
+      result={decoded}
+      selectedAttempt={decoded.attempts[0]!}
+      onSelectAttempt={() => {}}
+    />,
+  );
+  expect(prime()).toHaveTextContent('11');
+  expect(prime()).toHaveTextContent('losing-loop');
+  expect(prime()).toHaveTextContent('4 machines');
+  expect(prime()).toHaveTextContent('(-9, 8, 3/2)');
+  expect(within(prime()).queryByText(/winner-loop/)).toBeNull();
+  expect(screen.getByText('Entry lanes').nextElementSibling).toHaveTextContent(
+    'iron-ore: 3 / 2 needed',
+  );
+  view.rerender(
+    <BuildReportPanel result={aResult()} selectedAttempt={null} onSelectAttempt={() => {}} />,
+  );
+  expect(screen.queryByRole('region', { name: 'PRIME ONCE' })).toBeNull();
+});
 
 test('names the selected power building in the report', () => {
   render(

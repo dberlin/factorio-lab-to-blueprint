@@ -1,10 +1,17 @@
 import { readFileSync } from 'node:fs';
 import { expect, test } from '@rstest/core';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { buildCatalog } from '../../src/model/catalog';
-import { BlueprintProvider } from '../../src/state/BlueprintProvider';
+import { BlueprintProvider, useBlueprint } from '../../src/state/BlueprintProvider';
 import { InputPanel } from '../../src/ui/InputPanel';
 
+import { A_BLUEPRINT, B_BLUEPRINT } from '../support/build';
+import { parseBlueprint } from '../../src/format';
+
+function DisplayedTitle() {
+  const { blueprint } = useBlueprint();
+  return <output data-testid="displayed-title">{blueprint?.header.shortDesc}</output>;
+}
 const catalog = buildCatalog({
   items: [
     {
@@ -151,6 +158,40 @@ test('a failed URL fetch shows the server-provided reason, not a bare status cod
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/unable to connect/i);
     expect(alert).not.toHaveTextContent(/^Could not fetch that URL: HTTP 502$/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('a newer manual paste wins over a slow URL import', async () => {
+  const response = Promise.withResolvers<Response>();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = Object.assign(() => response.promise, {
+    preconnect: originalFetch.preconnect,
+  });
+  try {
+    render(
+      <BlueprintProvider catalog={catalog}>
+        <InputPanel />
+        <DisplayedTitle />
+      </BlueprintProvider>,
+    );
+    fireEvent.change(screen.getByLabelText(/or url/i), {
+      target: { value: 'https://x.test/slow' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Fetch' }));
+    fireEvent.change(screen.getByLabelText(/blueprint string/i), {
+      target: { value: B_BLUEPRINT },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Load' }));
+    await act(async () => {
+      response.resolve(new Response(A_BLUEPRINT));
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Fetch' })).toBeEnabled());
+    expect(screen.getByTestId('displayed-title')).toHaveTextContent(
+      parseBlueprint(B_BLUEPRINT).header.shortDesc,
+    );
+    expect(screen.getByLabelText(/blueprint string/i)).toHaveValue(B_BLUEPRINT);
   } finally {
     globalThis.fetch = originalFetch;
   }

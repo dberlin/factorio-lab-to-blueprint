@@ -7,11 +7,13 @@ import queue
 import threading
 import time
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
 
 from flab2bp import pipeline
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout.band_policy import BAND_SELECTIONS
 from flab2bp.layout.base import (
     LayoutAttemptFailure,
@@ -24,6 +26,9 @@ from flab2bp.web import jobs as jobs_module
 from flab2bp.web.jobs import Builder, InvalidOptions, Options, parse_options, run_build
 from flab2bp.web.payload import Json, JsonValue
 from flab2bp.web.server import serve
+
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+
 
 URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
 
@@ -373,6 +378,507 @@ def test_a_collector_whose_start_fails_still_lets_the_queue_close(
 
         assert snap["state"] == "error"
         assert closed == ["cancel_join_thread", "close"]
+    finally:
+        builder.shutdown()
+
+
+def _gate_trace_feeder(trace_queue, sent, release, payload_bytes) -> None:
+    """Gate a real feeder after either a complete frame or interrupted framing."""
+    import struct
+
+    send_bytes = trace_queue._send_bytes
+
+    def partial_send(payload) -> None:
+        if payload_bytes is None:
+            send_bytes(payload)
+        elif payload_bytes == -1:
+            trace_queue._writer._send(struct.pack("!i", len(payload))[:1])
+        elif payload_bytes == -2:
+            send_bytes(b"")
+        else:
+            trace_queue._writer._send(struct.pack("!i", len(payload)))
+            if payload_bytes:
+                trace_queue._writer._send(payload[:payload_bytes])
+        sent.set()
+        release.wait()
+
+    trace_queue._send_bytes = partial_send
+
+
+def _interrupt_trace_feeder(trace_queue, sent, release, payload_bytes) -> None:
+    from flab2bp.layout.observe import SearchEvent, SearchPhase
+
+    _gate_trace_feeder(trace_queue, sent, release, payload_bytes)
+    trace_queue.put_nowait(
+        SearchEvent(strategy="freeform", candidate="interrupted", phase=SearchPhase.INCUMBENT)
+    )
+    release.wait()
+
+
+_normal_trace_queue = None
+_normal_trace_sent = None
+
+
+def _prepare_normal_trace_exit(trace_queue, sent, release, payload_bytes) -> None:
+    global _normal_trace_queue, _normal_trace_sent
+    _normal_trace_queue, _normal_trace_sent = trace_queue, sent
+    _gate_trace_feeder(trace_queue, sent, release, payload_bytes)
+
+
+def _return_normal_trace_outcome():
+    from flab2bp.layout.observe import SearchEvent, SearchPhase
+    from flab2bp.layout.observe_channel import TraceChannel
+    from flab2bp.layout.strategy_race import _StrategyRaceOutcome
+
+    assert _normal_trace_queue is not None and _normal_trace_sent is not None
+    channel = TraceChannel(_normal_trace_queue)
+    channel.offer(
+        SearchEvent(strategy="freeform", candidate="interrupted", phase=SearchPhase.INCUMBENT)
+    )
+    assert _normal_trace_sent.wait(10)
+    channel.close()
+    return _StrategyRaceOutcome("freeform", "refused", refusal_reason="normal solver result")
+
+
+@pytest.mark.parametrize(
+    "collector_failed", [False, True], ids=["partial-write", "failed-collector"]
+)
+def test_normal_trace_producer_exit_keeps_result_and_advances_next_build(
+    monkeypatch: pytest.MonkeyPatch, small_build: pipeline.Build, collector_failed: bool
+) -> None:
+    _terminated_trace_scenario(
+        monkeypatch, small_build, 1, normal_return=True, collector_failed=collector_failed
+    )
+
+
+@pytest.mark.parametrize(
+    "payload_bytes",
+    [-1, -2, 0, 1],
+    ids=["partial-header", "empty-pickle", "header-only", "partial-payload"],
+)
+def test_interrupted_trace_write_reports_failure_and_next_build_starts(
+    monkeypatch: pytest.MonkeyPatch, small_build: pipeline.Build, payload_bytes: int
+) -> None:
+    """Killing a real feeder mid-frame cannot pin the sole Builder worker."""
+    _terminated_trace_scenario(monkeypatch, small_build, payload_bytes)
+
+
+def test_clean_trace_stays_complete_when_a_producer_is_terminated(
+    monkeypatch: pytest.MonkeyPatch, small_build: pipeline.Build
+) -> None:
+    _terminated_trace_scenario(monkeypatch, small_build, None)
+
+
+def test_real_trace_queue_keeps_delayed_final_frame_after_normal_producer_exit(
+    monkeypatch: pytest.MonkeyPatch, small_build: pipeline.Build
+) -> None:
+    _terminated_trace_scenario(
+        monkeypatch, small_build, None, normal_return=True, delay_reader=True
+    )
+
+
+def _terminated_trace_scenario(
+    monkeypatch: pytest.MonkeyPatch,
+    small_build: pipeline.Build,
+    payload_bytes: int | None,
+    *,
+    normal_return: bool = False,
+    collector_failed: bool = False,
+    delay_reader: bool = False,
+) -> None:
+    import multiprocessing
+    from concurrent.futures import Future, ProcessPoolExecutor
+
+    from flab2bp.layout.band_policy import BandPolicy
+    from flab2bp.layout.observe import SearchEvent, SearchPhase
+    from flab2bp.layout.strategy_race import _StrategyRaceOutcome, run_strategy_race
+    from flab2bp.web import trace as trace_module
+    from flab2bp.web.trace import TraceCollector
+    from tests.layout.test_freeform import two_stage_spec
+
+    context = multiprocessing.get_context("spawn")
+    sent, release = context.Event(), context.Event()
+    read_entered = threading.Event()
+    prior_published = threading.Event()
+    race_returned = threading.Event()
+    next_started = threading.Event()
+    projection_failed = threading.Event()
+    reader_release = threading.Event()
+    timed_stop_returned = threading.Event()
+    queues, pools, workers, managers = [], [], [], []
+    real_drain = TraceCollector.drain_once
+    real_frame = trace_module.frame_json
+    real_stop = TraceCollector.stop
+
+    def observed_stop(self, *, timeout=2.0):
+        stopped = real_stop(self, timeout=timeout)
+        if timeout is not None:
+            timed_stop_returned.set()
+        return stopped
+
+    def maybe_failed_frame(seq, at_s, event):
+        if event.candidate == "projection-failure":
+            projection_failed.set()
+            raise ValueError("trace projection failed")
+        return real_frame(seq, at_s, event)
+
+    def observed_drain(self: TraceCollector) -> None:
+        real_drain(self)
+        if self.ring.since(-1)[0]:
+            prior_published.set()
+
+    def submit(requests, channels, trace_queue=None):
+        pool = ProcessPoolExecutor(
+            max_workers=1,
+            mp_context=context,
+            max_tasks_per_child=1 if normal_return else None,
+            initializer=_prepare_normal_trace_exit if normal_return else _interrupt_trace_feeder,
+            initargs=(trace_queue, sent, release, payload_bytes),
+        )
+        pools.append(pool)
+        blocked = (
+            pool.submit(_return_normal_trace_outcome) if normal_return else pool.submit(int, 0)
+        )
+        workers.extend(pool._processes.values())
+        managers.append(pool._executor_manager_thread)
+        assert sent.wait(10), "child feeder never wrote its partial payload"
+        if not collector_failed:
+            assert read_entered.wait(10), "collector never entered the blocking receive"
+        print("TRACE PROBE gated producer confirmed", flush=True)
+        peer = Future()
+        peer.set_result(_StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="peer"))
+        return {blocked: "freeform", peer: "sequence-pair"}, pool
+
+    def solve(options, progress, observer, trace_queue):
+        if not options.trace:
+            next_started.set()
+            return small_build
+        queues.append(trace_queue)
+        recv_bytes = trace_queue._recv_bytes
+
+        def observed_recv():
+            read_entered.set()
+            if delay_reader:
+                assert reader_release.wait(10), "probe never released its healthy reader"
+            return recv_bytes()
+
+        trace_queue._recv_bytes = observed_recv
+        observer.note(
+            SearchEvent(strategy="freeform", candidate="prior", phase=SearchPhase.INCUMBENT)
+        )
+        assert prior_published.wait(10), "healthy frame was not published before the fault"
+        print("TRACE PROBE prior frame published", flush=True)
+        if collector_failed:
+            observer.note(
+                SearchEvent(
+                    strategy="freeform", candidate="projection-failure", phase=SearchPhase.INCUMBENT
+                )
+            )
+            assert projection_failed.wait(10), "collector never failed its projection"
+        ticks = iter((0.0, 0.0 if normal_return else 1000.0))
+        outcomes = run_strategy_race(
+            two_stage_spec(),
+            time_budget_s=0.1,
+            band_policy=BandPolicy("portable"),
+            belt_rules=_BELT_RULES,
+            share=False,
+            trace_queue=trace_queue,
+            submit=submit,
+            monotonic=lambda: next(ticks),
+        )
+        expected_status = "refused" if normal_return else "terminated"
+        assert [outcome.status for outcome in outcomes] == [expected_status, "refused"]
+        if normal_return:
+            assert outcomes[0].refusal_reason == "normal solver result"
+        print("TRACE PROBE race returned", flush=True)
+        race_returned.set()
+        if normal_return:
+            return small_build
+        raise ValueError("solver rejected after interrupted race")
+
+    monkeypatch.setattr(TraceCollector, "drain_once", observed_drain)
+    monkeypatch.setattr(trace_module, "frame_json", maybe_failed_frame)
+    monkeypatch.setattr(TraceCollector, "stop", observed_stop)
+    builder = Builder(solve=solve)
+    job = None
+    try:
+        job = builder.submit(Options(url=URL, trace=True))
+        queued = builder.submit(Options(url=URL))
+        assert race_returned.wait(15), "race deadline never returned"
+        snapshot = _settled(builder, job.id)
+        if normal_return:
+            assert snapshot["state"] == "done"
+        else:
+            assert snapshot["error"] == "solver rejected after interrupted race"
+        if delay_reader:
+            assert timed_stop_returned.wait(5), "collector did not reach its timed stop"
+            assert not next_started.is_set()
+            page = builder.trace_page(job, 0)
+            assert page["frames"] == [] and page["complete"] is False
+            reader_release.set()
+        assert next_started.wait(5), "interrupted trace pinned the only Builder worker"
+        assert _settled(builder, queued.id)["state"] == "done"
+        assert job.trace is not None
+        assert job.trace._thread is not None and not job.trace._thread.is_alive()
+        frames = builder.trace_page(job, -1)
+        expected = ["prior", "interrupted"] if payload_bytes is None else ["prior"]
+        assert [_object(frame)["candidate"] for frame in frames["frames"]] == expected
+        assert frames["complete"] is False
+        final = builder.trace_page(job, frames["next"])
+        if payload_bytes is None:
+            assert job.trace.closed and job.trace.error is None
+            assert final["complete"] is True
+        else:
+            assert not job.trace.closed
+            assert "trace collection failed" in final["error"]
+        assert not any(worker.is_alive() for worker in workers)
+        assert not any(manager.is_alive() for manager in managers)
+    finally:
+        print("TRACE PROBE reaping owned producers", flush=True)
+        reader_release.set()
+        # RED cleanup: kill/reap only these owned producers, then half-close
+        # their verified parent's WRITE end. Never close under the reader.
+        # Never set an Event used by a killed child: termination can strand
+        # its condition lock. This is a kill-only gate, not a release handshake.
+        for pool in pools:
+            for worker in tuple((pool._processes or {}).values()):
+                if worker.is_alive():
+                    worker.kill()
+            pool.shutdown(wait=False, cancel_futures=True)
+        for worker in workers:
+            if worker.is_alive():
+                worker.kill()
+        for manager in managers:
+            manager.join(10)
+            assert not manager.is_alive(), "probe producer cleanup failed"
+        print("TRACE PROBE producers reaped; half-closing parent writer", flush=True)
+        for trace_queue in queues:
+            trace_queue._writer.close()
+        if job is not None and job.trace is not None:
+            job.trace.stop(timeout=5)
+            assert job.trace._thread is None or not job.trace._thread.is_alive()
+        print("TRACE PROBE reader settled; joining Builder worker", flush=True)
+        builder._pool.shutdown(wait=False, cancel_futures=True)
+        for thread in builder._pool._threads:
+            thread.join(10)
+            assert not thread.is_alive(), "probe could not settle its Builder worker"
+
+
+def test_terminal_job_keeps_polling_until_delayed_collector_drains_and_closes(
+    monkeypatch: pytest.MonkeyPatch, small_build: pipeline.Build
+) -> None:
+    from flab2bp.layout.observe import SearchEvent, SearchPhase
+    from flab2bp.web.trace import TraceCollector
+
+    entered = threading.Event()
+    release = threading.Event()
+    queue_closed = threading.Event()
+    stop_returned = threading.Event()
+    real_drain = TraceCollector.drain_once
+    real_stop = TraceCollector.stop
+    real_join = threading.Thread.join
+
+    class TrackingQueue(queue.Queue[object]):
+        def get_nowait(self) -> object:
+            if queue_closed.is_set():
+                raise AssertionError("queue closed underneath the collector")
+            return super().get_nowait()
+
+        def cancel_join_thread(self) -> None:
+            pass
+
+        def close(self) -> None:
+            queue_closed.set()
+
+    trace_queue = TrackingQueue()
+
+    class FakeContext:
+        def Queue(self, maxsize: int = 0) -> object:
+            return trace_queue
+
+    def delayed_drain(self: TraceCollector) -> None:
+        entered.set()
+        assert release.wait(5), "test never released the final drain"
+        real_drain(self)
+
+    def immediate_join(self: threading.Thread, timeout: float | None = None) -> None:
+        real_join(
+            self, timeout=0 if self.name == "flab2bp-trace" and timeout is not None else timeout
+        )
+
+    def observed_stop(self: TraceCollector, *, timeout: float | None = 2.0) -> bool:
+        result = real_stop(self, timeout=timeout)
+        stop_returned.set()
+        return result
+
+    def solve(*_args: object) -> pipeline.Build:
+        assert entered.wait(2)
+        trace_queue.put_nowait(
+            SearchEvent(strategy="freeform", candidate="final", phase=SearchPhase.INCUMBENT)
+        )
+        return small_build
+
+    monkeypatch.setattr(jobs_module.multiprocessing, "get_context", lambda kind: FakeContext())
+    monkeypatch.setattr(TraceCollector, "drain_once", delayed_drain)
+    monkeypatch.setattr(TraceCollector, "stop", observed_stop)
+    monkeypatch.setattr(threading.Thread, "join", immediate_join)
+    builder = Builder(solve=solve)
+    try:
+        job = builder.submit(Options(url=URL, trace=True))
+        assert _settled(builder, job.id, timeout_s=2)["state"] == "done"
+        assert stop_returned.wait(2), "stop did not reach its timeout"
+        empty = builder.trace_page(job, -1)
+        assert empty["frames"] == []
+        assert empty["complete"] is False
+        assert not queue_closed.is_set()
+
+        release.set()
+        assert queue_closed.wait(2), "queue was not released after the reader finished"
+        final = builder.trace_page(job, -1)
+        assert [
+            (_object(frame)["seq"], _object(frame)["candidate"])
+            for frame in cast(list[JsonValue], final["frames"])
+        ] == [(0, "final")]
+        assert final["complete"] is False
+        exhausted = builder.trace_page(job, cast(int, final["next"]))
+        assert exhausted["frames"] == []
+        assert exhausted["complete"] is True
+        assert exhausted["dropped"] == 0
+        assert exhausted["evicted"] == 0
+    finally:
+        release.set()
+        builder._pool.shutdown(wait=True, cancel_futures=True)
+
+
+def test_collector_failure_preserves_published_frames_then_reports_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from flab2bp.layout.observe import SearchEvent, SearchPhase
+    from flab2bp.web import trace as trace_module
+    from flab2bp.web.jobs import Job
+    from flab2bp.web.trace import TraceCollector, TraceRing
+
+    real_frame = trace_module.frame_json
+
+    def failing_frame(seq: int, at_s: float, event: SearchEvent) -> Json:
+        if event.candidate == "broken":
+            raise ValueError("broken projection")
+        return real_frame(seq, at_s, event)
+
+    monkeypatch.setattr(trace_module, "frame_json", failing_frame)
+    collector = TraceCollector(TraceRing(), started_at=time.monotonic())
+    for candidate in ("published", "broken"):
+        collector.observer.note(
+            SearchEvent(strategy="freeform", candidate=candidate, phase=SearchPhase.INCUMBENT)
+        )
+    job = Job("failed-trace", Options(url=URL, trace=True), time.monotonic(), state="done")
+    job.trace = collector
+    builder = Builder()
+    try:
+        assert collector.stop() is False
+        assert collector.closed is False
+        page = builder.trace_page(job, -1)
+        assert [_object(frame)["candidate"] for frame in cast(list[JsonValue], page["frames"])] == [
+            "published"
+        ]
+        assert page["complete"] is False
+        assert builder.trace_page(job, cast(int, page["next"])) == {
+            "error": "trace collection failed: broken projection"
+        }
+        assert builder.snapshot(job)["state"] == "done"
+    finally:
+        builder.shutdown()
+
+
+def test_collector_failure_keeps_complete_frames_from_the_same_queue_pass() -> None:
+    import multiprocessing
+
+    from flab2bp.layout.observe import SearchEvent, SearchPhase
+    from flab2bp.layout.observe_channel import prepare_trace_queue
+    from flab2bp.web.jobs import Job
+    from flab2bp.web.trace import TraceCollector, TraceRing
+
+    transport = multiprocessing.get_context("spawn").Queue(maxsize=4)
+    prepare_trace_queue(transport)
+    sent = threading.Event()
+    send_bytes = transport._send_bytes
+    messages = 0
+
+    def corrupt_second_message(payload):
+        nonlocal messages
+        messages += 1
+        send_bytes(payload if messages == 1 else b"")
+        if messages == 2:
+            sent.set()
+
+    transport._send_bytes = corrupt_second_message
+    collector = TraceCollector(TraceRing(), started_at=time.monotonic(), queue=transport)
+    collector.observer.note(
+        SearchEvent(strategy="freeform", candidate="serial-pending", phase=SearchPhase.INCUMBENT)
+    )
+    job = Job("same-pass-error", Options(url=URL, trace=True), time.monotonic(), state="done")
+    job.trace = collector
+    builder = Builder()
+    try:
+        transport.put_nowait(
+            SearchEvent(
+                strategy="freeform", candidate="queue-complete", phase=SearchPhase.INCUMBENT
+            )
+        )
+        transport.put_nowait("malformed second message")
+        assert sent.wait(5), "feeder did not finish both transport frames"
+        assert collector.stop() is False
+        assert not collector.closed
+        page = builder.trace_page(job, -1)
+        assert [_object(frame)["candidate"] for frame in cast(list[JsonValue], page["frames"])] == [
+            "serial-pending",
+            "queue-complete",
+        ]
+        assert page["complete"] is False
+        assert "trace collection failed" in builder.trace_page(job, page["next"])["error"]
+        assert builder.snapshot(job)["state"] == "done"
+    finally:
+        # Both writes already completed; no producer or live reader is blocked.
+        transport.close()
+        if transport._thread is not None:
+            transport._thread.join(5)
+            assert not transport._thread.is_alive(), "probe feeder did not terminate"
+        transport._reader.close()
+        transport._writer.close()
+        builder.shutdown()
+
+
+@pytest.mark.parametrize("failure", [OSError("broken pipe"), ValueError("closed queue")])
+def test_broken_trace_queue_is_failure_not_successful_empty_completion(failure: Exception) -> None:
+    from flab2bp.layout.observe import SearchEvent, SearchPhase
+    from flab2bp.web.jobs import Job
+    from flab2bp.web.trace import TraceCollector, TraceRing
+
+    class BrokenQueue:
+        def get_nowait(self) -> object:
+            raise failure
+
+    collector = TraceCollector(TraceRing(), started_at=time.monotonic())
+    collector.observer.note(
+        SearchEvent(strategy="freeform", candidate="published", phase=SearchPhase.INCUMBENT)
+    )
+    collector.drain_once()
+    collector.queue = BrokenQueue()
+    job = Job("broken-queue", Options(url=URL, trace=True), time.monotonic(), state="done")
+    job.trace = collector
+    builder = Builder()
+    try:
+        assert collector.stop() is False
+        assert collector.closed is False
+        published = builder.trace_page(job, -1)
+        assert [
+            _object(frame)["candidate"] for frame in cast(list[JsonValue], published["frames"])
+        ] == ["published"]
+        assert published["complete"] is False
+        assert builder.trace_page(job, cast(int, published["next"])) == {
+            "error": f"trace collection failed: {failure}"
+        }
+        assert builder.snapshot(job)["state"] == "done"
     finally:
         builder.shutdown()
 

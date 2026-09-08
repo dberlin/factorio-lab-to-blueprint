@@ -7,18 +7,10 @@ from typing import NamedTuple
 import pytest
 
 from flab2bp.dsp import catalog
-from flab2bp.layout import finalize, freeform, junction, slots
+from flab2bp.layout import finalize, junction, routing_domain, slots
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import Facing, PlacedBuilding, Placement
 from flab2bp.layout.buildings import Buildings
-from flab2bp.layout.freeform import (
-    PortAccessCorridor,
-    PortAccessDemand,
-    PortAccessEvidence,
-    PortAccessKind,
-    PortAccessReservation,
-    _Canvas,
-)
 from flab2bp.layout.hierarchy import compose
 from flab2bp.layout.hierarchy.contracts import LaneFlow
 from flab2bp.layout.route_feedback import (
@@ -29,8 +21,19 @@ from flab2bp.layout.route_feedback import (
     NetRole,
     RouteFailureKind,
 )
+from flab2bp.layout.routing_domain import (
+    PortAccessCorridor,
+    PortAccessDemand,
+    PortAccessEvidence,
+    PortAccessKind,
+    PortAccessReservation,
+    _Canvas,
+)
 from flab2bp.spec import BuildSpec
 from tests.layout.hierarchy.conftest import chain_build_spec
+
+_PACKING_ENVELOPE = finalize.band_policy_search_envelope(BandPolicy("portable"), perimeter=0)
+
 
 TwoSolvedBlocks = tuple[Placement, Placement, list[LaneFlow], BuildSpec, bool]
 
@@ -56,20 +59,21 @@ def off_arm(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_pack_blocks_keeps_a_two_tile_gap_and_prefers_a_band_legal_shape():
     sizes = [(40, 30), (40, 30), (40, 30), (40, 30)]
-    offsets, width, height = compose.pack_blocks(sizes, gap=2)
+    offsets, width, height = compose.pack_blocks(sizes, envelope=_PACKING_ENVELOPE, gap=2)
     boxes = [(x, y, x + w, y + h) for (x, y), (w, h) in zip(offsets, sizes, strict=True)]
     for a in range(4):
         for b in range(a + 1, 4):
             ax0, ay0, ax1, ay1 = boxes[a]
             bx0, by0, bx1, by1 = boxes[b]
             assert ax1 + 2 <= bx0 or bx1 + 2 <= ax0 or ay1 + 2 <= by0 or by1 + 2 <= ay0
-    assert min(width, height) <= 160
+    assert _PACKING_ENVELOPE.frame_candidates(width, height)
 
 
-def test_pack_blocks_never_exceeds_160_rows_when_a_legal_shape_exists():
-    sizes = [(30, 60)] * 8
-    _offsets, width, height = compose.pack_blocks(sizes, gap=2)
-    assert min(width, height) <= 160
+def test_pack_blocks_rejects_smaller_area_outside_selected_band_envelope():
+    sizes = [(80, 40), (80, 20), (80, 20), (80, 20)]
+    envelope = finalize.band_policy_search_envelope(BandPolicy("50x800"), perimeter=0)
+    _offsets, width, height = compose.pack_blocks(sizes, envelope=envelope, gap=2)
+    assert envelope.frame_candidates(width, height)
 
 
 class MixedBlock(NamedTuple):
@@ -295,14 +299,14 @@ def test_composed_cut_respects_copied_coater_projected_clearance(
         )
     )
     canvas = compose.canvas_for(spec, buildings, ramped=False, margin=2)
-    source = freeform._Port(belt=1, x=5, y=source_y, x0=5, x1=5, tiles=(1,), z=2)
-    destination = freeform._Port(belt=3, x=5, y=24, x0=5, x1=5, tiles=(3,), z=2)
+    source = routing_domain._Port(belt=1, x=5, y=source_y, x0=5, x1=5, tiles=(1,), z=2)
+    destination = routing_domain._Port(belt=3, x=5, y=24, x0=5, x1=5, tiles=(3,), z=2)
     packed = compose.PackedCanvas(
         buildings=buildings,
         blocks=[],
         canvas=canvas,
         nets=[
-            freeform._Net(
+            routing_domain._Net(
                 src=source,
                 dst=destination,
                 item="iron-ingot",
@@ -330,7 +334,7 @@ def test_composed_cut_respects_copied_coater_projected_clearance(
         assert splitters or result.unrouted_cuts == 1
 
     bounds = result.placement.bounds
-    frames = freeform._junction_projection_frames(bounds, bounds, BandPolicy("portable"))
+    frames = routing_domain._junction_projection_frames(bounds, bounds, BandPolicy("portable"))
     assert frames
     failures = []
     for frame in frames:
@@ -344,10 +348,10 @@ def test_composed_cut_respects_copied_coater_projected_clearance(
                 for projection in frame.projections
                 if (
                     failure := finalize.projected_coater_splitter_failure(
-                        (4, freeform._collision_pose(materialized_coater)),
+                        (4, routing_domain._collision_pose(materialized_coater)),
                         (
                             index,
-                            freeform._collision_pose(
+                            routing_domain._collision_pose(
                                 finalize.materialize_frame_building(
                                     splitter, bounds=frame.bounds, candidate=frame.candidate
                                 )
@@ -387,7 +391,13 @@ def test_pack_with_access_widens_the_gap_until_every_port_has_a_corridor(
 
     monkeypatch.setattr(compose, "_reserve_port_access", scripted)
     packed = compose.pack_with_access(
-        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
     )
 
     assert packed.gap == compose.GAP_LADDER[1]
@@ -426,7 +436,15 @@ def test_pack_with_access_passes_the_outer_ring_only_when_a_demand_can_use_it(
         return real(canvas, demands, **kw)
 
     monkeypatch.setattr(compose, "_reserve_port_access", spy)
-    compose.pack_with_access([left, right], flows, spec, ramped=ramped, deadline=None, margin=8)
+    compose.pack_with_access(
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
+    )
     assert captured and all(boundary is None for boundary in captured), (
         "no demand compose builds reaches the boundary, so the rim is pure cost"
     )
@@ -444,7 +462,15 @@ def test_pack_with_access_passes_the_outer_ring_only_when_a_demand_can_use_it(
     captured.clear()
     limits.clear()
     monkeypatch.setattr(compose, "_port_access_inventory", with_a_boundary_demand)
-    compose.pack_with_access([left, right], flows, spec, ramped=ramped, deadline=None, margin=8)
+    compose.pack_with_access(
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
+    )
 
     boundary = captured[0]
     assert boundary is not None, "a boundary-reaching demand must be given the rim to reach"
@@ -506,7 +532,13 @@ def test_the_gap_ladder_leaves_the_router_a_live_clock(
     monkeypatch.setattr(compose, "_reserve_port_access", slow_and_incomplete)
     deadline = clock.monotonic() + window_s
     packed = compose.pack_with_access(
-        [left, right], flows, spec, ramped=ramped, deadline=deadline, margin=8
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=deadline,
+        margin=8,
     )
     left_over = deadline - clock.monotonic()
 
@@ -532,7 +564,14 @@ def test_pack_with_access_starts_the_ladder_at_the_gap_it_was_given(
     """
     left, right, flows, spec, ramped = two_solved_blocks
     packed = compose.pack_with_access(
-        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8, gap=8
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
+        gap=8,
     )
     assert packed.gap >= 8
 
@@ -552,7 +591,14 @@ def test_a_floor_above_every_rung_is_itself_the_only_rung(
     monkeypatch.setattr(compose, "_reserve_port_access", counted)
     floor = max(compose.GAP_LADDER) + 4
     packed = compose.pack_with_access(
-        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8, gap=floor
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
+        gap=floor,
     )
 
     assert packed.gap == floor
@@ -573,7 +619,9 @@ def test_trunk_goals_point_each_lane_head_at_its_partners_doorstep(
     `missing`.
     """
     left, right, flows, spec, ramped = two_solved_blocks
-    packing = compose._pack_at([left, right], flows, spec, gap=2, ramped=ramped, margin=8)
+    packing = compose._pack_at(
+        [left, right], flows, spec, envelope=_PACKING_ENVELOPE, gap=2, ramped=ramped, margin=8
+    )
     demands = compose._port_access_inventory(packing.nets).demands
     goals = compose._trunk_goals(packing, demands)
     assert goals, "every cut lane must raise a goal"
@@ -633,7 +681,9 @@ def test_a_lane_head_whose_every_partner_is_walled_in_raises_no_goal(
     itself, with the class that actually stopped it.
     """
     left, right, flows, spec, ramped = two_solved_blocks
-    packing = compose._pack_at([left, right], flows, spec, gap=2, ramped=ramped, margin=8)
+    packing = compose._pack_at(
+        [left, right], flows, spec, envelope=_PACKING_ENVELOPE, gap=2, ramped=ramped, margin=8
+    )
     demands = compose._port_access_inventory(packing.nets).demands
     head = (packing.nets[0].src.x, packing.nets[0].src.y, packing.nets[0].src.z)
     assert any(d.cell == head for d in compose._trunk_goals(packing, demands)), (
@@ -686,7 +736,13 @@ def test_a_sealed_lane_head_is_put_in_missing_by_the_trunk_probe(
         for flow in flows
     ]
     packing = compose._pack_at(
-        [left, right, left, right], [*flows, *untouched], spec, gap=8, ramped=ramped, margin=8
+        [left, right, left, right],
+        [*flows, *untouched],
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        gap=8,
+        ramped=ramped,
+        margin=8,
     )
     canvas = packing.canvas
     demands = compose._port_access_inventory(packing.nets).demands
@@ -732,7 +788,15 @@ def test_pack_with_access_hands_the_reservation_the_trunk_goals(
         return real(canvas, demands, **kw)
 
     monkeypatch.setattr(compose, "_reserve_port_access", spy)
-    compose.pack_with_access([left, right], flows, spec, ramped=ramped, deadline=None, margin=8)
+    compose.pack_with_access(
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
+    )
     assert captured["goals"], "the reservation was still asked the local-only question"
 
 
@@ -756,7 +820,13 @@ def test_a_walled_in_trunk_rejects_the_narrow_rung(
 
     monkeypatch.setattr(compose, "_reserve_port_access", scripted)
     packed = compose.pack_with_access(
-        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
     )
     assert packed.gap > compose.GAP_LADDER[0]
     assert packed.reservation.complete
@@ -781,6 +851,7 @@ def test_rung_zero_falls_back_to_the_local_oracle_on_its_own_deadline(
         [left, right],
         flows,
         spec,
+        envelope=_PACKING_ENVELOPE,
         ramped=ramped,
         deadline=time.monotonic() + 30.0,
         margin=8,
@@ -829,7 +900,13 @@ def test_an_empty_assignment_is_re_asked_as_the_local_only_question(
 
     monkeypatch.setattr(compose, "_reserve_port_access", empty_when_asked_about_trunks)
     packed = compose.pack_with_access(
-        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
     )
 
     assert asked[0] is not None and asked[1] is None, "the retry must drop the goals"
@@ -874,7 +951,13 @@ def test_a_committed_partial_is_counted_as_partial_and_as_degraded(
 
     monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
     packed = compose.pack_with_access(
-        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
     )
 
     assert len(packed.reservation.assigned) == 1
@@ -900,7 +983,13 @@ def test_a_wholesale_empty_answer_still_falls_back_to_the_local_only_oracle(
 
     monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
     packed = compose.pack_with_access(
-        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
     )
 
     assert asked_local >= 1
@@ -919,7 +1008,13 @@ def test_a_converged_answer_is_neither_partial_nor_degraded(
 
     monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
     packed = compose.pack_with_access(
-        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
     )
 
     assert packed.degraded == 0
@@ -952,7 +1047,13 @@ def test_a_converged_but_empty_answer_does_not_bypass_the_local_only_oracle(
 
     monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
     packed = compose.pack_with_access(
-        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
     )
 
     assert asked_local >= 1, "the empty-but-converged answer must not be committed unchecked"
@@ -990,7 +1091,13 @@ def test_a_committed_partial_is_topped_up_with_exactly_its_missing_demands(
 
     monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
     packed = compose.pack_with_access(
-        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
     )
 
     assert len(raised) >= 2, "the fixture must raise more demands than the partial serves"
@@ -1028,7 +1135,13 @@ def test_a_topped_up_partial_is_still_partial_degraded_and_never_converged(
 
     monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
     packed = compose.pack_with_access(
-        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
     )
 
     assert packed.reservation.complete
@@ -1055,7 +1168,13 @@ def test_a_partial_with_nothing_missing_is_not_topped_up(
 
     monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
     packed = compose.pack_with_access(
-        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
     )
 
     assert packed.reservation.complete
@@ -1087,7 +1206,13 @@ def test_a_top_up_that_runs_out_of_clock_leaves_the_partial_intact(
 
     monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
     packed = compose.pack_with_access(
-        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
     )
 
     assert [demand for demand, _ in packed.reservation.assigned] == raised[:1]
@@ -1110,7 +1235,9 @@ def test_a_topped_up_partial_leaves_both_corridor_sets_on_the_canvas(
     own at the end.
     """
     left, right, flows, spec, ramped = two_solved_blocks
-    packing = compose._pack_at([left, right], flows, spec, gap=8, ramped=ramped, margin=8)
+    packing = compose._pack_at(
+        [left, right], flows, spec, envelope=_PACKING_ENVELOPE, gap=8, ramped=ramped, margin=8
+    )
     canvas = packing.canvas
     bounds = canvas.limit
     demands = list(compose._port_access_inventory(packing.nets).demands)
@@ -1164,7 +1291,9 @@ def test_a_top_up_that_expires_mid_enumeration_leaves_the_canvas_as_the_partial(
     the RESTORE path runs rather than the cheap pre-snapshot refusal.
     """
     left, right, flows, spec, ramped = two_solved_blocks
-    packing = compose._pack_at([left, right], flows, spec, gap=8, ramped=ramped, margin=8)
+    packing = compose._pack_at(
+        [left, right], flows, spec, envelope=_PACKING_ENVELOPE, gap=8, ramped=ramped, margin=8
+    )
     canvas = packing.canvas
     bounds = canvas.limit
     demands = list(compose._port_access_inventory(packing.nets).demands)
@@ -1255,7 +1384,13 @@ def test_the_topped_up_evidence_takes_each_field_from_the_call_that_knows_it(
 
     monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
     packed = compose.pack_with_access(
-        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+        [left, right],
+        flows,
+        spec,
+        envelope=_PACKING_ENVELOPE,
+        ramped=ramped,
+        deadline=None,
+        margin=8,
     )
 
     merged = {evidence.demand: evidence for evidence in packed.reservation.evidence}

@@ -19,7 +19,8 @@ import { z } from 'zod';
 
 /** Ten positional numbers, in `TRACE_BUILDING_FIELDS` order (web/trace.py):
     item_id, model_index, x, y, z, yaw, recipe_id, filter_id, output_obj,
-    input_obj. `None` is encoded as `-1`. */
+    input_obj. Targets are dense row indexes even in sampled frames; omitted
+    targets and `None` are encoded as `-1`. */
 export const TraceBuildingRow = z.tuple([
   z.number(),
   z.number(),
@@ -80,11 +81,15 @@ export const TracePage = z.object({
       from `dropped` so a healthy build past the window size is never told it
       lost data. `.default(0)` covers callers/fixtures predating this field. */
   evicted: z.number().default(0),
+  /** The collector has closed publication and this cursor has no unread frames.
+      Solver job completion alone never ends trace polling. */
   complete: z.boolean(),
 });
 
 export type TraceFrame = z.infer<typeof TraceFrame>;
 export type TracePage = z.infer<typeof TracePage>;
+
+const TraceFailure = z.object({ error: z.string() });
 export type TracePhase = z.infer<typeof TracePhase>;
 
 /** One trace poll. `from` is exclusive; pass the returned `next` straight
@@ -98,7 +103,10 @@ export async function pollTrace(
     signal,
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return TracePage.parse(await response.json());
+  const body: unknown = await response.json();
+  const failure = TraceFailure.safeParse(body);
+  if (failure.success) throw new Error(failure.data.error);
+  return TracePage.parse(body);
 }
 
 /** Live-tail cadence. Fixed, not the job poll's backoff (build.ts): that

@@ -15,6 +15,7 @@ from fractions import Fraction
 
 import pytest
 
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout import validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout, Placement, PlacementCompletion
@@ -24,10 +25,12 @@ from flab2bp.layout.hierarchy.partition import Unit, initial_partition
 from flab2bp.layout.hierarchy.strategy import HierarchicalLayout, ShapeKey, _Entry
 from flab2bp.spec import BuildSpec, MachineGroup
 
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+
 
 def _layout() -> HierarchicalLayout:
     return HierarchicalLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=8,
         strip_cap=2,
@@ -60,13 +63,11 @@ def _refuse_first_shape_then_real(
 def test_pool_width_comes_from_the_affinity_set(monkeypatch: pytest.MonkeyPatch) -> None:
     """No `workers` named -> the pool is sized from the box, capped at 32."""
     monkeypatch.setattr(strategy, "_available_cpu_count", lambda: 128)
-    layout = HierarchicalLayout(
-        belt_vertical_construction=True, band_policy=BandPolicy.parse("portable")
-    )
+    layout = HierarchicalLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy.parse("portable"))
     assert layout._pool_width() == 32
     # An explicit `workers` still wins over the affinity set.
     layout = HierarchicalLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=16,
     )
@@ -98,7 +99,7 @@ def test_a_fifteen_second_build_funds_one_round(
 
     monkeypatch.setattr(strategy, "_solve_block", spy)
     layout = HierarchicalLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=16,
         strip_cap=2,
@@ -134,7 +135,7 @@ def test_hierarchical_lays_out_the_chain_as_two_blocks_and_certifies(
     assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
     assert placement.stats["blocks"] == 2
     assert placement.stats["cut_lanes"] >= 1
-    assert validate.certify(placement, chain_spec, expect_power=True).ok
+    assert validate.certify(placement, chain_spec, belt_rules=_BELT_RULES, expect_power=True).ok
 
 
 def test_a_block_that_refuses_is_re_cut_before_the_whole_spec_refuses(
@@ -246,7 +247,7 @@ def test_a_refused_shape_is_not_re_solved_at_a_budget_the_memo_already_covers(
 
     monkeypatch.setattr(strategy, "_solve_block", spy)
     layout = HierarchicalLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=8,
         strip_cap=2,
@@ -316,7 +317,7 @@ def test_identical_recut_children_do_not_create_unfunded_waves(
     monkeypatch.setattr(strategy, "time", clock)
     monkeypatch.setattr(strategy, "_solve_block", refuse_parent)
     layout = HierarchicalLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=4,
         strip_cap=2,
@@ -325,7 +326,7 @@ def test_identical_recut_children_do_not_create_unfunded_waves(
     layout._executor_factory = lambda _width: _InlinePool()  # type: ignore[assignment,return-value]
     placement = layout.lay_out(chain_spec, time_budget_s=40.0)
     assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
-    assert validate.certify(placement, chain_spec, expect_power=True).ok
+    assert validate.certify(placement, chain_spec, belt_rules=_BELT_RULES, expect_power=True).ok
 
 
 def test_a_ten_second_no_good_is_retried_at_the_funded_fifteen_seconds(
@@ -382,7 +383,7 @@ def test_a_ten_second_no_good_is_retried_at_the_funded_fifteen_seconds(
     monkeypatch.setattr(strategy, "_solve_block", budget_sensitive)
     monkeypatch.setattr(strategy, "_recut", retry_unchanged)
     layout = HierarchicalLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=4,
         strip_cap=2,
@@ -391,7 +392,7 @@ def test_a_ten_second_no_good_is_retried_at_the_funded_fifteen_seconds(
     layout._executor_factory = lambda _width: _InlinePool()  # type: ignore[assignment,return-value]
     placement = layout.lay_out(chain_spec, time_budget_s=100.0)
     assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
-    assert validate.certify(placement, chain_spec, expect_power=True).ok
+    assert validate.certify(placement, chain_spec, belt_rules=_BELT_RULES, expect_power=True).ok
 
 
 def test_a_remembered_budget_breakpoint_funds_the_remaining_block(
@@ -677,7 +678,7 @@ def test_a_player_fed_block_is_declared_to_the_validator_and_certifies(
     monkeypatch.setattr(strategy, "allocate_cuts", spy_allocate)
     monkeypatch.setattr(strategy, "composed_spec", spy_composed)
     layout = HierarchicalLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=8,
         strip_cap=1,
@@ -690,7 +691,7 @@ def test_a_player_fed_block_is_declared_to_the_validator_and_certifies(
     built = seen["built"]
     assert isinstance(built, BuildSpec)
     assert built.external_inputs["iron-ingot"] == Fraction(3)
-    report = validate.certify(placement, built, expect_power=True)
+    report = validate.certify(placement, built, belt_rules=_BELT_RULES, expect_power=True)
     assert report.ok, "; ".join(f"{f.check}: {f.message}" for f in report.errors[:5])
 
 
@@ -705,7 +706,7 @@ def test_the_memo_forgets_across_lay_out_calls(chain_spec: BuildSpec) -> None:
     `settlement_reserve_s` for this two-block, two-arm round at `width=2`.
     """
     layout = HierarchicalLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=8,
         strip_cap=2,
@@ -780,7 +781,7 @@ def test_a_job_is_capped_at_its_own_budget_when_it_starts_not_when_the_round_did
     started = time.monotonic()
     # A parent wall ten minutes out, and a three-second job budget.
     record, placement = strategy._solve_block(
-        (chain_spec, "freeform", 3.0, True, 4, started + 600.0)
+        (chain_spec, "freeform", 3.0, _BELT_RULES, 4, started + 600.0)
     )
     assert placement is None and record["ok"] is False
     deadline = seen["deadline"]
@@ -843,7 +844,7 @@ def test_a_dead_pool_is_a_refusal_not_a_crash(chain_spec: BuildSpec) -> None:
     # the refusal that lands is the one carrying the pool's verdict rather than
     # an unfunded-round one.
     layout = HierarchicalLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=8,
         strip_cap=2,
@@ -872,7 +873,7 @@ def test_a_pool_that_cannot_be_constructed_is_a_refusal_not_a_crash(chain_spec: 
             raise OSError(24, "Too many open files")
 
     layout = HierarchicalLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=8,
         strip_cap=2,
@@ -956,7 +957,7 @@ def test_a_refusal_carries_the_strategy_stats(
 
     monkeypatch.setattr(strategy, "_solve_block", always_refuse)
     layout = HierarchicalLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=8,
         strip_cap=2,
@@ -999,7 +1000,7 @@ def test_the_seed_round_keeps_the_whole_wall_when_no_recut_is_affordable(chain_s
 
     monkeypatch.setattr(strategy, "_solve_block", spy)
     layout = HierarchicalLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=16,
         strip_cap=2,
@@ -1038,7 +1039,7 @@ def test_a_build_stops_re_cutting_after_the_global_bound(chain_spec, monkeypatch
     monkeypatch.setattr(strategy, "_solve_block", always_refuse)
     monkeypatch.setattr(strategy, "_recut", always_progress)
     layout = HierarchicalLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=8,
         strip_cap=1,
@@ -1062,7 +1063,7 @@ def test_a_round_that_cannot_afford_the_floor_names_the_wall_not_the_waves(chain
 
     monkeypatch.setattr(strategy, "_solve_block", always_refuse)
     layout = HierarchicalLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=8,
         strip_cap=2,
@@ -1097,14 +1098,15 @@ def test_an_unregistered_arm_raises_rather_than_being_solved_by_sequence_pair() 
     have the verdict recorded against the arm that never ran.
     """
     assert isinstance(
-        strategy._block_layout("freeform", vertical=True, workers=2), strategy.FreeformLayout
+        strategy._block_layout("freeform", belt_rules=_BELT_RULES, workers=2),
+        strategy.FreeformLayout,
     )
     assert isinstance(
-        strategy._block_layout("sequence-pair", vertical=True, workers=2),
+        strategy._block_layout("sequence-pair", belt_rules=_BELT_RULES, workers=2),
         strategy.SequencePairLayout,
     )
     with pytest.raises(ValueError, match="block-library"):
-        strategy._block_layout("block-library", vertical=True, workers=2)
+        strategy._block_layout("block-library", belt_rules=_BELT_RULES, workers=2)
 
 
 def test_a_dispatched_block_is_offered_both_arms_below_the_exact_floor(chain_spec, monkeypatch):
@@ -1126,7 +1128,7 @@ def test_a_dispatched_block_is_offered_both_arms_below_the_exact_floor(chain_spe
 
     monkeypatch.setattr(strategy, "_solve_block", spy)
     layout = HierarchicalLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=8,
         strip_cap=2,
@@ -1179,7 +1181,7 @@ def test_a_refused_block_is_offered_the_other_arm_before_it_is_cut(chain_spec, m
 
     monkeypatch.setattr(strategy, "_solve_block", refuse_first_arm)
     layout = HierarchicalLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=8,
         strip_cap=2,

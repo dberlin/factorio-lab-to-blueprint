@@ -12,7 +12,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from fractions import Fraction
-from functools import cache
 from types import MappingProxyType
 
 from flab2bp.dsp import catalog
@@ -164,38 +163,14 @@ def adjust(
 
 
 # --- footprints ------------------------------------------------------------
-#
-# FactorioLab identifies machines by string id; the extracted DSP catalog is
-# keyed by numeric item id.  Display names bridge the two, which resolves every
-# machine in the dataset except `ray-receiver-pro`, a settings variant of the
-# Ray Receiver building rather than a building of its own.
-
-_NAME_ALIASES = {"ray-receiver-pro": "ray-receiver"}
-
-
-@cache
-def _footprints_by_lab_id() -> Mapping[str, int]:
-    from flab2bp.lab.data import load_dataset
-
-    data = load_dataset()
-    by_name = {b.name.lower(): b for b in catalog.all_buildings()}
-    out: dict[str, int] = {}
-    for item in data.iter_items():
-        if item.machine is None:
-            continue
-        lookup_id = _NAME_ALIASES.get(item.id, item.id)
-        name = data.item(lookup_id).name.lower()
-        building = by_name.get(name)
-        if building is not None:
-            out[item.id] = building.width * building.height
-    return MappingProxyType(out)
 
 
 def machine_footprint(machine_item_id: str) -> int:
     """Build-grid area in tiles.
 
-    Area rather than machine count is the solve's objective because the two
-    disagree: an arc smelter is 9 tiles and an assembler 16, so a plan with
-    fewer machines can occupy more ground.
+    Resolve physical identity through the DSP catalog, independently of display
+    labels and FactorioLab's economic machine-size cost. Unknown identities
+    deliberately raise; nonphysical extraction columns override area to zero.
     """
-    return _footprints_by_lab_id().get(machine_item_id, 0)
+    building = catalog.building(catalog.item_id(machine_item_id))
+    return building.width * building.height

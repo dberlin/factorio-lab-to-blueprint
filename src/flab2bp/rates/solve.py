@@ -326,9 +326,8 @@ def supplied_rates(data: Dataset, request: LabRequest) -> dict[str, Fraction]:
     crafted.  A supply beyond the demand is simply unused.
 
     A rate of zero or less is not a quantity to net against; it keeps the older
-    all-or-nothing reading (belted in, never built).  No URL produces one --
-    ``parse_url`` defaults a missing objective value to 1 -- so this is only
-    reachable from a hand-built request.
+    all-or-nothing reading (belted in, never built). The URL adapter preserves
+    an explicit zero; only a missing objective value defaults to one.
     """
     period = _SECONDS_PER_PERIOD[request.display_rate]
     out: dict[str, Fraction] = {}
@@ -1378,11 +1377,6 @@ def solve(
         shortfall = rate - produced.get(item_id, Fraction(0))
         if shortfall <= 0:
             continue
-        if item_id in forbidden:
-            raise InfeasibleError(
-                f"{item_id} is limited to zero as an input, but the chain needs "
-                f"{shortfall} items/s of it from outside and nothing here crafts it"
-            )
         available_extracted = extracted.get(item_id, Fraction(0))
         if available_extracted < shortfall and item_id not in external:
             raise InfeasibleError(
@@ -1396,6 +1390,15 @@ def solve(
     proliferator_item = tier.sprayed_item_id
     if proliferator_total > 0 and proliferator_item is not None:
         external_inputs[proliferator_item] = proliferator_total
+
+    # Check the completed boundary, including auxiliary consumption added
+    # after recipe balancing. No source of demand may bypass an input limit.
+    for item_id, rate in external_inputs.items():
+        if item_id in forbidden and rate > 0:
+            raise InfeasibleError(
+                f"{item_id} is limited to zero as an input, but the build needs "
+                f"{rate} items/s of it from outside"
+            )
 
     surplus: dict[str, Fraction] = {}
     for item_id, rate in produced.items():

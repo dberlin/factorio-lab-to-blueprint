@@ -12,12 +12,16 @@ from fractions import Fraction
 
 import pytest
 
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.hierarchy.contracts import LaneEnd, LaneFlow, assign_lanes, boundary_lanes
 from flab2bp.layout.hierarchy.partition import initial_partition, sub_spec
 from flab2bp.spec import BuildSpec, MachineGroup
+
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+
 
 #: How long each block gets to lay out.  The two blocks here solve in under a
 #: second apiece; the budget is the ceiling the task's brief set, not a target.
@@ -98,7 +102,7 @@ def two_solved_blocks() -> tuple[Placement, Placement, list[LaneFlow], BuildSpec
     assert len(partition.blocks) == 2, "the chain must split into exactly two blocks"
 
     layout = FreeformLayout(
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
         workers=4,
     )
@@ -114,6 +118,5 @@ def two_solved_blocks() -> tuple[Placement, Placement, list[LaneFlow], BuildSpec
     flows = assign_lanes(partition.cuts, tails, heads)
     assert flows, "the chain's one cut must produce at least one lane flow"
     left, right = placements
-    # `belt_vertical_construction=True` is the no-slope-limit save, which is
-    # what `_Canvas.ramped=False` means.
+    # The fully researched policy permits vertical links without the ramp limit.
     return left, right, flows, spec, False

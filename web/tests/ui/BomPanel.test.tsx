@@ -69,7 +69,7 @@ test('lists building counts for a real blueprint', () => {
     'tests/fixtures/factory-quick-start-step-1-minimum-blue-cube-automation.txt',
     'utf8',
   );
-  act(() => api.load(text));
+  act(() => api.publishArtifact(text, api.beginPublication()));
 
   // This fixture is 16 belts, 11 sorters, 3 smelters, 2 tesla towers.
   const panel = screen.getByTestId('bom');

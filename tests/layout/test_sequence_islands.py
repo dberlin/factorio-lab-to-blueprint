@@ -13,6 +13,7 @@ from typing import Never, TypedDict
 import pytest
 
 import flab2bp.layout.sequence_islands as islands_module
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout import validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
@@ -36,6 +37,8 @@ from flab2bp.layout.strategy_race import RACE_COMPLETION_GRACE_S
 from flab2bp.spec import BuildSpec
 from tests.layout.test_freeform import two_stage_spec
 
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+
 
 def _placement(*, area: int, belt_tiles: int) -> Placement:
     return Placement(
@@ -56,7 +59,9 @@ def _placement(*, area: int, belt_tiles: int) -> Placement:
 def test_island_count_is_bounded_and_solver_factory_stays_serial() -> None:
     for islands in (0, 17, True):
         with pytest.raises(ValueError, match="islands must be an integer from 1 to 16"):
-            SequencePairLayout(band_policy=BandPolicy("portable"), islands=islands)
+            SequencePairLayout(
+                belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), islands=islands
+            )
 
     def factory(
         spec: BuildSpec,
@@ -70,7 +75,12 @@ def test_island_count_is_bounded_and_solver_factory_stays_serial() -> None:
         raise AssertionError("factory must not be called")
 
     with pytest.raises(ValueError, match="solver factory requires exactly one island"):
-        SequencePairLayout(band_policy=BandPolicy("portable"), islands=2, solver_factory=factory)
+        SequencePairLayout(
+            belt_rules=_BELT_RULES,
+            band_policy=BandPolicy("portable"),
+            islands=2,
+            solver_factory=factory,
+        )
 
 
 def test_island_seed_plan_preserves_base_then_derives_stable_distinct_seeds() -> None:
@@ -229,7 +239,9 @@ def test_compact_portfolio_uses_root_seed_once_while_search_seeds_stay_distinct(
     _ImmediateExecutor.raised = None
     monkeypatch.setattr(islands_module, "ProcessPoolExecutor", _ImmediateExecutor)
 
-    SequencePairLayout(band_policy=BandPolicy("portable"), islands=8, config=config).lay_out(
+    SequencePairLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), islands=8, config=config
+    ).lay_out(
         two_stage_spec(),
         time_budget_s=2.0,
     )
@@ -281,9 +293,9 @@ def test_worker_failure_or_interrupt_terminates_and_propagates(
     monkeypatch.setattr(islands_module, "ProcessPoolExecutor", _ImmediateExecutor)
 
     with pytest.raises(type(raised), match=str(raised) or None):
-        SequencePairLayout(band_policy=BandPolicy("portable"), islands=2).lay_out(
-            two_stage_spec(), time_budget_s=2.0
-        )
+        SequencePairLayout(
+            belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), islands=2
+        ).lay_out(two_stage_spec(), time_budget_s=2.0)
 
     executor = _ImmediateExecutor.instances[-1]
     assert executor.terminated
@@ -303,9 +315,9 @@ def test_parent_deadline_terminates_active_workers_and_refuses_without_an_exact(
     )
 
     with pytest.raises(NoValidLayout, match="deadline exhausted"):
-        SequencePairLayout(band_policy=BandPolicy("portable"), islands=2).lay_out(
-            two_stage_spec(), time_budget_s=2.0
-        )
+        SequencePairLayout(
+            belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), islands=2
+        ).lay_out(two_stage_spec(), time_budget_s=2.0)
 
     executor = _ImmediateExecutor.instances[-1]
     assert executor.terminated
@@ -373,6 +385,7 @@ def test_parent_deadline_preserves_settled_refusals_in_island_order(
 
     with pytest.raises(NoValidLayout) as caught:
         SequencePairLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             islands=3,
         ).lay_out(two_stage_spec(), time_budget_s=2.0)
@@ -426,6 +439,7 @@ def test_child_soft_deadline_leaves_parent_time_to_collect_result(
 
     compact_config = CompactSeedConfig(max_deterministic_time=0.125)
     placement = SequencePairLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         islands=3,
         compact_seed_config=compact_config,
@@ -498,7 +512,7 @@ def test_island_reuses_authoritative_search_validation_after_soft_deadline(
         soft_deadline=100.0,
         power=False,
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         strip_len=6,
         config=SequenceSolverConfig.test(),
         island_id=0,
@@ -546,7 +560,7 @@ def test_island_child_asks_its_solver_to_continue_for_feasibility(
         soft_deadline=time.monotonic() + 100.0,
         power=False,
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         strip_len=6,
         config=SequenceSolverConfig.test(),
         island_id=0,
@@ -594,7 +608,7 @@ def test_two_real_spawned_islands_are_unseeded_then_seeded_and_both_valid() -> N
             soft_deadline=soft_deadline,
             power=False,
             band_policy=BandPolicy("portable"),
-            belt_vertical_construction=True,
+            belt_rules=_BELT_RULES,
             strip_len=6,
             config=config,
             island_id=island_id,
@@ -617,8 +631,8 @@ def test_two_real_spawned_islands_are_unseeded_then_seeded_and_both_valid() -> N
     assert [outcome.status for outcome in outcomes] == ["completed", "completed"]
     island0, island1 = (outcome.placement for outcome in outcomes)
     assert island0 is not None and island1 is not None
-    assert not validate.certify(island0, spec, expect_power=False).errors
-    assert not validate.certify(island1, spec, expect_power=False).errors
+    assert not validate.certify(island0, spec, belt_rules=_BELT_RULES, expect_power=False).errors
+    assert not validate.certify(island1, spec, belt_rules=_BELT_RULES, expect_power=False).errors
     assert "compact_seed_attempt" not in island0.stats
     assert "compact_seed_closures" not in island0.stats
     assert island1.stats["compact_seed_attempt"] == 0.0
@@ -672,7 +686,7 @@ def test_a_real_island_pool_spawns_and_returns_promptly_at_a_tiny_ceiling() -> N
             spec,
             time_budget_s=0.001,
             band_policy=BandPolicy("portable"),
-            belt_vertical_construction=True,
+            belt_rules=_BELT_RULES,
             strip_len=6,
             config=config,
             compact_seed_config=CompactSeedConfig(max_deterministic_time=0.01),
@@ -750,6 +764,7 @@ def test_the_island_runner_passes_the_parent_deadline_to_its_pool(
     monkeypatch.setattr(islands_module, "wait", complete_at_soft_deadline)
 
     placement = SequencePairLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         islands=2,
         compact_seed_config=CompactSeedConfig(max_deterministic_time=0.125),

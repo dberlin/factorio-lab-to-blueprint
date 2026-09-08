@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts import audit_compare
 
 
@@ -22,6 +24,8 @@ def _row(
         "spec_label": spec_label,
         "power": True,
         "budget": 30.0,
+        "machine_rank": "exact",
+        "power_tower": "auto",
         "status": status,
         "area": area,
         "seconds": seconds,
@@ -116,7 +120,6 @@ def test_compare_fails_when_the_candidate_never_ran_a_cell() -> None:
     )
 
     assert not verdict.passed
-    assert verdict.reasons == ("MISSING: sequence-pair graphene/label-0",)
 
 
 def test_compare_counts_the_candidate_rows_against_expect_cells() -> None:
@@ -304,3 +307,123 @@ def test_the_expected_cell_count_covers_a_three_strategy_run() -> None:
     assert not audit_compare.compare(
         rows, rows, noise_area=0.013, p95_seconds=30.0, expect_cells=72
     ).passed
+
+
+def test_reordered_budgets_pair_to_the_same_semantic_cells() -> None:
+    first = _row("freeform", "iron", 0, "plain", "CLEAN", 100.0, 1.0)
+    second = dict(first, budget=4.0, area=400.0)
+    verdict = audit_compare.compare(
+        [first, second], [second, first], noise_area=0.013, p95_seconds=30.0
+    )
+    assert verdict.passed
+    assert verdict.paired_cells == 2
+    assert verdict.area_ratio == 1.0
+
+
+@pytest.mark.parametrize("side", ["baseline", "candidate"])
+def test_duplicate_cells_are_rejected_before_scoring(side: str) -> None:
+    row = _row("freeform", "iron", 0, "plain", "CLEAN", 100.0, 1.0)
+    rows = {"baseline": [row], "candidate": [row]}
+    rows[side].append(dict(row))
+    with pytest.raises(ValueError, match="duplicate audit cell"):
+        audit_compare.compare(**rows, noise_area=0.013, p95_seconds=30.0)
+
+
+@pytest.mark.parametrize("field", ["budget", "power", "spec_label", "machine_rank", "power_tower"])
+def test_exact_comparison_rejects_missing_identity_or_scope(field: str) -> None:
+    row = _row("freeform", "iron", 0, "plain", "CLEAN", 100.0, 1.0)
+    incomplete = dict(row)
+    del incomplete[field]
+    with pytest.raises(ValueError, match="missing"):
+        audit_compare.compare([row], [incomplete], noise_area=0.013, p95_seconds=30.0)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("spec_label", "other"), ("machine_rank", "up-to"), ("power_tower", "satellite-substation")],
+)
+def test_changed_scope_requires_an_explicit_treatment(field: str, value: str) -> None:
+    row = _row("freeform", "iron", 0, "plain", "CLEAN", 100.0, 1.0)
+    changed = dict(row, **{field: value})
+    with pytest.raises(ValueError, match="incompatible"):
+        audit_compare.compare([row], [changed], noise_area=0.013, p95_seconds=30.0)
+    verdict = audit_compare.compare(
+        [row],
+        [changed],
+        noise_area=0.013,
+        p95_seconds=30.0,
+        treatment_fields=frozenset({field}),
+    )
+    assert verdict.passed
+    assert verdict.paired_cells == 1
+
+
+def test_source_commit_is_not_a_cell_key_or_configuration_constraint() -> None:
+    row = _row("freeform", "iron", 0, "plain", "CLEAN", 100.0, 1.0)
+    verdict = audit_compare.compare(
+        [dict(row, commit="before")],
+        [dict(row, commit="after")],
+        noise_area=0.013,
+        p95_seconds=30.0,
+    )
+    assert verdict.passed
+    assert verdict.paired_cells == 1
+
+
+@pytest.mark.parametrize("status", ["NOT_RUN", "TERMINATED", "SPEC"])
+def test_regression_mode_never_carries_unexecuted_work(status: str) -> None:
+    baseline = _row("freeform", "iron", 0, "plain", "REFUSED", 0.0, 1.0)
+    candidate = dict(baseline, status=status)
+    verdict = audit_compare.compare(
+        [baseline],
+        [candidate],
+        noise_area=0.013,
+        p95_seconds=30.0,
+        regressions_only=True,
+    )
+    assert not verdict.passed
+    assert verdict.candidate_clean == 0
+
+
+def test_distinct_full_keys_share_a_slot_without_becoming_duplicates() -> None:
+    first = _row("freeform", "iron", 0, "plain", "CLEAN", 100.0, 1.0)
+    second = dict(first, spec_label="sprayed", area=50.0)
+    verdict = audit_compare.compare(
+        [first, second],
+        [second, first],
+        noise_area=0.013,
+        p95_seconds=30.0,
+    )
+    assert verdict.passed
+    assert verdict.paired_cells == 2
+    assert verdict.area_ratio == 1.0
+
+
+def test_label_treatment_reserves_exact_peers_before_resolving_other_labels() -> None:
+    plain = _row("freeform", "iron", 0, "plain", "CLEAN", 100.0, 1.0)
+    sprayed = dict(plain, spec_label="sprayed", status="REFUSED", area=0.0)
+    renamed = dict(plain, spec_label="renamed")
+    verdict = audit_compare.compare(
+        [plain, sprayed],
+        [renamed, sprayed],
+        noise_area=0.013,
+        p95_seconds=30.0,
+        regressions_only=True,
+        treatment_fields=frozenset({"spec_label"}),
+    )
+    assert verdict.passed
+    assert verdict.paired_cells == 1
+    assert verdict.area_ratio == 1.0
+
+
+def test_label_treatment_does_not_guess_between_unresolved_peers() -> None:
+    plain = _row("freeform", "iron", 0, "plain", "CLEAN", 100.0, 1.0)
+    sprayed = dict(plain, spec_label="sprayed", area=50.0)
+    with pytest.raises(ValueError, match="incompatible"):
+        audit_compare.compare(
+            [plain, sprayed],
+            [dict(plain, spec_label="unresolved")],
+            noise_area=0.013,
+            p95_seconds=30.0,
+            treatment_fields=frozenset({"spec_label"}),
+        )

@@ -47,20 +47,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from flab2bp.bench.corpus import entry as corpus_entry  # noqa: E402
 from flab2bp.indexed.port_reservations import PortReservations  # noqa: E402
 from flab2bp.lab.data import load_vendored  # noqa: E402
+from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
-from flab2bp.layout import freeform, last_mile  # noqa: E402
+from flab2bp.layout import freeform, last_mile, routing_domain  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
 from flab2bp.layout.base import NoValidLayout  # noqa: E402
 from flab2bp.rates import CandidatePolicy, build_candidates  # noqa: E402
 
 
 def _snapshot(
-    canvas: freeform._Canvas,
-    grid: freeform._Grid | None,
+    canvas: routing_domain._Canvas,
+    grid: routing_domain._Grid | None,
     history: dict[tuple[int, int, int], float],
 ) -> tuple[
-    freeform._Canvas,
-    freeform._Grid | None,
+    routing_domain._Canvas,
+    routing_domain._Grid | None,
     dict[tuple[int, int, int], float],
 ]:
     """The parts a routing pass moves, copied; the rest shared."""
@@ -107,12 +108,12 @@ def capture(
         candidate_policies=(policy,),
     ).candidates[0]
 
-    orig = freeform._astar
+    orig = routing_domain._astar
     cases: list[dict[str, Any]] = []
     seen = 0
 
     def spy(
-        canvas: freeform._Canvas,
+        canvas: routing_domain._Canvas,
         starts: list[tuple[int, int, int]],
         goals: set[tuple[int, int, int]],
         history: dict[tuple[int, int, int], float],
@@ -121,12 +122,12 @@ def capture(
         budget: dict[str, int] | None = None,
         deadline: float | None = None,
         blame: dict[tuple[int, int, int], float] | None = None,
-        grid: freeform._Grid | None = None,
+        grid: routing_domain._Grid | None = None,
         owned_starts: Collection[tuple[int, int, int]] = (),
         released_starts: Collection[tuple[int, int, int]] = (),
         forbidden: Collection[tuple[int, int, int]] = (),
         blocking_owners: Mapping[tuple[int, int, int], int] | None = None,
-    ) -> freeform._PathSearchResult:
+    ) -> routing_domain._PathSearchResult:
         nonlocal seen
         want = seen % every == 0 and len(cases) < cap
         if want:
@@ -167,16 +168,17 @@ def capture(
             )
         return out_path
 
-    freeform._astar = spy
+    routing_domain._astar = spy
     try:
         freeform.FreeformLayout(
             band_policy=BandPolicy("portable"),
+            belt_rules=belt_rules_for_url(entry.url),
             workers=1,
         ).lay_out(spec, time_budget_s=budget)
     except NoValidLayout:
         pass
     finally:
-        freeform._astar = orig
+        routing_domain._astar = orig
     out.write_bytes(pickle.dumps(cases, protocol=5))
     # `_astar` returns a `_PathSearchResult`, whose `path` is the tuple of cells.
     lens = [0 if c["path"].path is None else len(c["path"].path) for c in cases]
@@ -214,8 +216,8 @@ def capture_clusters(
     def sink(shot: last_mile.ClusterCapture) -> None:
         if len(cases) + len(pending) >= cap:
             return
-        canvas = cast(freeform._Canvas, shot.canvas)
-        grid = cast(freeform._Grid, shot.grid)
+        canvas = cast(routing_domain._Canvas, shot.canvas)
+        grid = cast(routing_domain._Grid, shot.grid)
         shot_canvas, shot_grid, shot_hist = _snapshot(canvas, grid, dict(shot.history))
         pending.append(
             {
@@ -259,6 +261,7 @@ def capture_clusters(
     try:
         freeform.FreeformLayout(
             band_policy=BandPolicy("portable"),
+            belt_rules=belt_rules_for_url(entry.url),
             workers=1,
         ).lay_out(spec, time_budget_s=budget)
     except NoValidLayout:
@@ -319,7 +322,7 @@ def bench(path: Path, rounds: int, check: bool, landmarks: int | None) -> int:
             canvas = case["canvas"]
             canvas.routing_ports = canvas.routing_ports
             got.append(
-                freeform._astar(
+                routing_domain._astar(
                     canvas,
                     case["starts"],
                     case["goals"],

@@ -32,20 +32,17 @@ import pytest
 
 from flab2bp.dsp import catalog
 from flab2bp.dsp.records import is_belt
-from flab2bp.layout import freeform
+from flab2bp.lab.techs import belt_rules_for_url
+from flab2bp.layout import freeform, routing_domain
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.coater_mode import CoaterMode, coater_mode
-from flab2bp.layout.freeform import (
-    _COATER_WEST_CHANNEL,
-    WEST_CHANNEL,
-    FreeformLayout,
-    Strip,
-    _Canvas,
-    _Port,
-    plan_strips,
-)
+from flab2bp.layout.freeform import _COATER_WEST_CHANNEL, FreeformLayout, plan_strips
+from flab2bp.layout.routing_domain import WEST_CHANNEL, Strip, _Canvas, _Port
 from flab2bp.layout.strip_variants import CargoDomain
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
+
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+
 
 PROLIFERATED_BUDGET_S = 4.0
 
@@ -158,8 +155,8 @@ def test_strip_has_no_coater_node_field() -> None:
 
 def test_half_span_is_derived_per_yaw_not_assumed_to_be_one() -> None:
     """Design risk 6: at yaw 0 the body does not extend along the lane at all."""
-    assert freeform._coater_body_half_span(freeform.Facing.EAST.value) == 1
-    assert freeform._coater_body_half_span(0.0) == 0
+    assert routing_domain._coater_body_half_span(freeform.Facing.EAST.value) == 1
+    assert routing_domain._coater_body_half_span(0.0) == 0
 
 
 def test_off_offers_a_seat_whose_body_covers_the_lane_head(
@@ -173,9 +170,9 @@ def test_off_offers_a_seat_whose_body_covers_the_lane_head(
     _arm(monkeypatch, "off")
     canvas = _Canvas()
     port = _lane_port(canvas, 4)
-    seats = freeform._coater_seats(canvas, port, west_channel=_COATER_WEST_CHANNEL)
+    seats = routing_domain._coater_seats(canvas, port, west_channel=_COATER_WEST_CHANNEL)
     assert [x for x, _ in seats] == [1, 2]
-    half = freeform._coater_body_half_span(freeform.Facing.EAST.value)
+    half = routing_domain._coater_body_half_span(freeform.Facing.EAST.value)
     assert seats[0][0] - half == port.x, "the first seat's body covers the head"
 
 
@@ -185,9 +182,9 @@ def test_a_narrowed_seat_never_covers_its_own_in_port(
     _arm(monkeypatch, "placed")
     canvas = _Canvas()
     port = _lane_port(canvas, 4)
-    seats = freeform._coater_seats(canvas, port, west_channel=_COATER_WEST_CHANNEL)
+    seats = routing_domain._coater_seats(canvas, port, west_channel=_COATER_WEST_CHANNEL)
     assert [x for x, _ in seats] == [2]
-    half = freeform._coater_body_half_span(freeform.Facing.EAST.value)
+    half = routing_domain._coater_body_half_span(freeform.Facing.EAST.value)
     assert all(x - half > port.x for x, _ in seats)
 
 
@@ -243,7 +240,7 @@ def test_placed_bans_the_area_one_rival(
         canvas = _Canvas()
         with pytest.MonkeyPatch.context() as patch:
             patch.setenv("FLAB2BP_COATER_NODE", arm)
-            freeform._reserve_coater_belt_ban(canvas, body, belt_model)
+            routing_domain._reserve_coater_belt_ban(canvas, body, belt_model)
         return canvas.belt_ban
 
     off = ban("off")
@@ -260,7 +257,7 @@ def test_placed_bans_the_area_one_rival(
 
 def _build(arm: str, monkeypatch: pytest.MonkeyPatch) -> object:
     _arm(monkeypatch, arm)
-    strategy = FreeformLayout(band_policy=BandPolicy("portable"), workers=2)
+    strategy = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=2)
     return strategy.lay_out(_spec(), time_budget_s=PROLIFERATED_BUDGET_S)
 
 
@@ -325,10 +322,10 @@ def test_a_node_body_tile_is_always_an_occupied_belt_so_no_merge_can_be_offered_
     The clause was a no-op, and this is the proof standing in its place.
     """
     seen: list[tuple[tuple[int, int, int], bool, bool]] = []
-    original = freeform._reserve_coater_belt_ban
+    original = routing_domain._reserve_coater_belt_ban
 
     def spy(canvas: _Canvas, coater: freeform.PlacedBuilding, belt_model: int) -> None:
-        half = freeform._coater_body_half_span(coater.yaw)
+        half = routing_domain._coater_body_half_span(coater.yaw)
         cx, cy, cz = coater.x, coater.y, int(coater.z)
         for dx in range(-half, half + 1):
             cell = (cx + dx, cy, cz)
@@ -340,7 +337,7 @@ def test_a_node_body_tile_is_always_an_occupied_belt_so_no_merge_can_be_offered_
             seen.append((cell, canvas.free(cell), carries_belt))
         original(canvas, coater, belt_model)
 
-    monkeypatch.setattr(freeform, "_reserve_coater_belt_ban", spy)
+    monkeypatch.setattr(routing_domain, "_reserve_coater_belt_ban", spy)
     _build("placed", monkeypatch)
 
     assert seen, "the fixture stopped committing a coater"

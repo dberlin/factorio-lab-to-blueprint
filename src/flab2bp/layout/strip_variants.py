@@ -28,7 +28,7 @@ from flab2bp.layout.finalize import (
 from flab2bp.spec import MAX_CARGO_STACK, BuildSpec
 
 if TYPE_CHECKING:
-    from flab2bp.layout.freeform import _Group, _SorterStacks
+    from flab2bp.layout.routing_domain import _Group, _SorterStacks
 
 LaneKind = Literal["input", "output"]
 LaneSide = Literal["north", "south"]
@@ -878,7 +878,7 @@ def _output_logical_lanes(
     sides: tuple[LaneSide, ...],
     spec: BuildSpec | None = None,
 ) -> tuple[LogicalLane, ...]:
-    from flab2bp.layout.freeform import _dests
+    from flab2bp.layout.routing_domain import _dests
 
     if len(sides) != len(plan.out_lanes):
         raise ValueError("output side assignment does not cover every output lane")
@@ -976,7 +976,7 @@ class _SorterCeilings:
 
 
 def _sorter_ceilings(spec: BuildSpec) -> _SorterCeilings:
-    from flab2bp.layout.freeform import _sorter_stacks_for, _sorter_tiers_for
+    from flab2bp.layout.routing_domain import _sorter_stacks_for, _sorter_tiers_for
 
     return _SorterCeilings(tiers=_sorter_tiers_for(spec), stacks=_sorter_stacks_for(spec))
 
@@ -1304,15 +1304,13 @@ def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
     a prefab slot and a span no greater than ``SORTER_MAX_REACH``.
     """
     from flab2bp.layout.freeform import (
-        DEST_SEP,
-        _adapt,
         _allocate_machines,
         _flank_seat,
         _merge_lanes,
         _seat_inputs,
         _shard_sinks,
-        _sink_demand,
     )
+    from flab2bp.layout.routing_domain import DEST_SEP, _adapt, _sink_demand
 
     groups = _adapt(spec)
     producers: dict[str, list[str]] = defaultdict(list)
@@ -2055,7 +2053,7 @@ def _machine_cap(group: _Group, spec: BuildSpec) -> int:
 
 def generate_strip_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
     """Generate deterministic pose-valid variants for every logical lane shard."""
-    from flab2bp.layout.freeform import _adapt
+    from flab2bp.layout.routing_domain import _adapt
 
     groups = _adapt(spec)
     families: list[StripFamily] = []

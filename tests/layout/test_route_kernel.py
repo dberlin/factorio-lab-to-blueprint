@@ -6,15 +6,19 @@ from typing import Any
 
 import pytest
 
-import flab2bp.layout.freeform as freeform_module
-from flab2bp.layout import route_kernel
+from flab2bp.lab.techs import belt_rules_for_url
+from flab2bp.layout import route_kernel, routing_domain
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout
-from flab2bp.layout.freeform import FreeformLayout, _PathSearchResult
+from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.route_feedback import RouteFailureKind
+from flab2bp.layout.routing_domain import _PathSearchResult
 from flab2bp.spec import BuildSpec
 from scripts.route_bench import _snapshot
 from tests.layout.test_freeform import plastic_spec, two_stage_spec
+
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+
 
 Cell = tuple[int, int, int]
 Case = dict[str, Any]
@@ -22,7 +26,7 @@ Case = dict[str, Any]
 
 def _capture_searches(spec: BuildSpec, budget_s: float) -> list[Case]:
     """Replayable snapshots of every real search one Freeform lay_out makes."""
-    original = freeform_module._astar
+    original = routing_domain._astar
     cases: list[Case] = []
 
     def spy(
@@ -74,15 +78,15 @@ def _capture_searches(spec: BuildSpec, budget_s: float) -> list[Case]:
             blocking_owners,
         )
 
-    freeform_module._astar = spy
+    routing_domain._astar = spy
     try:
-        FreeformLayout(band_policy=BandPolicy("portable"), workers=1).lay_out(
-            spec, time_budget_s=budget_s
-        )
+        FreeformLayout(
+            belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=1
+        ).lay_out(spec, time_budget_s=budget_s)
     except NoValidLayout:
         pass
     finally:
-        freeform_module._astar = original
+        routing_domain._astar = original
     return cases
 
 
@@ -109,7 +113,7 @@ def _replay(
     *,
     deadline: float | None = None,
 ) -> _PathSearchResult:
-    return freeform_module._astar(
+    return routing_domain._astar(
         case["canvas"],
         case["starts"],
         case["goals"],
@@ -172,7 +176,7 @@ def test_compiled_astar_honours_expansion_cap_and_budget(monkeypatch: pytest.Mon
         with monkeypatch.context() as forced:
             forced.setattr(route_kernel, "_compiled_astar", backend)
             if max_expansions is not None:
-                forced.setattr(freeform_module, "_MAX_EXPANSIONS", max_expansions)
+                forced.setattr(routing_domain, "_MAX_EXPANSIONS", max_expansions)
             return _replay(case, budget)
 
     # The shared budget runs out: charged for the expansion that hit the wall.
@@ -219,8 +223,8 @@ def test_compiled_astar_deadline_checkpoint_preserves_raw_telemetry_and_budget(
 
         with monkeypatch.context() as forced:
             forced.setattr(route_kernel, "_compiled_astar", backend)
-            forced.setattr(freeform_module, "_DEADLINE_CHECK_EVERY", 1)
-            forced.setattr(freeform_module, "_expired", expire_at_checkpoint)
+            forced.setattr(routing_domain, "_DEADLINE_CHECK_EVERY", 1)
+            forced.setattr(routing_domain, "_expired", expire_at_checkpoint)
             return _replay(case, budget, deadline=0.0)
 
     cython_budget, python_budget = {"left": 3}, {"left": 3}
@@ -250,16 +254,16 @@ def test_a_start_in_the_pad_degrades_the_backend_and_keeps_the_grid(
     compiled = _require_both_backends()
 
     box = (0, 0, 8, 8)
-    canvas = freeform_module._Canvas()
+    canvas = routing_domain._Canvas()
     # `span` is `box` plus exactly the two-cell pad, so a cell on the span's
     # outer edge is inside `span` and two short of the margin.
-    grid = freeform_module._make_grid(canvas, box, (-2, -2, 10, 10), {})
+    grid = routing_domain._make_grid(canvas, box, (-2, -2, 10, 10), {})
 
     took_python: list[str] = []
     took_kernel: list[str] = []
     rebuilt: list[str] = []
-    original_loop = freeform_module._astar_python_loop
-    original_make = freeform_module._make_grid
+    original_loop = routing_domain._astar_python_loop
+    original_make = routing_domain._make_grid
 
     def spy_loop(*args: Any, **kwargs: Any) -> Any:
         took_python.append("called")
@@ -273,17 +277,17 @@ def test_a_start_in_the_pad_degrades_the_backend_and_keeps_the_grid(
         rebuilt.append("called")
         return original_make(*args, **kwargs)
 
-    monkeypatch.setattr(freeform_module, "_astar_python_loop", spy_loop)
-    monkeypatch.setattr(freeform_module, "_make_grid", spy_make)
+    monkeypatch.setattr(routing_domain, "_astar_python_loop", spy_loop)
+    monkeypatch.setattr(routing_domain, "_make_grid", spy_make)
     monkeypatch.setattr(route_kernel, "_compiled_astar", spy_kernel)
 
     def search(cell: Cell) -> None:
         # Goal == start, so this terminates on the first pop and the assertion
         # is about which loop ran rather than about what it found.
-        freeform_module._astar(canvas, [cell], {cell}, {}, 1.0, box, {"left": 1 << 20}, grid=grid)
+        routing_domain._astar(canvas, [cell], {cell}, {}, 1.0, box, {"left": 1 << 20}, grid=grid)
 
     in_the_pad = (-2, 4, 0)
-    assert not freeform_module._kernel_margin_holds(grid, [in_the_pad])
+    assert not routing_domain._kernel_margin_holds(grid, [in_the_pad])
     search(in_the_pad)
     assert took_python == ["called"]
     assert took_kernel == []
@@ -294,7 +298,7 @@ def test_a_start_in_the_pad_degrades_the_backend_and_keeps_the_grid(
     # was never going to be reached.
     took_python.clear()
     clear_of_the_pad = (2, 4, 0)
-    assert freeform_module._kernel_margin_holds(grid, [clear_of_the_pad])
+    assert routing_domain._kernel_margin_holds(grid, [clear_of_the_pad])
     search(clear_of_the_pad)
     assert took_kernel == ["called"]
     assert took_python == []

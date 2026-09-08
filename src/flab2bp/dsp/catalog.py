@@ -54,7 +54,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from functools import cache, lru_cache
 from pathlib import Path
-from typing import Protocol, TypedDict, TypeGuard
+from typing import Final, Protocol, TypedDict, TypeGuard
 
 from flab2bp.dsp.rules import WORLD_UNITS_PER_LEVEL, PowerNode
 
@@ -980,12 +980,11 @@ _ITEM_ALIASES = {
     "ray-receiver-pro": "Ray Receiver",
 }
 
-#: FactorioLab entries with no DSP *item* at all, so no alias exists.
-#: ``proliferator-N-products`` / ``-speed`` are FactorioLab's module pseudo-items
-#: for the two spray modes; the sprayable items themselves are
-#: ``proliferator-1/2/3`` and map normally.  ``mecha-core-1`` and
-#: ``universe-exploration-1`` are mecha upgrades.  The remaining 42 are Dark Fog
-#: drops.  None can appear on a belt, so none needs an icon.
+#: Prefix families containing FactorioLab entries with no DSP *item*.
+#: Resolve identity before treating a prefixed entry as unknown: ``df-`` also
+#: prefixes real game buildings and items handled by ``canonical_item_id``.
+#: ``proliferator-N-products`` / ``-speed`` are module pseudo-items rather than
+#: the sprayable ``proliferator-1/2/3`` items, which map normally.
 NO_DSP_ITEM_PREFIXES = ("df-", "proliferator-1-", "proliferator-2-", "proliferator-3-")
 
 #: FactorioLab recipes with no DSP *recipe id*, because the game expresses them
@@ -1216,6 +1215,36 @@ def _item_ids() -> dict[str, int]:
     return table
 
 
+_OBSERVED_ITEM_ALIASES: Final = {
+    "df-combustion-unit": "combustible-unit",
+    "df-supersonic-missle-set": "supersonic-missile-set",
+    "df-recomposing-assembler": "re-composing-assembler",
+    "df-plasma-turret-sr": "sr-plasma-turret",
+}
+
+
+def canonical_item_id(item_id: str) -> str:
+    """Catalog-backed identity for a FactorioLab item id.
+
+    FactorioLab prefixes Dark Fog-era game items with ``df-`` while the DSP
+    catalog uses their ordinary ids. Prefix removal is accepted only when the
+    resulting (or observed spelling-corrected) id exists in the catalog; a
+    genuinely DF-only/future id remains distinct.
+    """
+    if not item_id.startswith("df-"):
+        return item_id
+    candidate = _OBSERVED_ITEM_ALIASES.get(item_id, item_id.removeprefix("df-"))
+    return candidate if candidate in _item_ids() else item_id
+
+
+def canonical_recipe_id(recipe_id: str) -> str:
+    """Catalog-backed identity for a FactorioLab recipe id."""
+    if not recipe_id.startswith("df-"):
+        return recipe_id
+    candidate = _OBSERVED_ITEM_ALIASES.get(recipe_id, recipe_id.removeprefix("df-"))
+    return candidate if candidate in known_recipe_ids() else recipe_id
+
+
 def item_id(factoriolab_id: str) -> int:
     """DSP numeric item id for a FactorioLab item id.
 
@@ -1224,14 +1253,14 @@ def item_id(factoriolab_id: str) -> int:
     marker, which is worse than none.
     """
     try:
-        return _item_ids()[factoriolab_id]
+        return _item_ids()[canonical_item_id(factoriolab_id)]
     except KeyError:
         raise KeyError(f"no DSP item id known for {factoriolab_id!r}") from None
 
 
 def get_item_id(factoriolab_id: str) -> int | None:
     """:func:`item_id`, or ``None`` when unknown."""
-    return _item_ids().get(factoriolab_id)
+    return _item_ids().get(canonical_item_id(factoriolab_id))
 
 
 def belt_marker(dsp_item_id: int) -> tuple[int, int]:

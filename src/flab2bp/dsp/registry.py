@@ -1185,7 +1185,7 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "_COMPACT_SEED_DIRECT_MIN_BUDGET_S: wall seconds; not skew degrees",
     ),
     LintException(
-        "flab2bp.layout.freeform",
+        "flab2bp.layout.routing_domain",
         "_astar",
         30.0,
         "`1 << 30` as an infinity sentinel for the heuristic; not degrees",
@@ -1197,7 +1197,7 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "`value >> 30` bit-mixing shift; not the sorter skew angle",
     ),
     LintException(
-        "flab2bp.layout.freeform",
+        "flab2bp.layout.routing_domain",
         "_route_all",
         1.6,
         "rip-up pressure growth `0.5 * 1.6**it`; the plan names this exact knob",

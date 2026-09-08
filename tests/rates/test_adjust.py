@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from fractions import Fraction
 
 import pytest
@@ -225,3 +226,29 @@ def test_every_lab_machine_resolves_to_a_footprint(data: Dataset) -> None:
         item.id for item in data.iter_items() if item.machine and machine_footprint(item.id) <= 0
     ]
     assert unresolved == []
+
+
+def test_machine_footprint_uses_identity_not_display_labels(data: Dataset) -> None:
+    renamed = replace(
+        data,
+        items=tuple(
+            replace(item, name=f"Translated {item.id}") if item.machine else item
+            for item in data.items
+        ),
+    )
+    original = adjust(data, data.recipe("iron-ingot"), "arc-smelter")
+    translated = adjust(renamed, renamed.recipe("iron-ingot"), "arc-smelter")
+    assert translated.footprint_area == original.footprint_area == 9
+
+
+def test_machine_footprint_resolves_catalog_alias() -> None:
+    assert machine_footprint("ray-receiver-pro") == machine_footprint("ray-receiver") > 0
+
+
+def test_unknown_physical_machine_footprint_is_refused(data: Dataset) -> None:
+    column = replace(
+        adjust(data, data.recipe("iron-ingot"), "arc-smelter"),
+        machine_item_id="unknown-physical-smelter",
+    )
+    with pytest.raises(KeyError, match="unknown-physical-smelter"):
+        _ = column.footprint_area

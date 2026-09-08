@@ -28,7 +28,7 @@ from flab2bp.rates.candidates import (
     proliferator_from_request,
 )
 from flab2bp.rates.machine_choice import MachineRank
-from flab2bp.rates.solve import RateSolution, SolvedGroup
+from flab2bp.rates.solve import InfeasibleError, RateSolution, SolvedGroup
 from flab2bp.spec import BuildSpec, BuildSpecSet, ProliferatorMode
 
 EXAMPLE_URL = (
@@ -55,6 +55,33 @@ AMM_URL = (
     "WUnIQ4v9dska5HbnHAbmBrWcjxR0YnHOOWahoLckP.5wtpO9IdsCMgJf8ahFOYNcON.rA2oBvOIga9DK"
     "loJWabYJfjCUGSXd1nz4hzRz4.7ZqdHQrXon7wdtosVTrMm.Ri1pVpEvAnpFKg__&v=11"
 )
+
+
+def test_parsed_zero_limit_refuses_required_spray_input(data: Dataset) -> None:
+    """Boundary limits include auxiliary consumption, not only recipe ingredients."""
+    base = "https://factoriolab.github.io/dsp/list?o=iron-ingot*60&mps=proliferator-2-products"
+    (unlimited,) = build_candidates(
+        data,
+        parse_url(f"{base}&v=11"),
+        candidate_policies=(CandidatePolicy.ALL_PRODUCTS,),
+    ).candidates
+    assert unlimited.external_inputs["proliferator-2"] > 0
+
+    limited = parse_url(f"{base}&o=proliferator-2*0*0*3&v=11")
+    with pytest.raises(InfeasibleError):
+        build_candidates(data, limited, candidate_policies=(CandidatePolicy.ALL_PRODUCTS,))
+
+
+def test_parsed_zero_limit_allows_a_policy_without_the_forbidden_input(data: Dataset) -> None:
+    request = parse_url(
+        "https://factoriolab.github.io/dsp/list?o=iron-ingot*60"
+        "&mps=proliferator-2-products&o=proliferator-2*0*0*3&v=11"
+    )
+    (candidate,) = build_candidates(
+        data, request, candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,)
+    ).candidates
+    assert candidate.external_inputs == {"iron-ore": Fraction(1)}
+    assert candidate.outputs == {"iron-ingot": Fraction(1)}
 
 
 def test_coproduct_hydrogen_is_internally_balanced_by_buffered_recipe(

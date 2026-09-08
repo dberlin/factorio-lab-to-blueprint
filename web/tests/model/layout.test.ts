@@ -7,6 +7,8 @@ import { buildSceneModel } from '../../src/model/layout';
 import { visualScaleFor } from '../../src/model/visualScale';
 import { buildOverlays } from '../../src/model/overlays';
 import { realCatalog } from '../support/catalog';
+import { Matrix4, Vector3 } from 'three';
+import { frameZoom } from '../../src/scene/CameraRig';
 
 const catalog = buildCatalog({
   items: [
@@ -278,6 +280,44 @@ test('computes bounds and a centre for camera framing', () => {
   expect(m.center[0]).toBeCloseTo(5);
   expect(m.center[2]).toBeCloseTo(-10);
   expect(m.radius).toBeGreaterThan(0);
+});
+
+test('separated rotated boxes fit model bounds and camera framing', () => {
+  const model = buildSceneModel(
+    blueprint([
+      building({ index: 0, itemId: 2309, modelIndex: 70, x: -20, y: 0, yaw: 0 }),
+      building({ index: 1, itemId: 2309, modelIndex: 70, x: 20, y: -20, yaw: 90 }),
+      building({ index: 2, itemId: 2309, modelIndex: 70, x: 0, y: 20, yaw: 37 }),
+    ]),
+    catalog,
+  );
+  const corners: Vector3[] = [];
+  for (const instance of model.instances) {
+    const transform = new Matrix4().makeRotationY(instance.yawRad);
+    transform.scale(new Vector3(...instance.size));
+    transform.setPosition(...instance.position);
+    for (const x of [-0.5, 0.5]) {
+      for (const y of [-0.5, 0.5]) {
+        for (const z of [-0.5, 0.5]) {
+          corners.push(new Vector3(x, y, z).applyMatrix4(transform));
+        }
+      }
+    }
+  }
+  for (const axis of [0, 1, 2] as const) {
+    expect(model.bounds.min[axis]).toBeCloseTo(
+      Math.min(...corners.map((p) => p.getComponent(axis))),
+    );
+    expect(model.bounds.max[axis]).toBeCloseTo(
+      Math.max(...corners.map((p) => p.getComponent(axis))),
+    );
+  }
+  const center = new Vector3(...model.center);
+  const zoom = frameZoom(model.radius, { width: 1000, height: 520 });
+  for (const corner of corners) {
+    expect(corner.distanceTo(center)).toBeLessThanOrEqual(model.radius);
+    expect(corner.distanceTo(center) * zoom).toBeLessThan(260);
+  }
 });
 
 test('unknown items are reported and skipped rather than crashing', () => {

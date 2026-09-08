@@ -12,6 +12,7 @@ from typing import cast
 import pytest
 
 import flab2bp.layout.sequence_pair as sequence_pair_module
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout import validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import DETERMINISTIC_WORKERS
@@ -77,6 +78,8 @@ from flab2bp.spec import BuildSpec
 from tests.layout.conftest import one_recipe_spec
 from tests.layout.test_freeform import two_stage_spec
 from tests.layout.test_strip_variants import _family, _single_machine_spec
+
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
 
 
 def _boxes(
@@ -2834,7 +2837,9 @@ def test_one_recipe_negentropy_block_lays_out_at_five_and_six(
     spec, vertical = mall_all_products
     sub = one_recipe_spec(spec, "copper-ingot", count)
     layout = SequencePairLayout(
-        belt_vertical_construction=vertical, islands=1, band_policy=BandPolicy.parse("portable")
+        belt_rules=replace(_BELT_RULES, vertical_construction=vertical),
+        islands=1,
+        band_policy=BandPolicy.parse("portable"),
     )
     placement = layout.lay_out(sub, time_budget_s=20.0)
-    assert validate.certify(placement, sub, expect_power=True).ok
+    assert validate.certify(placement, sub, belt_rules=_BELT_RULES, expect_power=True).ok

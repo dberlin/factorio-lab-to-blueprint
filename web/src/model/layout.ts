@@ -115,9 +115,9 @@ export function buildSceneModel(bp: Blueprint, catalog: Catalog): SceneModel {
       box.size[2] * scale[2],
     ];
 
-    expandBounds(0, position[0], size[0]);
+    expandBounds(0, position[0], Math.abs(cos) * size[0] + Math.abs(sin) * size[2]);
     expandBounds(1, position[1], size[1]);
-    expandBounds(2, position[2], size[2]);
+    expandBounds(2, position[2], Math.abs(sin) * size[0] + Math.abs(cos) * size[2]);
 
     if (isSorter(b.itemId)) {
       sorters.push({

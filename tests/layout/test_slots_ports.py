@@ -9,7 +9,7 @@ from pathlib import Path
 from flab2bp.dsp import catalog as cat
 from flab2bp.dsp import codec, colliders
 from flab2bp.dsp.records import BlueprintBuilding
-from flab2bp.layout import freeform, slots
+from flab2bp.layout import routing_domain, slots
 from flab2bp.layout.base import Facing, PlacedBuilding
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -122,7 +122,7 @@ def test_the_exchanger_approach_turns_outside_the_tower() -> None:
     """
     host = _host(cat.ENERGY_EXCHANGER_ID)
     dock = next(d for d in slots.port_docks(host).values() if d.facing is Facing.EAST)
-    result = freeform._port_approach(host, dock, 12, range(-4, 24), host.width + 2)
+    result = routing_domain._port_approach(host, dock, 12, range(-4, 24), host.width + 2)
     assert result is not None
     cells, tap_x = result
     assert tap_x == dock.cell[0] + 2
@@ -136,7 +136,7 @@ def test_a_storage_tank_approach_still_taps_one_column_east() -> None:
     """A belt-port host whose dock clears its collider does not move at all."""
     host = _host(2106)  # Storage Tank, 3x3, east dock (2, 1)
     dock = next(d for d in slots.port_docks(host).values() if d.facing is Facing.EAST)
-    result = freeform._port_approach(host, dock, 6, range(-4, 20), host.width + 2)
+    result = routing_domain._port_approach(host, dock, 6, range(-4, 20), host.width + 2)
     assert result is not None
     _cells, tap_x = result
     assert tap_x == dock.cell[0] + 1
@@ -182,7 +182,7 @@ def test_the_reserved_pitch_contains_the_tap_column_for_every_belt_port_host() -
             for dock in slots.port_docks(probe).values():
                 if dock.facing is not Facing.EAST:
                     continue
-                offset = freeform._port_approach_offset(probe, dock, pitch_w)
+                offset = routing_domain._port_approach_offset(probe, dock, pitch_w)
                 assert offset is not None, (item_id, yaw, dock)
                 assert dock.cell[0] + offset < pitch_w, (item_id, yaw, dock, offset, pitch_w)
                 checked += 1

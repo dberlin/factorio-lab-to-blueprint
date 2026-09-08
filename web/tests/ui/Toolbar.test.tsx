@@ -4,6 +4,7 @@ import type { Blueprint } from '../../src/format/types';
 import type { SceneModel } from '../../src/model/layout';
 import type { BlueprintState } from '../../src/state/BlueprintProvider';
 import { Toolbar } from '../../src/ui/Toolbar';
+import type { TraceFrame } from '../../src/api/trace';
 
 const sceneModel = {
   instances: [],
@@ -70,7 +71,14 @@ test('the canvas label reads TRACE while a snapshot is on the canvas, and revert
     selectedIndex: null,
     select: () => {},
     stale: false,
-    snapshotLabel: traceCaption,
+    document: {
+      kind: 'trace',
+      generation: 1,
+      blueprint,
+      jobId: 'trace',
+      frame: {} as TraceFrame,
+      label: traceCaption,
+    },
     view,
     setView: () => {},
   };
@@ -87,10 +95,11 @@ test('the canvas label reads TRACE while a snapshot is on the canvas, and revert
   expect(screen.getByRole('status')).toBe(label);
   expect(screen.queryByText('Test')).toBeNull();
 
-  // A real result clears `snapshotLabel` back to null (BlueprintProvider.load);
-  // simulating that here as a re-render is what confirms the label reverts
-  // rather than getting stuck showing a stale trace caption.
-  mockState = { ...mockState, snapshotLabel: null };
+  // A successful artifact publication replaces trace provenance atomically.
+  mockState = {
+    ...mockState,
+    document: { kind: 'artifact', generation: 2, blueprint, text: '', source: { kind: 'import' } },
+  };
   rerender(<Toolbar />);
 
   expect(screen.getByText('Test')).toBeDefined();

@@ -80,7 +80,7 @@ from flab2bp.cli import (  # noqa: E402
     add_candidate_policy_argument,
     candidate_policies_from_args,
 )
-from flab2bp.dsp import codec  # noqa: E402
+from flab2bp.dsp import catalog, codec  # noqa: E402
 from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.layout import finalize, markers, validate  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
@@ -107,17 +107,15 @@ B_NAME = "freeform"
 #: Factories rather than classes so the driver never depends on the two
 #: constructors happening to share a signature.
 #:
-#: The second argument is the save's slope rule, taken from the entry's URL.
-#: Both arms must get the same one or the comparison is measuring the
-#: technology set rather than the strategies.
-STRATEGIES: dict[str, Callable[[bool], LayoutStrategy]] = {
-    A_NAME: lambda vertical: SequencePairLayout(
+#: Both arms construct and judge against the same complete researched policy.
+STRATEGIES: dict[str, Callable[[catalog.BeltAltitudeRules], LayoutStrategy]] = {
+    A_NAME: lambda rules: SequencePairLayout(
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=vertical,
+        belt_rules=rules,
     ),
-    B_NAME: lambda vertical: FreeformLayout(
+    B_NAME: lambda rules: FreeformLayout(
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=vertical,
+        belt_rules=rules,
     ),
 }
 
@@ -129,12 +127,12 @@ class _LayoutCall:
     """Picklable solve request executed inside one fresh measurement process."""
 
     strategy: str
-    vertical: bool
+    belt_rules: catalog.BeltAltitudeRules
     spec: BuildSpec
     budget_s: float
 
     def __call__(self) -> Placement:
-        placement = STRATEGIES[self.strategy](self.vertical).lay_out(
+        placement = STRATEGIES[self.strategy](self.belt_rules).lay_out(
             self.spec, time_budget_s=self.budget_s
         )
         if placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED:
@@ -143,6 +141,7 @@ class _LayoutCall:
             placement,
             self.spec,
             expect_power=True,
+            belt_rules=self.belt_rules,
         )
         finalized = finalize.finalize_placement(compacted, BandPolicy("portable"))
         return replace(
@@ -175,7 +174,11 @@ def specs_for(
 
 
 def judge_with(
-    spec: BuildSpec, ids: validate.IdMap, placement: Placement
+    spec: BuildSpec,
+    ids: validate.IdMap,
+    placement: Placement,
+    *,
+    belt_rules: catalog.BeltAltitudeRules,
 ) -> tuple[bool, tuple[str, ...]]:
     """Return whether the powered placement is fully checked and shippable.
 
@@ -187,7 +190,9 @@ def judge_with(
     A skipped check is not a passed check. Current runs are always powered, so
     skipped power checks are validation holes rather than a declared off mode.
     """
-    report = validate.validate(placement, spec, ids=ids, expect_power=True)
+    report = validate.judge_placement(
+        placement, spec, ids=ids, belt_rules=belt_rules, expect_power=True
+    )
     checks = tuple(sorted({f.check for f in report.errors}))
     if report.skipped:
         return False, checks + tuple(f"unchecked:{c}" for c in report.skipped)
@@ -222,9 +227,13 @@ def collect(
     strategy_names = (a_name, b_name)
     specs: dict[str, tuple[BuildSpec, ...]] = {}
     spec_errors: dict[str, str] = {}
+    rules_by_url: dict[str, catalog.BeltAltitudeRules] = {}
+    ids_by_url: dict[str, tuple[validate.IdMap, ...]] = {}
     for entry in entries:
         try:
             specs[entry.url_id] = specs_for(entry, candidate_policies)
+            rules_by_url[entry.url_id] = belt_rules_for_url(entry.url)
+            ids_by_url[entry.url_id] = tuple(_id_map(spec) for spec in specs[entry.url_id])
         except Exception as exc:  # noqa: BLE001 - a bad URL must not kill the sweep
             spec_errors[entry.url_id] = f"spec: {type(exc).__name__}: {exc}"
             print(f"  spec error {entry.url_id}: {exc}", file=sys.stderr)
@@ -252,10 +261,10 @@ def collect(
                         for name in strategy_names
                     )
                     continue
-                for spec in specs[entry.url_id]:
-                    judge: Judge = partial(judge_with, spec, _id_map(spec))
+                rules = rules_by_url[entry.url_id]
+                for spec, ids in zip(specs[entry.url_id], ids_by_url[entry.url_id], strict=True):
+                    judge: Judge = partial(judge_with, spec, ids, belt_rules=rules)
                     encode = partial(encode_with, spec)
-                    vertical = belt_rules_for_url(entry.url).vertical_construction
                     for name in strategy_names:
                         samples.append(
                             sample_measured(
@@ -264,7 +273,7 @@ def collect(
                                 strategy=name,
                                 budget_s=budget,
                                 trial=trial,
-                                attempt=isolated_attempt(_LayoutCall(name, vertical, spec, budget)),
+                                attempt=isolated_attempt(_LayoutCall(name, rules, spec, budget)),
                                 judge=judge,
                                 encode=encode,
                                 power=True,

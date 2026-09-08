@@ -24,7 +24,8 @@ from ortools.sat.python import cp_model
 
 import flab2bp.layout.freeform as freeform_module
 from flab2bp.dsp import catalog, codec, colliders, planet, rules, splitter_ports
-from flab2bp.layout import finalize, freeform, junction, last_mile, slots, validate
+from flab2bp.lab.techs import belt_rules_for_url
+from flab2bp.layout import finalize, freeform, junction, last_mile, routing_domain, slots, validate
 from flab2bp.layout.band_policy import BandPolicy, BandSelection
 from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
@@ -37,66 +38,26 @@ from flab2bp.layout.base import (
 )
 from flab2bp.layout.finalize import ProjectionNoGood
 from flab2bp.layout.freeform import (
-    _BLAME_MAX_WALL,
     _DETERMINISTIC_PACK_STRIPS,
-    _ENTRY_RING,
-    _LEVEL_TOLL,
-    _ROUTE_RING,
-    _TENTATIVE,
-    LEVELS,
     MU_DIRECT,
-    CoaterSupplyPort,
-    DirectInsertId,
     FreeformLayout,
-    Strip,
-    _astar,
     _box,
-    _bridge,
     _build,
     _build_prepared,
     _BuildResult,
-    _Canvas,
-    _canvas_span,
-    _commit_paths,
-    _connect_short_cuts,
-    _dests,
     _deterministic_pack_work,
     _direct_column_deltas,
     _direct_net_candidates,
     _direct_origin_deltas,
     _DirectCandidate,
-    _emit_strip,
     _greedy_pack,
-    _Grid,
     _height_seed,
-    _join_shard_islands,
     _machines_without_poses,
-    _make_grid,
     _merge_lanes,
-    _Net,
     _nets_between,
     _pack,
-    _pair_lanes,
-    _PathSearchResult,
-    _place_shared_external_input_trunks,
-    _Port,
-    _power_plan,
-    _prepare_routing_problem,
-    _PreparedNet,
-    _PreparedPort,
-    _PreparedRoutingProblem,
-    _proliferator_supply_tree,
-    _relink,
-    _reserve_port_access,
     _room_for_another,
-    _route_all,
-    _route_external_inputs,
-    _routing_flags,
     _shard_sinks,
-    _sink_for,
-    _source_for,
-    _tap_source,
-    _Unpowerable,
     fallback_placement,
     plan_strips,
     tie_break_cap,
@@ -116,6 +77,48 @@ from flab2bp.layout.route_feedback import (
     RouteFailureKind,
     combine_last_mile_reports,
     update_feedback,
+)
+from flab2bp.layout.routing_domain import (
+    _BLAME_MAX_WALL,
+    _ENTRY_RING,
+    _LEVEL_TOLL,
+    _ROUTE_RING,
+    _TENTATIVE,
+    LEVELS,
+    CoaterSupplyPort,
+    DirectInsertId,
+    Strip,
+    _astar,
+    _bridge,
+    _Canvas,
+    _canvas_span,
+    _commit_paths,
+    _connect_short_cuts,
+    _dests,
+    _emit_strip,
+    _Grid,
+    _join_shard_islands,
+    _make_grid,
+    _Net,
+    _pair_lanes,
+    _PathSearchResult,
+    _place_shared_external_input_trunks,
+    _Port,
+    _power_plan,
+    _prepare_routing_problem,
+    _PreparedNet,
+    _PreparedPort,
+    _PreparedRoutingProblem,
+    _proliferator_supply_tree,
+    _relink,
+    _reserve_port_access,
+    _route_all,
+    _route_external_inputs,
+    _routing_flags,
+    _sink_for,
+    _source_for,
+    _tap_source,
+    _Unpowerable,
 )
 from flab2bp.layout.sequence_alns import (
     OperatorChoice,
@@ -144,6 +147,9 @@ from flab2bp.layout.strip_variants import (
 )
 from flab2bp.spec import BeltTier, BuildSpec, MachineGroup, ProliferatorMode
 from tests.layout.conftest import one_recipe_spec
+
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+
 
 type SpecFactory = Callable[[], BuildSpec]
 
@@ -358,7 +364,7 @@ def test_prepare_routing_problem_does_not_deepcopy_buildings(
 ) -> None:
     import copy
 
-    import flab2bp.layout.freeform as freeform_module
+    from flab2bp.layout import routing_domain
 
     class DataclassParams(Protocol):
         frozen: bool
@@ -376,8 +382,8 @@ def test_prepare_routing_problem_does_not_deepcopy_buildings(
         return original(value, memo)
 
     monkeypatch.setattr(copy, "deepcopy", spy)
-    if hasattr(freeform_module, "deepcopy"):
-        monkeypatch.setattr(freeform_module, "deepcopy", spy)
+    if hasattr(routing_domain, "deepcopy"):
+        monkeypatch.setattr(routing_domain, "deepcopy", spy)
     prepared = _prepare_routing_problem(
         spec, strips, pack, policy=BandPolicy("portable"), power=False
     )
@@ -432,7 +438,7 @@ def test_lay_out_threads_one_strip_families_tuple_through_every_planner_call(
         minimum_pitch_x: Mapping[StripPoseId, int] = freeform._NO_PITCH_REQUIREMENTS,
         families: Sequence[StripFamily] | None = None,
         minimum_staged_static_clearance: Mapping[
-            freeform.StagedStaticClearanceKey,
+            routing_domain.StagedStaticClearanceKey,
             int,
         ] = freeform._NO_STAGED_STATIC_CLEARANCE,
         cancelled: Callable[[], bool] | None = None,
@@ -467,7 +473,7 @@ def test_lay_out_threads_one_strip_families_tuple_through_every_planner_call(
         minimum_pitch_x: Mapping[StripPoseId, int] = freeform._NO_PITCH_REQUIREMENTS,
         families: Sequence[StripFamily] | None = None,
         minimum_staged_static_clearance: Mapping[
-            freeform.StagedStaticClearanceKey,
+            routing_domain.StagedStaticClearanceKey,
             int,
         ] = freeform._NO_STAGED_STATIC_CLEARANCE,
         cancelled: Callable[[], bool] | None = None,
@@ -486,7 +492,7 @@ def test_lay_out_threads_one_strip_families_tuple_through_every_planner_call(
 
     monkeypatch.setattr(freeform, "_coarsen_saturated_strip_plan", recording_coarsen)
 
-    layout = FreeformLayout(band_policy=BandPolicy("portable"), workers=1)
+    layout = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=1)
     layout.lay_out(spec, time_budget_s=4.0)
 
     # The initial attempt (forced to fail), the coarsest-legal retry, and the
@@ -524,7 +530,7 @@ def test_prepared_static_access_failure_spends_no_route_budget(
         ),
     )
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_route_all",
         lambda *args, **kwargs: pytest.fail("static impossibility reached routing"),
     )
@@ -580,22 +586,22 @@ def test_prepared_budget_result_stops_before_every_emission_boundary(
     empty = DetailedRouteResult(DetailedRouteStatus.ROUTED, (), (), 0, 0)
 
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_route_external_inputs",
         lambda *_args, **_kwargs: empty,
     )
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_route_external_outputs",
         lambda *_args, **_kwargs: empty,
     )
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_route_all",
         lambda *_args, **_kwargs: evidence,
     )
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_place_power",
         lambda *_args, **_kwargs: pytest.fail("a budgeted build reached power placement"),
     )
@@ -769,11 +775,12 @@ def test_freeform_fractionator_path_emits_projection_valid_port_fanout() -> None
     spec = fractionator_spec()
 
     placement = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         workers=1,
     ).lay_out(spec, time_budget_s=4.0)
 
-    report = validate.certify(placement, spec, expect_power=True)
+    report = validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True)
     assert report.ok, "\n".join(f"{finding.check}: {finding.message}" for finding in report.errors)
     assert not [building for building in placement.buildings if catalog.is_sorter(building.item_id)]
 
@@ -783,10 +790,11 @@ def test_sequence_pair_fractionator_path_emits_projection_valid_port_fanout() ->
 
     spec = fractionator_spec()
     placement = SequencePairLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
     ).lay_out(spec, time_budget_s=4.0)
 
-    report = validate.certify(placement, spec, expect_power=True)
+    report = validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True)
     assert report.ok, "\n".join(f"{finding.check}: {finding.message}" for finding in report.errors)
     assert not [building for building in placement.buildings if catalog.is_sorter(building.item_id)]
 
@@ -952,8 +960,8 @@ def test_surplus_reuses_a_consumer_lane_when_the_combined_rate_fits() -> None:
     assert "" in _dests(lanes[0])
     assert any(destination for destination in _dests(lanes[0]))
     assert (
-        freeform._sink_demand(
-            freeform._adapt(spec),
+        routing_domain._sink_demand(
+            routing_domain._adapt(spec),
             spec,
             "refined-oil",
             lanes[0],
@@ -976,6 +984,7 @@ def test_surplus_reuses_a_consumer_lane_when_the_combined_rate_fits() -> None:
         for net in prepared.nets
     )
     placement = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         workers=DETERMINISTIC_WORKERS,
     ).lay_out(spec, time_budget_s=1.0)
@@ -1053,6 +1062,7 @@ def test_self_consuming_refined_oil_feedback_routes_and_validates(
     report = validate.certify(
         placement,
         refined_oil_feedback_spec,
+        belt_rules=_BELT_RULES,
         expect_power=False,
     )
     assert not [finding for finding in report.errors if finding.check == "flow.lane_sourced"]
@@ -1071,6 +1081,7 @@ def test_freeform_routes_self_consuming_pinned_flow(
     refined_oil_feedback_spec: BuildSpec,
 ) -> None:
     placement = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         workers=1,
     ).lay_out(
@@ -1080,6 +1091,7 @@ def test_freeform_routes_self_consuming_pinned_flow(
     assert validate.certify(
         placement,
         refined_oil_feedback_spec,
+        belt_rules=_BELT_RULES,
         expect_power=True,
     ).ok
 
@@ -1277,7 +1289,9 @@ def test_slope_limited_prepared_coater_routing_is_structured() -> None:
     if result.routing.status is DetailedRouteStatus.ROUTED:
         placement = result.placement
         assert placement is not None
-        assert not validate.certify(placement, spec, expect_power=False).errors
+        assert not validate.certify(
+            placement, spec, belt_rules=_BELT_RULES, expect_power=False
+        ).errors
     else:
         assert result.routing.failures
 
@@ -1351,7 +1365,7 @@ def test_detailed_router_groups_mixed_destination_but_not_mixed_source(
         observed.append((src_group, dst_group))
         return ()
 
-    monkeypatch.setattr(freeform, "_commit_paths", accept_paths)
+    monkeypatch.setattr(routing_domain, "_commit_paths", accept_paths)
 
     _route_all(
         canvas,
@@ -1387,7 +1401,7 @@ def test_commit_link_rejection_reroutes_the_same_net_before_emission(
         item="ore",
         net_id=net_id,
     )
-    original = freeform._commit_paths
+    original = routing_domain._commit_paths
     attempts: list[tuple[tuple[int, int, int], ...]] = []
 
     def reject_first(
@@ -1401,12 +1415,12 @@ def test_commit_link_rejection_reroutes_the_same_net_before_emission(
         *,
         source_hints: Mapping[int, Cell] | None = None,
         sink_hints: Mapping[int, Cell] | None = None,
-        failure_details: dict[int, freeform._CommitFailure] | None = None,
+        failure_details: dict[int, routing_domain._CommitFailure] | None = None,
     ) -> tuple[int, ...]:
         attempts.append(tuple(paths[0]))
         if len(attempts) == 1:
             if failure_details is not None:
-                failure_details[0] = freeform._CommitFailure(
+                failure_details[0] = routing_domain._CommitFailure(
                     cell=paths[0][0],
                     side="source",
                     blocking_indices=(),
@@ -1425,7 +1439,7 @@ def test_commit_link_rejection_reroutes_the_same_net_before_emission(
             failure_details=failure_details,
         )
 
-    monkeypatch.setattr(freeform, "_commit_paths", reject_first)
+    monkeypatch.setattr(routing_domain, "_commit_paths", reject_first)
     result = _route_all(
         canvas,
         [net],
@@ -1481,7 +1495,7 @@ def test_commit_preflight_repairs_a_routed_net_while_another_remains_stranded(
             net_id=routed_id,
         ),
     ]
-    original = freeform._commit_paths
+    original = routing_domain._commit_paths
     attempts = 0
 
     def reject_first_routed_path(
@@ -1495,13 +1509,13 @@ def test_commit_preflight_repairs_a_routed_net_while_another_remains_stranded(
         *,
         source_hints: Mapping[int, Cell] | None = None,
         sink_hints: Mapping[int, Cell] | None = None,
-        failure_details: dict[int, freeform._CommitFailure] | None = None,
+        failure_details: dict[int, routing_domain._CommitFailure] | None = None,
     ) -> tuple[int, ...]:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
             if failure_details is not None:
-                failure_details[1] = freeform._CommitFailure(
+                failure_details[1] = routing_domain._CommitFailure(
                     cell=paths[1][0],
                     side="source",
                 )
@@ -1519,7 +1533,7 @@ def test_commit_preflight_repairs_a_routed_net_while_another_remains_stranded(
             failure_details=failure_details,
         )
 
-    monkeypatch.setattr(freeform, "_commit_paths", reject_first_routed_path)
+    monkeypatch.setattr(routing_domain, "_commit_paths", reject_first_routed_path)
     result = _route_all(
         canvas,
         nets,
@@ -1588,7 +1602,7 @@ def test_route_feedback_preflight_commit_link_retains_exact_endpoint_evidence(
         item="ore",
         net_id=net_id,
     )
-    original = freeform._commit_paths
+    original = routing_domain._commit_paths
 
     def reject_preflight(
         attempt_canvas: _Canvas,
@@ -1601,11 +1615,11 @@ def test_route_feedback_preflight_commit_link_retains_exact_endpoint_evidence(
         *,
         source_hints: Mapping[int, Cell] | None = None,
         sink_hints: Mapping[int, Cell] | None = None,
-        failure_details: dict[int, freeform._CommitFailure] | None = None,
+        failure_details: dict[int, routing_domain._CommitFailure] | None = None,
     ) -> tuple[int, ...]:
         if attempt_canvas is not canvas:
             if failure_details is not None:
-                failure_details[0] = freeform._CommitFailure(
+                failure_details[0] = routing_domain._CommitFailure(
                     cell=paths[0][0],
                     side="source",
                 )
@@ -1623,7 +1637,7 @@ def test_route_feedback_preflight_commit_link_retains_exact_endpoint_evidence(
             failure_details=failure_details,
         )
 
-    monkeypatch.setattr(freeform, "_commit_paths", reject_preflight)
+    monkeypatch.setattr(routing_domain, "_commit_paths", reject_preflight)
     result = _route_all(
         canvas,
         [net],
@@ -1721,7 +1735,7 @@ def test_external_route_world_collision_commits_no_prefix(
     before_buildings = tuple(canvas.buildings)
     before_blocked = dict(canvas.blocked)
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_straight_to_edge",
         lambda _canvas, _port, _bounds: [(0, 0, 0), (1, 0, 0)],
     )
@@ -1777,9 +1791,9 @@ def test_external_route_order_control_is_non_exhaustive_and_emits_no_no_good(
             return [(0, 0, 0), shared]
         return [(0, -1, 0), (1, -1, 0), (2, -1, 0)]
 
-    monkeypatch.setattr(freeform, "_straight_to_edge", order_sensitive_path)
+    monkeypatch.setattr(routing_domain, "_straight_to_edge", order_sensitive_path)
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_astar",
         lambda *_args, **_kwargs: _PathSearchResult(
             None,
@@ -1843,7 +1857,7 @@ def test_elevated_external_port_bypasses_ground_fast_path_and_routes_a_ramp(
         )
 
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_straight_to_edge",
         lambda *_args, **_kwargs: pytest.fail(
             "ground-only straight fast path used for elevated port"
@@ -2142,15 +2156,15 @@ def test_direct_net_candidates_adapt_the_spec_once(
 ) -> None:
     spec = two_stage_spec()
     strips = list(_direct_flow_order_strips())
-    adapt = freeform._adapt
+    adapt = routing_domain._adapt
     calls = 0
 
-    def counted(candidate: BuildSpec) -> dict[str, freeform._Group]:
+    def counted(candidate: BuildSpec) -> dict[str, routing_domain._Group]:
         nonlocal calls
         calls += 1
         return adapt(candidate)
 
-    monkeypatch.setattr(freeform, "_adapt", counted)
+    monkeypatch.setattr(routing_domain, "_adapt", counted)
 
     assert _direct_net_candidates(strips, spec)
     assert calls == 1
@@ -2307,15 +2321,15 @@ def test_direct_net_candidate_memo_reuses_one_adapted_spec(
     second_spec = spray_domain_spec(clean=True, sprayed=True)
     second_strips = plan_strips(second_spec, strip_len=6)
     expected = _direct_net_candidates(strips, first_spec)
-    adapt = freeform._adapt
+    adapt = routing_domain._adapt
     calls = 0
 
-    def counted(candidate: BuildSpec) -> dict[str, freeform._Group]:
+    def counted(candidate: BuildSpec) -> dict[str, routing_domain._Group]:
         nonlocal calls
         calls += 1
         return adapt(candidate)
 
-    monkeypatch.setattr(freeform, "_adapt", counted)
+    monkeypatch.setattr(routing_domain, "_adapt", counted)
     memo = freeform.DirectCandidateMemo()
 
     assert _direct_net_candidates(strips, first_spec, memo=memo)
@@ -2410,7 +2424,7 @@ def test_direct_origin_deltas_memo_serves_value_equal_strips() -> None:
 def _coater_strip_with_variant() -> Strip:
     """A sprayed strip whose realized pose materializes Coater clearance keys."""
     strips = plan_strips(proliferated_spec())
-    return next(strip for strip in strips if freeform._staged_static_clearance_keys(strip))
+    return next(strip for strip in strips if routing_domain._staged_static_clearance_keys(strip))
 
 
 @pytest.mark.usefixtures("off_arm")
@@ -2421,20 +2435,20 @@ def test_staged_static_clearance_keys_memo_is_transparent() -> None:
     # `clearance_keys` up front) -- this clear is not cosmetic isolation the
     # autouse fixture already gives; it removes THAT side effect before this
     # test's own transparency assertions below start counting entries.
-    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
+    routing_domain._STAGED_CLEARANCE_KEYS_MEMO.clear()
 
-    keys = freeform._staged_static_clearance_keys(strip)
+    keys = routing_domain._staged_static_clearance_keys(strip)
     assert keys
-    assert freeform._STAGED_CLEARANCE_KEYS_MEMO
+    assert routing_domain._STAGED_CLEARANCE_KEYS_MEMO
 
     twin = replace(strip)
     assert twin is not strip
-    assert freeform._staged_static_clearance_keys(twin) == keys
-    assert len(freeform._STAGED_CLEARANCE_KEYS_MEMO) == 1
+    assert routing_domain._staged_static_clearance_keys(twin) == keys
+    assert len(routing_domain._STAGED_CLEARANCE_KEYS_MEMO) == 1
 
-    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
-    assert freeform._staged_static_clearance_keys(strip) == keys
-    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
+    routing_domain._STAGED_CLEARANCE_KEYS_MEMO.clear()
+    assert routing_domain._staged_static_clearance_keys(strip) == keys
+    routing_domain._STAGED_CLEARANCE_KEYS_MEMO.clear()
 
 
 def test_staged_static_clearance_keys_memo_skips_unsprayed_strips() -> None:
@@ -2446,10 +2460,10 @@ def test_staged_static_clearance_keys_memo_skips_unsprayed_strips() -> None:
     # `plan_strips` itself populates the memo for every strip it plans (it
     # computes `clearance_keys` up front), so this clear removes THAT side
     # effect before the assertion below checks the memo stays empty.
-    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
+    routing_domain._STAGED_CLEARANCE_KEYS_MEMO.clear()
 
-    assert freeform._staged_static_clearance_keys(unsprayed) == frozenset()
-    assert not freeform._STAGED_CLEARANCE_KEYS_MEMO
+    assert routing_domain._staged_static_clearance_keys(unsprayed) == frozenset()
+    assert not routing_domain._STAGED_CLEARANCE_KEYS_MEMO
 
 
 class _FieldRecordingStrip:
@@ -2587,20 +2601,22 @@ def test_staged_clearance_key_classifies_every_strip_field() -> None:
     # memo for every strip it plans -- without this clear the call below could
     # hit that pre-existing value-equal entry and never run the uncached body
     # for the recorder, under-reporting the fields it actually touches.
-    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
-    keys = freeform._staged_static_clearance_keys(cast(Strip, cast(object, recorder)))
-    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
+    routing_domain._STAGED_CLEARANCE_KEYS_MEMO.clear()
+    keys = routing_domain._staged_static_clearance_keys(cast(Strip, cast(object, recorder)))
+    routing_domain._STAGED_CLEARANCE_KEYS_MEMO.clear()
 
-    assert keys == freeform._staged_static_clearance_keys(strip)
-    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
+    assert keys == routing_domain._staged_static_clearance_keys(strip)
+    routing_domain._STAGED_CLEARANCE_KEYS_MEMO.clear()
     assert {field.name for field in dataclasses.fields(Strip)} == (
-        freeform._STAGED_CLEARANCE_KEY_FIELDS | freeform._UNREAD_BY_STAGED_CLEARANCE
+        routing_domain._STAGED_CLEARANCE_KEY_FIELDS | routing_domain._UNREAD_BY_STAGED_CLEARANCE
     )
-    assert not (freeform._STAGED_CLEARANCE_KEY_FIELDS & freeform._UNREAD_BY_STAGED_CLEARANCE)
+    assert not (
+        routing_domain._STAGED_CLEARANCE_KEY_FIELDS & routing_domain._UNREAD_BY_STAGED_CLEARANCE
+    )
     # ``cargo_domain`` and ``physical_variant`` are the gate; ``machine_row``,
     # ``in_lanes`` and ``row_of_input`` are derived properties/methods, not
     # ``Strip`` fields -- all five are read but none is part of the key.
-    assert recorder.read == freeform._STAGED_CLEARANCE_KEY_FIELDS | {
+    assert recorder.read == routing_domain._STAGED_CLEARANCE_KEY_FIELDS | {
         "cargo_domain",
         "physical_variant",
         "machine_row",
@@ -2916,6 +2932,7 @@ class TestPlanStrips:
         strips = plan_strips(spec, strip_len=6)
         assert len(strips[0].in_below) == 1, "the fourth ingredient must go below"
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=0.5)
         report = validate.validate(p, expect_power=True)
@@ -3229,6 +3246,7 @@ class TestPlacementProperties:
     ) -> None:
         spec = spec_fn()
         placement = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy(_LEGACY_BAND_BY_SPEC_LABEL[spec.label]),
         ).lay_out(spec, time_budget_s=1.0)
         tiles = blocking_tiles(placement)
@@ -3283,6 +3301,7 @@ class TestProliferationForbidsDirectInsertion:
     def test_belt_required_edges_are_never_direct_inserted(self) -> None:
         spec = proliferated_spec()
         layout = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         )
         p = layout.lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
@@ -3295,6 +3314,7 @@ class TestProliferationForbidsDirectInsertion:
         the previous test would prove nothing about the constraint.
         """
         layout = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         )
         p = layout.lay_out(two_stage_spec(), time_budget_s=0.5)
@@ -3303,6 +3323,7 @@ class TestProliferationForbidsDirectInsertion:
     def test_the_proliferated_spec_still_validates(self) -> None:
         """A silently under-producing build pastes cleanly, so the judge matters."""
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(
             proliferated_spec(),
@@ -3741,7 +3762,7 @@ def test_bridge_emits_a_source_tail_to_destination_head_alignment() -> None:
     assert canvas.buildings[-1].x == 5
 
 
-def _forced_direct_pack(strips: list[Strip], spec: BuildSpec) -> freeform._Pack:
+def _forced_direct_pack(strips: list[Strip], spec: BuildSpec) -> routing_domain._Pack:
     """Place one proved direct relation even when width outranks its reward."""
     candidates = _direct_net_candidates(strips, spec)
     ((source, destination), candidate) = next(iter(candidates.items()))
@@ -3759,7 +3780,7 @@ def _forced_direct_pack(strips: list[Strip], spec: BuildSpec) -> freeform._Pack:
         candidate.item,
         candidate.cargo_domain,
     )
-    return freeform._Pack(
+    return routing_domain._Pack(
         at=origins,
         width=max(origins[index][0] + strip.width for index, strip in enumerate(strips)) + 1,
         height=max(origins[index][1] + strip.height for index, strip in enumerate(strips)) + 1,
@@ -3986,9 +4007,9 @@ def test_unrealized_promised_direct_is_typed_evidence_not_a_restored_net(
     spec = two_stage_spec()
     strips = list(_direct_flow_order_strips())
     pack = _forced_direct_pack(strips, spec)
-    monkeypatch.setattr(freeform, "_bridge", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(routing_domain, "_bridge", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_power_plan",
         lambda *_args, **_kwargs: pytest.fail("typed preparation failure reached power planning"),
     )
@@ -4260,9 +4281,9 @@ def test_the_window_launches_on_a_best_failing_pack_with_three_failures(
 
     def record_feedback_retry(
         _candidate: tuple[int, int],
-        pack: freeform._Pack,
+        pack: routing_domain._Pack,
         exact_no_goods: tuple[freeform.ExactPackNoGood, ...],
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         feedback_retry_cuts.extend(
             no_good
             for no_good in exact_no_goods
@@ -4599,7 +4620,7 @@ def test_a_clean_boundary_routing_is_marked_exhaustive() -> None:
     canvas, nets, core = _boundary_input_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
 
-    result = freeform._route_external_inputs(
+    result = routing_domain._route_external_inputs(
         canvas,
         nets,
         belt_id,
@@ -4615,7 +4636,7 @@ def test_a_boundary_routing_with_failures_is_not_exhaustive() -> None:
     canvas, nets, core = _boundary_input_fixture(sealed=True)
     belt_id = catalog.item_id("conveyor-belt-1")
 
-    result = freeform._route_external_inputs(
+    result = routing_domain._route_external_inputs(
         canvas,
         nets,
         belt_id,
@@ -4640,7 +4661,7 @@ def test_a_proved_cluster_marks_the_routing_exhaustive(
     canvas, nets, bounds = _one_stranded_net_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
 
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -4686,7 +4707,7 @@ def test_a_budget_failure_never_becomes_a_proof(
     canvas, nets, bounds = _one_stranded_net_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
 
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -4733,7 +4754,7 @@ def test_a_bounded_cluster_search_is_not_exhaustive(
     canvas, nets, bounds = _one_stranded_net_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
 
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -4795,9 +4816,9 @@ def test_a_proof_from_a_later_round_is_not_exhaustive_for_an_earlier_incumbent(
     #: One prime call from `_make_grid` plus round 0's own top-of-loop call.
     setup_and_round_0 = 2
     rounds_begun = 0
-    original_refresh = freeform._Grid.refresh_history
+    original_refresh = routing_domain._Grid.refresh_history
 
-    def counting_refresh(grid_self: freeform._Grid, history: Mapping[Cell, float]) -> None:
+    def counting_refresh(grid_self: routing_domain._Grid, history: Mapping[Cell, float]) -> None:
         nonlocal rounds_begun
         rounds_begun += 1
         original_refresh(grid_self, history)
@@ -4805,14 +4826,14 @@ def test_a_proof_from_a_later_round_is_not_exhaustive_for_an_earlier_incumbent(
     def fake_monotonic() -> float:
         return deadline - (0.1 if rounds_begun <= setup_and_round_0 else 100.0)
 
-    monkeypatch.setattr(freeform._Grid, "refresh_history", counting_refresh)
+    monkeypatch.setattr(routing_domain._Grid, "refresh_history", counting_refresh)
     # `time` is the same module object `freeform.py` imported (`import time`),
     # so patching it here reaches every `time.monotonic()` call inside
     # `_route_all`/`_last_mile` without accessing `time` as an (unexported)
     # attribute of the `freeform` module.
     monkeypatch.setattr(time, "monotonic", fake_monotonic)
 
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -4858,15 +4879,15 @@ def _install_injected_packs(
     pack_transform: Callable[
         [
             tuple[int, int],
-            freeform._Pack,
+            routing_domain._Pack,
             tuple[freeform.ExactPackNoGood, ...],
         ],
-        freeform._Pack,
+        routing_domain._Pack,
     ]
     | None = None,
 ) -> tuple[list[tuple[int, int]], dict[int, tuple[int, int]]]:
     packs = {
-        (height, arrangement): freeform._Pack(
+        (height, arrangement): routing_domain._Pack(
             at={
                 index: (
                     index * 10
@@ -4892,7 +4913,7 @@ def _install_injected_packs(
         height: int,
         arrangement: int,
         **kwargs: object,
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         candidate = (height, arrangement)
         seen.append(candidate)
         packed = packs[candidate]
@@ -4906,7 +4927,7 @@ def _install_injected_packs(
     def build(
         _spec: BuildSpec,
         _strips: list[Strip],
-        pack: freeform._Pack,
+        pack: routing_domain._Pack,
         **_kwargs: object,
     ) -> _BuildResult:
         assert _spec is spec
@@ -4940,8 +4961,8 @@ def _install_injected_packs(
     monkeypatch.setattr(freeform, "_build", build)
     if forbid_finalization:
         monkeypatch.setattr(
-            validate,
-            "certify",
+            finalize,
+            "_certify",
             lambda *_args, **_kwargs: pytest.fail("a budgeted build reached validation"),
         )
         monkeypatch.setattr(
@@ -4951,8 +4972,8 @@ def _install_injected_packs(
         )
     else:
         monkeypatch.setattr(
-            validate,
-            "certify",
+            finalize,
+            "_certify",
             (
                 certifier
                 if certifier is not None
@@ -4985,10 +5006,10 @@ def _sweep_after_first_routing(
     pack_transform: Callable[
         [
             tuple[int, int],
-            freeform._Pack,
+            routing_domain._Pack,
             tuple[freeform.ExactPackNoGood, ...],
         ],
-        freeform._Pack,
+        routing_domain._Pack,
     ]
     | None = None,
 ) -> tuple[Placement | None, list[tuple[int, int]], list[freeform.PackAttempt]]:
@@ -5012,6 +5033,7 @@ def _sweep_after_first_routing(
 
     attempts: list[freeform.PackAttempt] = []
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=arrangements,
         portfolio_incumbent=portfolio_incumbent,
@@ -5043,9 +5065,9 @@ def test_a_repeated_draw_becomes_a_diversification_cut_at_the_next_arrangement(
 
     def record(
         candidate: tuple[int, int],
-        pack: freeform._Pack,
+        pack: routing_domain._Pack,
         exact_no_goods: tuple[freeform.ExactPackNoGood, ...],
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         seen_cuts[candidate] = exact_no_goods
         return pack
 
@@ -5094,9 +5116,9 @@ def test_a_window_reentry_preserves_both_diversification_cuts_for_the_next_arran
 
     def record(
         candidate: tuple[int, int],
-        pack: freeform._Pack,
+        pack: routing_domain._Pack,
         exact_no_goods: tuple[freeform.ExactPackNoGood, ...],
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         seen_cuts[candidate] = exact_no_goods
         return pack
 
@@ -5114,7 +5136,7 @@ def test_a_window_reentry_preserves_both_diversification_cuts_for_the_next_arran
 
     def repair_window(
         *_args: object,
-        seed: freeform._Pack,
+        seed: routing_domain._Pack,
         exact_pack_no_goods: tuple[freeform.ExactPackNoGood, ...],
         **_kwargs: object,
     ) -> freeform._PackSolveOutcome:
@@ -5139,6 +5161,7 @@ def test_a_window_reentry_preserves_both_diversification_cuts_for_the_next_arran
     attempts: list[freeform.PackAttempt] = []
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=2,
     )._sweep(
@@ -5175,9 +5198,9 @@ def test_a_diversification_cut_is_never_taken_once_a_pack_has_wired(
 
     def record(
         candidate: tuple[int, int],
-        pack: freeform._Pack,
+        pack: routing_domain._Pack,
         exact_no_goods: tuple[freeform.ExactPackNoGood, ...],
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         seen_cuts[candidate] = exact_no_goods
         return pack
 
@@ -5224,6 +5247,7 @@ def _lay_out_with_injected_packs(
     )
     absolute_deadline = None if deadline_after is None else time.monotonic() + deadline_after
     return FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=arrangements,
     ).lay_out(
@@ -5464,7 +5488,7 @@ def test_terminal_refusal_names_completion_stage_after_every_net_wired(
     monkeypatch.setattr(FreeformLayout, "_sweep", expire_after_routing)
 
     with pytest.raises(NoValidLayout) as caught:
-        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+        FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
             two_stage_spec(),
             time_budget_s=1.0,
         )
@@ -5496,6 +5520,7 @@ def test_sweep_validates_exact_compacted_and_finalized_placement_before_completi
         _placement: Placement,
         _spec: BuildSpec,
         *,
+        belt_rules: catalog.BeltAltitudeRules,
         expect_power: bool,
         cancelled: Callable[[], bool] | None = None,
     ) -> CompactionResult:
@@ -5825,7 +5850,7 @@ def test_a_height_whose_seed_is_rejected_adds_no_candidate_totals_entry(
 
     def outline(
         strips: Sequence[Strip],
-        pack: freeform._Pack,
+        pack: routing_domain._Pack,
     ) -> tuple[int, int]:
         # A zero-width core: `frame_candidates` refuses it outright, which is
         # the sweep's "no frame can hold this height" path.
@@ -6062,9 +6087,9 @@ def test_feedback_retry_does_not_reroute_the_same_assignment(
 
     def enforce_retry_exclusion(
         candidate: tuple[int, int],
-        pack: freeform._Pack,
+        pack: routing_domain._Pack,
         exact_no_goods: tuple[freeform.ExactPackNoGood, ...],
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         if candidate != (20, 1):
             return pack
         excluded.extend(
@@ -6325,7 +6350,7 @@ def test_fifteen_strip_pack_uses_reproducible_solver_budget(
 ) -> None:
     base = plan_strips(two_stage_spec())
     strips = [base[index % len(base)] for index in range(15)]
-    seed = freeform._Pack(
+    seed = routing_domain._Pack(
         at={index: (0, 0) for index in range(len(strips))},
         width=20,
         height=20,
@@ -6351,6 +6376,7 @@ def test_fifteen_strip_pack_uses_reproducible_solver_budget(
     monkeypatch.setattr(freeform, "_pack", pack)
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         workers=8,
         arrangements=1,
@@ -6368,7 +6394,7 @@ def test_route_aware_height_order_preserves_exact_candidate_set(
     original_heights = (20, 40, 30)
     widths = {20: 50, 40: 35, 30: 35}
     seeds = {
-        height: freeform._Pack(
+        height: routing_domain._Pack(
             at={index: (index * 10, 0) for index in range(len(strips))},
             width=widths[height],
             height=height,
@@ -6381,9 +6407,9 @@ def test_route_aware_height_order_preserves_exact_candidate_set(
     def pack(
         *_args: object,
         height: int,
-        seed: freeform._Pack,
+        seed: routing_domain._Pack,
         **_kwargs: object,
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         assert seed is seeds[height]
         seen.append((height, seed.width, seed.height))
         return seed
@@ -6417,6 +6443,7 @@ def test_route_aware_height_order_preserves_exact_candidate_set(
     monkeypatch.setattr(freeform, "_build", build)
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, session=OperatorSession())
@@ -6440,13 +6467,13 @@ def test_first_warm_start_substitution_is_width_bounded_and_attempt_neutral(
     spec = two_stage_spec()
     strips = plan_strips(spec)
     height = 20
-    compact = freeform._Pack(
+    compact = routing_domain._Pack(
         at={index: (index * 10, 0) for index in range(len(strips))},
         width=20,
         height=height,
         status="compact",
     )
-    seed = freeform._Pack(
+    seed = routing_domain._Pack(
         at={index: (index * 10 + 1, 0) for index in range(len(strips))},
         width=seed_width,
         height=height,
@@ -6455,10 +6482,10 @@ def test_first_warm_start_substitution_is_width_bounded_and_attempt_neutral(
     routed = _routing_failures(exhaustive=True)
     placement = Placement(buildings=(), stats={"belt_tiles": 0.0})
     pack_calls = 0
-    routed_packs: list[freeform._Pack] = []
+    routed_packs: list[routing_domain._Pack] = []
     pack_kwargs: dict[str, object] = {}
 
-    def pack(*_args: object, **kwargs: object) -> freeform._Pack:
+    def pack(*_args: object, **kwargs: object) -> routing_domain._Pack:
         nonlocal pack_calls
         pack_calls += 1
         pack_kwargs.update(kwargs)
@@ -6467,7 +6494,7 @@ def test_first_warm_start_substitution_is_width_bounded_and_attempt_neutral(
     def build(
         _spec: BuildSpec,
         _strips: list[Strip],
-        selected: freeform._Pack,
+        selected: routing_domain._Pack,
         **_kwargs: object,
     ) -> _BuildResult:
         routed_packs.append(selected)
@@ -6500,12 +6527,13 @@ def test_first_warm_start_substitution_is_width_bounded_and_attempt_neutral(
         _identity_finalizer,
     )
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, session=OperatorSession())
@@ -6533,13 +6561,13 @@ def test_proof_scoped_route_feedback_uses_only_configured_width_slack(
     spec = two_stage_spec()
     strips = plan_strips(spec)
     height = 20
-    compact = freeform._Pack(
+    compact = routing_domain._Pack(
         at={index: (index * 10, 0) for index in range(len(strips))},
         width=20,
         height=height,
         status="compact",
     )
-    alternative = freeform._Pack(
+    alternative = routing_domain._Pack(
         at={index: (index * 10 + index, 0) for index in range(len(strips))},
         width=22,
         height=height,
@@ -6556,14 +6584,14 @@ def test_proof_scoped_route_feedback_uses_only_configured_width_slack(
         *_args: object,
         arrangement: int,
         **kwargs: object,
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         calls.append({"arrangement": arrangement, **kwargs})
         return compact if arrangement == 0 else alternative
 
     def build(
         _spec: BuildSpec,
         _strips: list[Strip],
-        pack: freeform._Pack,
+        pack: routing_domain._Pack,
         **_kwargs: object,
     ) -> _BuildResult:
         routing = failed if pack is compact else routed
@@ -6582,8 +6610,8 @@ def test_proof_scoped_route_feedback_uses_only_configured_width_slack(
     monkeypatch.setattr(freeform, "_pack", pack)
     monkeypatch.setattr(freeform, "_build", build)
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(
@@ -6594,6 +6622,7 @@ def test_proof_scoped_route_feedback_uses_only_configured_width_slack(
 
     attempts: list[freeform.PackAttempt] = []
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=2,
     )._sweep(spec, strips, 1.0, attempts=attempts, session=OperatorSession())
@@ -6778,6 +6807,7 @@ def test_proof_scoped_feedback_routes_captured_output_products_at_existing_deadl
     assert len(plan_strips(spec, strip_len=6)) == 17
 
     placement = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         workers=1,
     ).lay_out(spec, time_budget_s=4.0)
@@ -6991,6 +7021,7 @@ class TestSolverActuallyRuns:
         """
         spec = two_stage_spec()
         solved = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=2.0)
         greedy = fallback_placement(spec, band_policy=BandPolicy("portable"), power=True)
@@ -7025,6 +7056,7 @@ class TestSolverActuallyRuns:
         """
         spec = fan_out_spec(consumers=4)
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("100"),
         ).lay_out(spec, time_budget_s=2.0)
         report = _full_report(p, spec)
@@ -7040,6 +7072,7 @@ class TestSolverActuallyRuns:
         """
         with pytest.raises(NoValidLayout) as exc:
             FreeformLayout(
+                belt_rules=_BELT_RULES,
                 band_policy=BandPolicy("portable"),
             ).lay_out(two_stage_spec(), time_budget_s=0.0)
         assert "packer was never asked" in exc.value.reason
@@ -7081,6 +7114,7 @@ class TestSolverActuallyRuns:
         )
         with pytest.raises(NoValidLayout) as exc:
             FreeformLayout(
+                belt_rules=_BELT_RULES,
                 band_policy=BandPolicy("portable"),
             ).lay_out(two_stage_spec(), time_budget_s=1.0)
         assert validated
@@ -7101,7 +7135,7 @@ class TestSolverActuallyRuns:
             detail="build colliders intersect",
             band=160,
         )
-        pack = freeform._Pack(
+        pack = routing_domain._Pack(
             at={0: (0, 0), 1: (8, 0)},
             width=16,
             height=8,
@@ -7124,8 +7158,8 @@ class TestSolverActuallyRuns:
         monkeypatch.setattr(freeform, "_pack", lambda *_args, **_kwargs: pack)
         monkeypatch.setattr(freeform, "_build", lambda *_args, **_kwargs: routed)
         monkeypatch.setattr(
-            validate,
-            "certify",
+            finalize,
+            "_certify",
             lambda *_args, **_kwargs: validate.Report(findings=()),
         )
 
@@ -7142,6 +7176,7 @@ class TestSolverActuallyRuns:
 
         with pytest.raises(NoValidLayout) as caught:
             FreeformLayout(
+                belt_rules=_BELT_RULES,
                 band_policy=BandPolicy("portable"),
             ).lay_out(two_stage_spec(), time_budget_s=1.0)
 
@@ -7254,6 +7289,7 @@ def test_port_driven_family_remains_directly_routable_with_pitch_mapping() -> No
 
     assert strip.physical_variant is None
     placement = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
     ).lay_out(spec, time_budget_s=4.0)
     _assert_energy_exchanger_port_routing(placement, spec)
@@ -7273,7 +7309,7 @@ def test_freeform_starts_projection_valid_without_pitch_retry(
         minimum_pitch_x: Mapping[StripPoseId, int] = freeform._NO_PITCH_REQUIREMENTS,
         families: Sequence[StripFamily] | None = None,
         minimum_staged_static_clearance: Mapping[
-            freeform.StagedStaticClearanceKey,
+            routing_domain.StagedStaticClearanceKey,
             int,
         ] = freeform._NO_STAGED_STATIC_CLEARANCE,
         cancelled: Callable[[], bool] | None = None,
@@ -7295,11 +7331,12 @@ def test_freeform_starts_projection_valid_without_pitch_retry(
     monkeypatch.setattr(freeform, "plan_strips", recording_plan_strips)
     spec = plastic_spec()
     placement = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         workers=1,
     ).lay_out(spec, time_budget_s=4.0)
 
-    report = validate.certify(placement, spec, expect_power=True)
+    report = validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True)
     assert report.ok
     assert not report.by_check("geom.collide")
     assert planned_pitches
@@ -7420,7 +7457,7 @@ def _sweep_with_pitch_feedback(
 ) -> tuple[Placement | None, list[tuple[int, int, int]], list[freeform._RefusalFinding]]:
     spec = projected_chemical_plant_spec()
     strips = plan_strips(spec, strip_len=2)
-    pack = freeform._Pack(
+    pack = routing_domain._Pack(
         at={0: (3, 4)},
         width=20,
         height=20,
@@ -7449,7 +7486,7 @@ def _sweep_with_pitch_feedback(
         height: int,
         arrangement: int,
         **_kwargs: object,
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         physical_variant = current_strips[0].physical_variant
         assert physical_variant is not None
         seen_candidates.append((height, arrangement, physical_variant.pitch_x))
@@ -7458,7 +7495,7 @@ def _sweep_with_pitch_feedback(
     def build_candidate(
         _spec: BuildSpec,
         _strips: list[Strip],
-        _pack: freeform._Pack,
+        _pack: routing_domain._Pack,
         **_kwargs: object,
     ) -> _BuildResult:
         return _BuildResult(
@@ -7523,14 +7560,15 @@ def _sweep_with_pitch_feedback(
         pitch_requirements,
     )
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(finalize, "finalize_placement", finalize_candidate)
 
     rejected: list[freeform._RefusalFinding] = []
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, rejected=rejected, session=OperatorSession())
@@ -7550,7 +7588,7 @@ def test_pitch_retry_affordability_is_decided_before_geometry_replan(
         band_policy: BandPolicy = freeform._DEFAULT_BAND_POLICY,
         minimum_pitch_x: Mapping[StripPoseId, int] = freeform._NO_PITCH_REQUIREMENTS,
         minimum_staged_static_clearance: Mapping[
-            freeform.StagedStaticClearanceKey,
+            routing_domain.StagedStaticClearanceKey,
             int,
         ] = freeform._NO_STAGED_STATIC_CLEARANCE,
         cancelled: Callable[[], bool] | None = None,
@@ -7637,7 +7675,7 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
         height: int,
         arrangement: int,
         **_kwargs: object,
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         variant = current[0].physical_variant
         assert variant is not None
         seen_candidates.append((height, arrangement, variant.pitch_x))
@@ -7646,7 +7684,7 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
     def build_candidate(
         _spec: BuildSpec,
         current: list[Strip],
-        pack: freeform._Pack,
+        pack: routing_domain._Pack,
         **_kwargs: object,
     ) -> _BuildResult:
         variant = current[0].physical_variant
@@ -7716,8 +7754,8 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
         pitch_requirements,
     )
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(finalize, "finalize_placement", finalize_candidate)
@@ -7728,6 +7766,7 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, session=OperatorSession())
@@ -7762,11 +7801,11 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
     )
     seen_pack_state: list[tuple[int, int, bool, bool]] = []
 
-    def greedy(current: list[Strip], height: int) -> freeform._Pack:
+    def greedy(current: list[Strip], height: int) -> routing_domain._Pack:
         variant = current[0].physical_variant
         assert variant is not None
         width = 20 if variant.pitch_x == 8 else 40
-        return freeform._Pack(
+        return routing_domain._Pack(
             at={0: (3, 4)},
             width=width,
             height=height,
@@ -7781,7 +7820,7 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
         feedback: FeedbackState | None,
         direct_relation_no_goods: tuple[object, ...],
         **_kwargs: object,
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         variant = current[0].physical_variant
         assert variant is not None
         seen_pack_state.append(
@@ -7803,7 +7842,7 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
     def build_candidate(
         _spec: BuildSpec,
         _strips: list[Strip],
-        pack: freeform._Pack,
+        pack: routing_domain._Pack,
         **_kwargs: object,
     ) -> _BuildResult:
         if pack.status == "pack-1":
@@ -7882,8 +7921,8 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
         pitch_requirements,
     )
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(finalize, "finalize_placement", finalize_candidate)
@@ -7894,6 +7933,7 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=2,
     )._sweep(spec, strips, 5.0, session=OperatorSession())
@@ -8158,13 +8198,13 @@ def test_projection_no_good_owned_strip_collision_learns_and_repacks(
 ) -> None:
     spec = two_stage_spec()
     strips = plan_strips(spec)
-    first = freeform._Pack(
+    first = routing_domain._Pack(
         at={0: (3, 4), 1: (11, 9)},
         width=20,
         height=20,
         status="first",
     )
-    separated = freeform._Pack(
+    separated = routing_domain._Pack(
         at={0: (3, 4), 1: (12, 9)},
         width=21,
         height=20,
@@ -8174,7 +8214,7 @@ def test_projection_no_good_owned_strip_collision_learns_and_repacks(
     seen_no_goods: list[tuple[ProjectionNoGood, ...]] = []
     seen_exact_no_goods: list[tuple[freeform.ExactPackNoGood, ...]] = []
 
-    def pack_retry(*_args: object, **kwargs: object) -> freeform._Pack:
+    def pack_retry(*_args: object, **kwargs: object) -> routing_domain._Pack:
         raw_no_goods = kwargs.get("projection_no_goods", ())
         if not isinstance(raw_no_goods, tuple):
             raise AssertionError("projection_no_goods must be a tuple")
@@ -8191,7 +8231,7 @@ def test_projection_no_good_owned_strip_collision_learns_and_repacks(
     def build(
         _spec: BuildSpec,
         _strips: list[Strip],
-        pack: freeform._Pack,
+        pack: routing_domain._Pack,
         **_kwargs: object,
     ) -> _BuildResult:
         buildings = tuple(
@@ -8243,8 +8283,8 @@ def test_projection_no_good_owned_strip_collision_learns_and_repacks(
     monkeypatch.setattr(freeform, "_pack", pack_retry)
     monkeypatch.setattr(freeform, "_build", build)
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(finalize, "finalize_placement", finalize_projection)
@@ -8255,6 +8295,7 @@ def test_projection_no_good_owned_strip_collision_learns_and_repacks(
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, session=OperatorSession())
@@ -8307,7 +8348,7 @@ def test_projection_same_strip_and_unowned_failures_create_no_cut() -> None:
         )
         for index in range(2)
     ]
-    pack = freeform._Pack(
+    pack = routing_domain._Pack(
         at={0: (3, 4), 1: (11, 9)},
         width=20,
         height=20,
@@ -8868,7 +8909,7 @@ def test_pack_window_pins_one_worker_and_a_deterministic_work_bound(
 def _pinned_exact_no_good(
     strips: list[Strip],
     height: int,
-    pack: freeform._Pack,
+    pack: routing_domain._Pack,
 ) -> freeform.ExactPackNoGood:
     return freeform.ExactPackNoGood(
         height=height,
@@ -9158,7 +9199,7 @@ def test_a_cluster_no_good_guard_reads_content_origins_not_box_origins() -> None
     assert "cluster_ng" in str(built.model.Proto())
 
 
-def _channelled_row_pack() -> tuple[freeform._Pack, list[Strip], int]:
+def _channelled_row_pack() -> tuple[routing_domain._Pack, list[Strip], int]:
     """A hand-built pack: three boxes abutting in one west-to-east row.
 
     The three west channels are 0, 1 and 2, so the box origins differ from the
@@ -9175,7 +9216,7 @@ def _channelled_row_pack() -> tuple[freeform._Pack, list[Strip], int]:
     base = _three_unit_strips()
     strips = [base[0], replace(base[1], west_channel=1), replace(base[2], west_channel=2)]
     assert [freeform._box(strip) for strip in strips] == [(2, 6), (3, 2), (4, 4)]
-    pack = freeform._Pack(
+    pack = routing_domain._Pack(
         at={0: (0, 0), 1: (3, 0), 2: (7, 0)},
         width=9,
         height=6,
@@ -9314,7 +9355,7 @@ def _brute_junction_projection_frames(
     occupied: tuple[int, int, int, int],
     limit: tuple[int, int, int, int],
     policy: BandPolicy,
-) -> tuple[freeform._JunctionProjectionFrame, ...]:
+) -> tuple[routing_domain._JunctionProjectionFrame, ...]:
     """Four-edge oracle deduplicated by physical transform at first encounter."""
     occupied_min_x, occupied_min_y, occupied_max_x, occupied_max_y = occupied
     limit_min_x, limit_min_y, limit_max_x, limit_max_y = limit
@@ -9378,7 +9419,7 @@ def _brute_junction_projection_frames(
                             for anchor in band.anchors(candidate.frame.height):
                                 projections.setdefault((segments, anchor), None)
     return tuple(
-        freeform._JunctionProjectionFrame(
+        routing_domain._JunctionProjectionFrame(
             bounds,
             candidate,
             tuple(
@@ -9396,7 +9437,7 @@ def _brute_junction_projection_frames(
 
 
 def _physical_projection_frames(
-    frames: Sequence[freeform._JunctionProjectionFrame],
+    frames: Sequence[routing_domain._JunctionProjectionFrame],
 ) -> dict[tuple[bool, int], frozenset[tuple[int, int]]]:
     physical: dict[tuple[bool, int], set[tuple[int, int]]] = {}
     for frame in frames:
@@ -9412,7 +9453,7 @@ def _physical_projection_frames(
 
 
 def _ordered_projection_frames(
-    frames: Sequence[freeform._JunctionProjectionFrame],
+    frames: Sequence[routing_domain._JunctionProjectionFrame],
 ) -> tuple[
     tuple[
         bool,
@@ -9453,13 +9494,13 @@ def test_junction_projection_frames_match_four_edge_brute_oracle(
     policy: BandPolicy,
 ) -> None:
     expected = _brute_junction_projection_frames(occupied, limit, policy)
-    actual = freeform._junction_projection_frames(occupied, limit, policy)
+    actual = routing_domain._junction_projection_frames(occupied, limit, policy)
 
     assert _ordered_projection_frames(actual) == _ordered_projection_frames(expected)
 
 
 def test_junction_projection_frames_preserve_legacy_first_witness() -> None:
-    frames = freeform._junction_projection_frames(
+    frames = routing_domain._junction_projection_frames(
         (0, 0, 0, 0),
         (-1, -1, 1, 1),
         BandPolicy("portable"),
@@ -9489,7 +9530,7 @@ def test_junction_projection_frame_order_matches_randomized_small_brute_oracle()
         policy = BandPolicy(randomizer.choice(("portable", "100")))
 
         expected = _brute_junction_projection_frames(occupied, limit, policy)
-        actual = freeform._junction_projection_frames(occupied, limit, policy)
+        actual = routing_domain._junction_projection_frames(occupied, limit, policy)
 
         assert _ordered_projection_frames(actual) == _ordered_projection_frames(expected)
 
@@ -9524,7 +9565,7 @@ def test_junction_projection_frame_work_is_output_sensitive(
 
     def measured(size: int) -> tuple[int, int]:
         before = candidate_calls
-        frames = freeform._junction_projection_frames(
+        frames = routing_domain._junction_projection_frames(
             (0, 0, 0, 0),
             (-(size // 2 - 1), -(size // 2 - 1), size // 2, size // 2),
             BandPolicy("portable"),
@@ -9568,19 +9609,19 @@ def test_cleanup_survivor_cache_is_scoped_to_complete_candidate_geometry(
         return (owner, 0, owner, 0)
 
     monkeypatch.setattr(finalize, "_cleanup_survivor_bounds", survivor_bounds)
-    cache = freeform._StagedStaticCache()
+    cache = routing_domain._StagedStaticCache()
 
-    assert freeform._cached_cleanup_survivor_bounds(
+    assert routing_domain._cached_cleanup_survivor_bounds(
         cache,
         first,
         cancelled=lambda: False,
     ) == (1, 0, 1, 0)
-    assert freeform._cached_cleanup_survivor_bounds(
+    assert routing_domain._cached_cleanup_survivor_bounds(
         cache,
         first,
         cancelled=lambda: False,
     ) == (1, 0, 1, 0)
-    assert freeform._cached_cleanup_survivor_bounds(
+    assert routing_domain._cached_cleanup_survivor_bounds(
         cache,
         second,
         cancelled=lambda: False,
@@ -9616,8 +9657,8 @@ def test_cleanup_survivor_cache_omits_none_for_legacy_callback(
         legacy_survivor_bounds,
     )
 
-    bounds = freeform._cached_cleanup_survivor_bounds(
-        freeform._StagedStaticCache(),
+    bounds = routing_domain._cached_cleanup_survivor_bounds(
+        routing_domain._StagedStaticCache(),
         buildings,
     )
 
@@ -9649,13 +9690,13 @@ def test_prospective_projection_matches_finalizer_for_exact_ownerless_pair() -> 
     )
     placement = Placement(buildings=tuple(buildings))
     policy = BandPolicy("portable")
-    frames = freeform._junction_projection_frames(
+    frames = routing_domain._junction_projection_frames(
         placement.bounds,
         placement.bounds,
         policy,
     )
 
-    prospective = freeform._prospective_static_failure(
+    prospective = routing_domain._prospective_static_failure(
         (
             (181, placement.buildings[181]),
             (255, placement.buildings[255]),
@@ -9686,12 +9727,12 @@ def test_projected_obstacle_gate_preserves_exact_candidate_verdicts() -> None:
         width=chemical.width,
         height=chemical.height,
     )
-    frames = freeform._junction_projection_frames(
+    frames = routing_domain._junction_projection_frames(
         (0, 0, 30, 5),
         (0, 0, 30, 5),
         BandPolicy("portable"),
     )
-    obstacle_index = freeform._ProjectedObstacleIndex.build(((181, base),))
+    obstacle_index = routing_domain._ProjectedObstacleIndex.build(((181, base),))
 
     for x in (0, 2, 5, 20):
         candidate = PlacedBuilding(
@@ -9702,14 +9743,14 @@ def test_projected_obstacle_gate_preserves_exact_candidate_verdicts() -> None:
             width=tower.width,
             height=tower.height,
         )
-        exact = freeform._prospective_static_failure(
+        exact = routing_domain._prospective_static_failure(
             ((181, base), (255, candidate)),
             frames,
             candidate_index=255,
         )
         peers = obstacle_index.candidates(candidate, frames)
         gated = (
-            freeform._prospective_static_failure(
+            routing_domain._prospective_static_failure(
                 (
                     *((index, base) for index in peers),
                     (255, candidate),
@@ -9748,13 +9789,13 @@ def test_prospective_static_cache_reuses_only_the_immutable_base(
         )
         for x in (20, 25)
     )
-    frames = freeform._junction_projection_frames(
+    frames = routing_domain._junction_projection_frames(
         (0, 0, 30, 5),
         (0, 0, 30, 5),
         BandPolicy("portable"),
     )
     expected = tuple(
-        freeform._prospective_static_failure(
+        routing_domain._prospective_static_failure(
             ((181, base), (255, candidate)),
             frames,
             candidate_index=255,
@@ -9775,9 +9816,9 @@ def test_prospective_static_cache_reuses_only_the_immutable_base(
         return original(building, bounds=bounds, candidate=candidate)
 
     monkeypatch.setattr(finalize, "materialize_frame_building", counted)
-    cache = freeform._StagedStaticCache()
+    cache = routing_domain._StagedStaticCache()
     actual = tuple(
-        freeform._prospective_static_failure(
+        routing_domain._prospective_static_failure(
             ((181, base), (255, candidate)),
             frames,
             candidate_index=255,
@@ -9822,12 +9863,12 @@ def test_prospective_static_deadline_unwinds_inside_materialization_without_cach
         ),
     )
     placement = Placement(buildings=tuple(building for _index, building in buildings))
-    frames = freeform._junction_projection_frames(
+    frames = routing_domain._junction_projection_frames(
         placement.bounds,
         placement.bounds,
         BandPolicy("portable"),
     )
-    cache = freeform._StagedStaticCache()
+    cache = routing_domain._StagedStaticCache()
     checks = 0
 
     def cancelled() -> bool:
@@ -9835,8 +9876,8 @@ def test_prospective_static_deadline_unwinds_inside_materialization_without_cach
         checks += 1
         return checks >= 4
 
-    with pytest.raises(freeform._PreparationDeadline):
-        freeform._prospective_static_failure(
+    with pytest.raises(routing_domain._PreparationDeadline):
+        routing_domain._prospective_static_failure(
             buildings,
             frames,
             candidate_index=255,
@@ -9870,7 +9911,7 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
         "build colliders intersect",
         100,
     )
-    exact_retry_evidence = freeform._exact_retry_evidence(
+    exact_retry_evidence = routing_domain._exact_retry_evidence(
         "power",
         failure,
         {
@@ -9880,7 +9921,7 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
     )
     assert exact_retry_evidence is not None
 
-    def pack_retry(*_args: object, **kwargs: object) -> freeform._Pack:
+    def pack_retry(*_args: object, **kwargs: object) -> routing_domain._Pack:
         no_goods = kwargs.get("exact_pack_no_goods", ())
         assert isinstance(no_goods, tuple)
         assert all(isinstance(item, freeform.ExactPackNoGood) for item in no_goods)
@@ -9890,7 +9931,7 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
     def build(
         _spec: BuildSpec,
         _strips: list[Strip],
-        pack: freeform._Pack,
+        pack: routing_domain._Pack,
         **_kwargs: object,
     ) -> _BuildResult:
         if pack is first:
@@ -9920,8 +9961,8 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
     monkeypatch.setattr(freeform, "_pack", pack_retry)
     monkeypatch.setattr(freeform, "_build", build)
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(
@@ -9931,6 +9972,7 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, session=OperatorSession())
@@ -9956,16 +9998,16 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
 
 @pytest.mark.usefixtures("off_arm")
 def test_plan_strips_preselects_projection_risk_clearance_for_direct_preparation() -> None:
-    freeform._staged_static_preclearance_proved.cache_clear()
+    routing_domain._staged_static_preclearance_proved.cache_clear()
     spec = proliferated_spec()
     strips = plan_strips(spec)
     risky = [
         (strip, relation)
         for strip in strips
-        for relation in freeform._staged_static_clearance_keys(
+        for relation in routing_domain._staged_static_clearance_keys(
             replace(strip, west_channel=freeform._COATER_WEST_CHANNEL)
         )
-        if freeform._staged_static_preclearance_proved(
+        if routing_domain._staged_static_preclearance_proved(
             relation,
             BandPolicy("portable"),
         )
@@ -9992,15 +10034,15 @@ def test_plan_time_preclearance_preserves_candidate_height_schedule(
 ) -> None:
     spec = band_160_all_products_spec()
     precleared = plan_strips(spec)
-    freeform._staged_static_preclearance_proved.cache_clear()
+    routing_domain._staged_static_preclearance_proved.cache_clear()
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_staged_static_relation_projection_risks",
         lambda relations, _policy: tuple(False for _relation in relations),
     )
     ordinary = plan_strips(spec)
     monkeypatch.undo()
-    freeform._staged_static_preclearance_proved.cache_clear()
+    routing_domain._staged_static_preclearance_proved.cache_clear()
 
     assert freeform._candidate_heights(precleared) == freeform._candidate_heights(ordinary)
 
@@ -10030,12 +10072,12 @@ def test_proved_clean_same_strip_relation_skips_only_its_redundant_projection(
     other_owner = replace(peer, owner_strip=1)
     risky = replace(peer, x=2)
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_staged_static_relation_projection_risk",
         lambda relation, _policy: relation.delta_x == 2,
     )
 
-    retained = freeform._staged_static_projection_peers(
+    retained = routing_domain._staged_static_projection_peers(
         (peer, other_owner, risky),
         coater,
         owner_strip=0,
@@ -10049,19 +10091,19 @@ def test_proved_clean_same_strip_relation_skips_only_its_redundant_projection(
 def test_plan_time_projection_risks_are_batched_and_cached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    freeform._staged_static_preclearance_proved.cache_clear()
-    batches: list[tuple[freeform.StagedStaticClearanceKey, ...]] = []
-    original = freeform._staged_static_relation_projection_risks_uncached
+    routing_domain._staged_static_preclearance_proved.cache_clear()
+    batches: list[tuple[routing_domain.StagedStaticClearanceKey, ...]] = []
+    original = routing_domain._staged_static_relation_projection_risks_uncached
 
     def counted(
-        relations: Sequence[freeform.StagedStaticClearanceKey],
+        relations: Sequence[routing_domain.StagedStaticClearanceKey],
         policy: BandPolicy,
     ) -> tuple[bool, ...]:
         batches.append(tuple(relations))
         return original(relations, policy)
 
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_staged_static_relation_projection_risks_uncached",
         counted,
     )
@@ -10070,7 +10112,7 @@ def test_plan_time_projection_risks_are_batched_and_cached(
     first = plan_strips(spec)
     second = plan_strips(spec)
     monkeypatch.undo()
-    freeform._staged_static_preclearance_proved.cache_clear()
+    routing_domain._staged_static_preclearance_proved.cache_clear()
     proved = tuple(relation for batch in batches for relation in batch)
 
     assert first == second
@@ -10083,9 +10125,9 @@ def test_static_clearance_requirement_regenerates_a_distinct_lane_variant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spec = proliferated_spec()
-    freeform._staged_static_preclearance_proved.cache_clear()
+    routing_domain._staged_static_preclearance_proved.cache_clear()
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_staged_static_relation_projection_risks",
         lambda relations, _policy: tuple(False for _relation in relations),
     )
@@ -10093,7 +10135,7 @@ def test_static_clearance_requirement_regenerates_a_distinct_lane_variant(
     selected = next(strip for strip in ordinary if "iron-ingot" in strip.in_lanes)
     assert selected.physical_variant is not None
     pose_id = strip_pose_id(selected.physical_variant)
-    relation = next(iter(freeform._staged_static_clearance_keys(selected)))
+    relation = next(iter(routing_domain._staged_static_clearance_keys(selected)))
     before_identity = selected.staged_static_variant_id
 
     extended = plan_strips(
@@ -10108,7 +10150,7 @@ def test_static_clearance_requirement_regenerates_a_distinct_lane_variant(
         if strip.family_id == selected.family_id and strip.machine_start == selected.machine_start
     )
     monkeypatch.undo()
-    freeform._staged_static_preclearance_proved.cache_clear()
+    routing_domain._staged_static_preclearance_proved.cache_clear()
 
     assert replacement.west_channel == selected.west_channel + 1
     assert _box(replacement)[0] == _box(selected)[0] + 1
@@ -10138,7 +10180,7 @@ def test_staged_static_terminal_exhaustion_is_bounded_across_distinct_assignment
         *,
         height: int,
         **kwargs: object,
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         no_goods = kwargs.get("exact_pack_no_goods", ())
         assert isinstance(no_goods, tuple)
         assert all(isinstance(no_good, freeform.ExactPackNoGood) for no_good in no_goods)
@@ -10163,22 +10205,22 @@ def test_staged_static_terminal_exhaustion_is_bounded_across_distinct_assignment
     def refuse(
         _spec: BuildSpec,
         current: list[Strip],
-        _pack: freeform._Pack,
+        _pack: routing_domain._Pack,
         **_kwargs: object,
     ) -> _BuildResult:
         selected_index, selected = next(
             (index, strip) for index, strip in enumerate(current) if "iron-ingot" in strip.in_lanes
         )
         seen_clearance.append(selected.west_channel)
-        relation = next(iter(freeform._staged_static_clearance_keys(selected)))
-        requirement = freeform._staged_static_clearance_requirement(
+        relation = next(iter(routing_domain._staged_static_clearance_keys(selected)))
+        requirement = routing_domain._staged_static_clearance_requirement(
             selected,
             selected_index,
             failure,
             relation,
         )
         assert requirement is not None
-        raise freeform._Unseatable(
+        raise routing_domain._Unseatable(
             "all staged-static seats collide",
             failure=failure,
             clearance_requirement=requirement,
@@ -10194,6 +10236,7 @@ def test_staged_static_terminal_exhaustion_is_bounded_across_distinct_assignment
     rejected: list[freeform._RefusalFinding] = []
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, rejected=rejected, session=OperatorSession())
@@ -10217,9 +10260,9 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
     projection_refusal_first: bool,
 ) -> None:
     spec = proliferated_spec()
-    freeform._staged_static_preclearance_proved.cache_clear()
+    routing_domain._staged_static_preclearance_proved.cache_clear()
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_staged_static_relation_projection_risks",
         lambda relations, _policy: tuple(False for _relation in relations),
     )
@@ -10245,7 +10288,7 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
         height: int,
         arrangement: int,
         **_kwargs: object,
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         selected = next(strip for strip in current if "iron-ingot" in strip.in_lanes)
         seen_candidates.append((height, arrangement, selected.west_channel))
         return replace(
@@ -10256,22 +10299,22 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
     def build_candidate(
         _spec: BuildSpec,
         current: list[Strip],
-        pack: freeform._Pack,
+        pack: routing_domain._Pack,
         **_kwargs: object,
     ) -> _BuildResult:
         selected_index, selected = next(
             (index, strip) for index, strip in enumerate(current) if "iron-ingot" in strip.in_lanes
         )
         if pack.height == 20:
-            relation = next(iter(freeform._staged_static_clearance_keys(selected)))
-            requirement = freeform._staged_static_clearance_requirement(
+            relation = next(iter(routing_domain._staged_static_clearance_keys(selected)))
+            requirement = routing_domain._staged_static_clearance_requirement(
                 selected,
                 selected_index,
                 failure,
                 relation,
             )
             assert requirement is not None
-            raise freeform._Unseatable(
+            raise routing_domain._Unseatable(
                 "all staged-static seats collide",
                 failure=failure,
                 clearance_requirement=requirement,
@@ -10307,8 +10350,8 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
     monkeypatch.setattr(freeform, "_pack", pack_candidate)
     monkeypatch.setattr(freeform, "_build", build_candidate)
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(
@@ -10318,12 +10361,13 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, session=OperatorSession())
 
     monkeypatch.undo()
-    freeform._staged_static_preclearance_proved.cache_clear()
+    routing_domain._staged_static_preclearance_proved.cache_clear()
     assert result is not None
     assert result.description == "21"
     expected = [
@@ -10355,11 +10399,11 @@ def test_exact_retry_evidence_ignores_assignment_coordinates_but_retains_relatio
         3: replace(moved[3], owner_strip=1),
     }
 
-    evidence = freeform._exact_retry_evidence("power", failure, first)
+    evidence = routing_domain._exact_retry_evidence("power", failure, first)
 
     assert evidence is not None
-    assert freeform._exact_retry_evidence("power", failure, moved) == evidence
-    assert freeform._exact_retry_evidence("power", failure, changed_relation) != evidence
+    assert routing_domain._exact_retry_evidence("power", failure, moved) == evidence
+    assert routing_domain._exact_retry_evidence("power", failure, changed_relation) != evidence
 
 
 def test_exact_retry_state_shares_one_candidate_token_across_evidence_sources() -> None:
@@ -10373,8 +10417,8 @@ def test_exact_retry_state_shares_one_candidate_token_across_evidence_sources() 
         0: PlacedBuilding(2309, 64, 0, 0, owner_strip=0),
         1: PlacedBuilding(2201, 44, 2, 0),
     }
-    power = freeform._exact_retry_evidence("power", failure, buildings)
-    seating = freeform._exact_retry_evidence("seating", failure, buildings)
+    power = routing_domain._exact_retry_evidence("power", failure, buildings)
+    seating = routing_domain._exact_retry_evidence("seating", failure, buildings)
     assert power is not None
     assert seating is not None
     first = freeform.ExactPackNoGood(
@@ -10420,7 +10464,7 @@ def _sweep_with_repeated_exact_feedback(
     )
     seen_candidates: list[tuple[int, int]] = []
     applicable_no_good_counts: list[int] = []
-    exact_retry_evidence = freeform._exact_retry_evidence(
+    exact_retry_evidence = routing_domain._exact_retry_evidence(
         "power" if source == "power" else "seating",
         failure,
         {
@@ -10437,7 +10481,7 @@ def _sweep_with_repeated_exact_feedback(
         height: int,
         arrangement: int,
         **kwargs: object,
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         exact_no_goods = kwargs.get("exact_pack_no_goods", ())
         assert isinstance(exact_no_goods, tuple)
         applicable = tuple(
@@ -10485,7 +10529,7 @@ def _sweep_with_repeated_exact_feedback(
     def build_or_refuse(
         _spec: BuildSpec,
         _strips: list[Strip],
-        pack: freeform._Pack,
+        pack: routing_domain._Pack,
         **_kwargs: object,
     ) -> _BuildResult:
         placement = Placement(
@@ -10504,13 +10548,13 @@ def _sweep_with_repeated_exact_feedback(
                 towers=(),
             )
         if source == "power":
-            raise freeform._Unpowerable(
+            raise routing_domain._Unpowerable(
                 "exact power relation failed",
                 failure=failure,
                 exact_retry_evidence=exact_retry_evidence,
             )
         if source == "seating":
-            raise freeform._Unseatable(
+            raise routing_domain._Unseatable(
                 "exact coater relation failed",
                 failure=failure,
                 exact_retry_evidence=exact_retry_evidence,
@@ -10546,8 +10590,8 @@ def _sweep_with_repeated_exact_feedback(
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(finalize, "finalize_placement", finalize_or_refuse)
@@ -10558,6 +10602,7 @@ def _sweep_with_repeated_exact_feedback(
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, session=OperatorSession())
@@ -10617,14 +10662,14 @@ def test_unaffordable_base_height_is_not_started_after_valid_candidate(
         *,
         height: int,
         **_kwargs: object,
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         seen_heights.append(height)
         return _greedy_pack(current, height)
 
     def build_candidate(
         _spec: BuildSpec,
         _strips: list[Strip],
-        pack: freeform._Pack,
+        pack: routing_domain._Pack,
         **_kwargs: object,
     ) -> _BuildResult:
         return _BuildResult(
@@ -10646,8 +10691,8 @@ def test_unaffordable_base_height_is_not_started_after_valid_candidate(
     monkeypatch.setattr(freeform, "_pack", pack_candidate)
     monkeypatch.setattr(freeform, "_build", build_candidate)
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(
@@ -10662,6 +10707,7 @@ def test_unaffordable_base_height_is_not_started_after_valid_candidate(
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, session=OperatorSession())
@@ -10728,6 +10774,7 @@ class TestPower:
 
     def test_towers_appear_in_production_layout(self) -> None:
         placement = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(two_stage_spec(), time_budget_s=0.5)
 
@@ -10735,6 +10782,7 @@ class TestPower:
 
     def test_every_powered_building_is_covered(self) -> None:
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("160"),
         ).lay_out(magnetic_ring_spec(), time_budget_s=1.0)
         report = validate.validate(p, only=["power.coverage", "power.connectivity"])
@@ -10819,7 +10867,7 @@ def test_the_infill_covers_a_splitter_the_blocks_towers_do_not_reach() -> None:
     _stand_tower(canvas, 0, 0)
     _stand_splitter(canvas, 20, 0)
 
-    sites, uncovered = freeform.plan_power_infill(canvas)
+    sites, uncovered = routing_domain.plan_power_infill(canvas)
 
     assert uncovered == ()
     assert len(sites) == 1
@@ -10830,7 +10878,7 @@ def test_the_infill_places_nothing_when_every_powered_tile_is_already_covered() 
     _stand_tower(canvas, 10, 0)
     _stand_splitter(canvas, 11, 0)
 
-    assert freeform.plan_power_infill(canvas) == ([], ())
+    assert routing_domain.plan_power_infill(canvas) == ([], ())
 
 
 def test_the_infill_never_strands_a_tower_outside_the_existing_network() -> None:
@@ -10841,7 +10889,7 @@ def test_the_infill_never_strands_a_tower_outside_the_existing_network() -> None
     _stand_tower(canvas, 0, 0)
     _stand_splitter(canvas, 380, 0)
 
-    sites, uncovered = freeform.plan_power_infill(canvas)
+    sites, uncovered = routing_domain.plan_power_infill(canvas)
 
     assert sites == []
     assert (380, 0) in uncovered
@@ -10866,7 +10914,7 @@ def test_the_infill_refuses_a_site_inside_another_nodes_keepout() -> None:
     _stand_tower(canvas, 20, 0)
     _stand_splitter(canvas, 31, 0)
 
-    sites, uncovered = freeform.plan_power_infill(canvas)
+    sites, uncovered = routing_domain.plan_power_infill(canvas)
 
     keepout = {
         (20 + dx, 0 + dy)
@@ -10929,6 +10977,7 @@ class TestProliferatorIsActuallySupplied:
     def test_some_belt_carries_the_proliferator(self) -> None:
         spec = proliferated_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
         prolif = {i for i in spec.external_inputs if i.startswith("proliferator")}
@@ -10941,6 +10990,7 @@ class TestProliferatorIsActuallySupplied:
     def test_every_coater_has_a_sorter_drawing_from_a_supply_belt(self) -> None:
         spec = proliferated_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
         report = _full_report(p, spec)
@@ -10951,6 +11001,7 @@ class TestProliferatorIsActuallySupplied:
         """A coater on some unrelated belt sprays the wrong items."""
         spec = proliferated_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
         belt_at = {(b.x, b.y, b.z): b for b in p.buildings if catalog.is_belt(b.item_id)}
@@ -10976,6 +11027,7 @@ class TestProliferatorIsActuallySupplied:
         """
         spec = proliferated_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
         assert not _full_report(p, spec).by_check("prolif.coater_supply_is_fed")
@@ -11021,6 +11073,7 @@ class TestProliferatorIsActuallySupplied:
         """The machinery must cost nothing when proliferation is off."""
         spec = two_stage_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=0.5)
         assert p.stats["spray_coaters"] == 0
@@ -11060,10 +11113,12 @@ def test_every_coater_arbiter_is_green_on_a_placed_build(placer: str) -> None:
     spec = proliferated_spec()
     if placer == "freeform":
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
     else:
         p = SequencePairLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             islands=1,
             config=SequenceSolverConfig.test(),
@@ -11093,6 +11148,7 @@ class TestSortersCanCarryTheirDemand:
         """
         spec = proliferated_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
         over = _full_report(p, spec).by_check("flow.sorter_capacity")
@@ -11125,6 +11181,7 @@ class TestRealUrlCandidate:
         ).candidates
         spec = next(candidate for candidate in candidates if candidate.label == "no-proliferator")
         placement = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("160"),
         ).lay_out(spec, time_budget_s=2.0)
         sorters = [
@@ -11275,6 +11332,7 @@ class TestProducerWithManyConsumers:
         """
         spec = fan_out_spec(4)
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("160"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=0.5)
@@ -11436,6 +11494,7 @@ class TestMixedItemLanes:
         strips = plan_strips(spec, strip_len=6)
         assert strips and all(s.flank_outputs for s in strips)
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=0.5)
         report = _full_report(p, spec)
@@ -11456,6 +11515,7 @@ class TestMixedItemLanes:
         """
         spec = six_input_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=0.5)
         labs = {i for i, b in enumerate(p.buildings) if b.item_id == catalog.item_id("matrix-lab")}
@@ -11519,6 +11579,7 @@ class TestMixedItemLanes:
         assert all(len(lane) == 1 for lane in lanes), lanes
         assert strips[0].flank_outputs, "five single-item lanes need the east face"
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=0.5)
         report = _full_report(p, spec)
@@ -11546,6 +11607,7 @@ class TestMixedItemLanes:
         """
         spec = five_input_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=0.5)
         belts = {i for i, b in enumerate(p.buildings) if catalog.is_belt(b.item_id)}
@@ -11641,7 +11703,7 @@ def _assert_energy_exchanger_port_routing(
         assert product.yaw == product_dock.facing.value
         assert product.input_to_slot == rules.BELT_PORT_DRAW_TO_SLOT
 
-    assert validate.certify(placement, spec, expect_power=True).ok
+    assert validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True).ok
 
 
 def test_an_energy_exchanger_placement_pastes_without_collisions() -> None:
@@ -11650,7 +11712,9 @@ def test_an_energy_exchanger_placement_pastes_without_collisions() -> None:
     Asked directly, with no LOW_CONFIDENCE filtering, the answer has to be none.
     """
     spec = mode_driven_spec()
-    placement = FreeformLayout(band_policy=BandPolicy("portable")).lay_out(spec, time_budget_s=4.0)
+    placement = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
+        spec, time_budget_s=4.0
+    )
     ctx = validate._context(placement, spec, None, 0, Fraction(4), True)
     assert colliders.stable_belt_collisions(validate._paste_previews(ctx)) == []
 
@@ -11734,7 +11798,9 @@ def test_a_ray_receiver_strip_is_byte_identical_after_the_approach_change() -> N
     Pin the emitted geometry so a future widening of the rule cannot drift it.
     """
     spec = _ray_receiver_spec()
-    placement = FreeformLayout(band_policy=BandPolicy("portable")).lay_out(spec, time_budget_s=4.0)
+    placement = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
+        spec, time_budget_s=4.0
+    )
     shape = [
         (b.item_id, b.x, b.y, b.z, b.yaw, b.output_obj, b.input_obj) for b in placement.buildings
     ]
@@ -11783,16 +11849,16 @@ def test_a_two_sink_exchanger_lays_out_with_one_wired_lane() -> None:
     drawing belt each, certify ok, zero collisions.
     """
     spec = _two_sink_exchanger_spec(count=3)  # count=1 does not route; see the fixture
-    placement = FreeformLayout(band_policy=BandPolicy.parse("portable")).lay_out(
-        spec, time_budget_s=4.0
-    )
+    placement = FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy.parse("portable")
+    ).lay_out(spec, time_budget_s=4.0)
     bs = placement.buildings
     exchangers = [i for i, b in enumerate(bs) if b.item_id == catalog.ENERGY_EXCHANGER_ID]
     assert exchangers
     for i in exchangers:
         drawing = [j for j, b in enumerate(bs) if b.input_obj == i]
         assert len(drawing) == 1, (i, drawing)
-    report = validate.certify(placement, spec, expect_power=True)
+    report = validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True)
     assert report.ok, report.errors
     ctx = validate._context(placement, spec, None, 0, F(4), True)
     assert colliders.stable_belt_collisions(validate._paste_previews(ctx)) == []
@@ -11801,9 +11867,9 @@ def test_a_two_sink_exchanger_lays_out_with_one_wired_lane() -> None:
 def test_a_ray_receiver_drain_is_byte_identical_after_the_lane_cap() -> None:
     """2208 is capped too: one drain port, one product, so nothing may move."""
     spec = _ray_receiver_spec()  # from Task 2 step 10
-    placement = FreeformLayout(band_policy=BandPolicy.parse("portable")).lay_out(
-        spec, time_budget_s=4.0
-    )
+    placement = FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy.parse("portable")
+    ).lay_out(spec, time_budget_s=4.0)
     shape = [
         (b.item_id, b.x, b.y, b.z, b.yaw, b.output_obj, b.input_obj) for b in placement.buildings
     ]
@@ -11849,6 +11915,7 @@ class TestModeDrivenMachines:
 
         spec = mode_driven_spec()
         placement = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=4.0)
 
@@ -11878,6 +11945,7 @@ class TestModeDrivenMachines:
         above green.
         """
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(single_recipe_spec(), time_budget_s=0.5)
         smelters = [b for b in p.buildings if b.recipe_id]
@@ -11940,6 +12008,7 @@ class TestShardedGroupsAreFedOnEveryShard:
     def test_no_shard_is_left_starving(self) -> None:
         spec = sharded_consumer_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("100"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=0.5)
@@ -11969,6 +12038,7 @@ class TestShardedGroupsAreFedOnEveryShard:
         ]
         assert len(producers) >= 2, "fixture must shard the producer"
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=0.5)
@@ -12007,8 +12077,8 @@ def test_piler_transit_cycle_is_rejected_by_router_admission() -> None:
         )
     )
     canvas = _Canvas(buildings=list(placement.buildings))
-    assert freeform._leads_back(canvas, 0, {2})
-    assert freeform._committed_path_closes_cycle(canvas, [0])
+    assert routing_domain._leads_back(canvas, 0, {2})
+    assert routing_domain._committed_path_closes_cycle(canvas, [0])
     report = validate.validate(placement, only=("belt.acyclic",), expect_power=False)
     assert any(f.check == "belt.acyclic" for f in report.errors)
 
@@ -12026,12 +12096,12 @@ def test_serial_piler_merge_stays_admissible_until_relinked_into_cycle() -> None
             _linked_belt(6, 0),
         ]
     )
-    assert not freeform._leads_back(canvas, 0, {5, 6})
-    assert not freeform._committed_path_closes_cycle(canvas, [0, 5, 6])
+    assert not routing_domain._leads_back(canvas, 0, {5, 6})
+    assert not routing_domain._committed_path_closes_cycle(canvas, [0, 5, 6])
     canvas.buildings[4] = replace(canvas.buildings[4], output_obj=5)
-    assert freeform._leads_back(canvas, 0, {5})
-    assert freeform._committed_path_closes_cycle(canvas, [5])
-    assert not freeform._committed_path_closes_cycle(canvas, [6])
+    assert routing_domain._leads_back(canvas, 0, {5})
+    assert routing_domain._committed_path_closes_cycle(canvas, [5])
+    assert not routing_domain._committed_path_closes_cycle(canvas, [6])
 
 
 def test_output_tail_nets_cross_pilers_without_crossing_cargo_domains() -> None:
@@ -12045,7 +12115,7 @@ def test_output_tail_nets_cross_pilers_without_crossing_cargo_domains() -> None:
     )
     port = _Port(0, 0, 0, 0, 0)
     output = _Net(port, port, "gear")
-    assert [net.source.belt for net in freeform._output_tail_nets(canvas, (output,))] == [2]
+    assert [net.source.belt for net in routing_domain._output_tail_nets(canvas, (output,))] == [2]
     canvas = _Canvas(
         buildings=[
             canvas.buildings[0],
@@ -12053,7 +12123,7 @@ def test_output_tail_nets_cross_pilers_without_crossing_cargo_domains() -> None:
             replace(canvas.buildings[2], carries_item="iron-ingot"),
         ]
     )
-    assert [net.source.belt for net in freeform._output_tail_nets(canvas, (output,))] == [0]
+    assert [net.source.belt for net in routing_domain._output_tail_nets(canvas, (output,))] == [0]
 
 
 class TestCommittedPathClosesCycle:
@@ -12062,31 +12132,31 @@ class TestCommittedPathClosesCycle:
     def _reference(self, canvas: _Canvas, indices: list[int]) -> bool:
         return any(
             (onward := canvas.buildings[index].output_obj) is not None
-            and freeform._leads_back(canvas, onward, {index})
+            and routing_domain._leads_back(canvas, onward, {index})
             for index in indices
         )
 
     def test_a_straight_chain_is_not_a_cycle(self) -> None:
         canvas = _Canvas(buildings=[_linked_belt(0, 1), _linked_belt(1, 2), _linked_belt(2, None)])
-        assert freeform._committed_path_closes_cycle(canvas, [0, 1, 2]) is False
+        assert routing_domain._committed_path_closes_cycle(canvas, [0, 1, 2]) is False
 
     def test_a_chain_whose_tail_feeds_its_head_is_a_cycle(self) -> None:
         canvas = _Canvas(buildings=[_linked_belt(0, 1), _linked_belt(1, 2), _linked_belt(2, 0)])
-        assert freeform._committed_path_closes_cycle(canvas, [1]) is True
+        assert routing_domain._committed_path_closes_cycle(canvas, [1]) is True
 
     def test_a_cycle_elsewhere_does_not_condemn_a_belt_off_it(self) -> None:
         # 0 -> 1 -> 2 -> 1 loops; belt 0 merely feeds the loop and is not on it.
         canvas = _Canvas(buildings=[_linked_belt(0, 1), _linked_belt(1, 2), _linked_belt(2, 1)])
-        assert freeform._committed_path_closes_cycle(canvas, [0]) is False
-        assert freeform._committed_path_closes_cycle(canvas, [2]) is True
+        assert routing_domain._committed_path_closes_cycle(canvas, [0]) is False
+        assert routing_domain._committed_path_closes_cycle(canvas, [2]) is True
 
     def test_a_self_loop_is_a_cycle(self) -> None:
         canvas = _Canvas(buildings=[_linked_belt(0, 0)])
-        assert freeform._committed_path_closes_cycle(canvas, [0]) is True
+        assert routing_domain._committed_path_closes_cycle(canvas, [0]) is True
 
     def test_a_dangling_output_index_is_not_followed(self) -> None:
         canvas = _Canvas(buildings=[_linked_belt(0, 7)])
-        assert freeform._committed_path_closes_cycle(canvas, [0]) is False
+        assert routing_domain._committed_path_closes_cycle(canvas, [0]) is False
 
     def test_splitter_branches_are_followed(self) -> None:
         # belt 0 -> splitter 1 -> belts 2 and 3 (input_obj=1); belt 3 -> belt 0.
@@ -12098,8 +12168,8 @@ class TestCommittedPathClosesCycle:
                 replace(_linked_belt(3, 0), input_obj=1),
             ]
         )
-        assert freeform._committed_path_closes_cycle(canvas, [0]) is True
-        assert freeform._committed_path_closes_cycle(canvas, [2]) is False
+        assert routing_domain._committed_path_closes_cycle(canvas, [0]) is True
+        assert routing_domain._committed_path_closes_cycle(canvas, [2]) is False
 
     def test_agrees_with_the_per_index_walk_on_random_belt_graphs(self) -> None:
         rng = random.Random(20260905)
@@ -12119,7 +12189,7 @@ class TestCommittedPathClosesCycle:
             indices = [
                 i for i in range(n) if catalog.is_belt(buildings[i].item_id) and rng.random() < 0.6
             ]
-            assert freeform._committed_path_closes_cycle(canvas, indices) == self._reference(
+            assert routing_domain._committed_path_closes_cycle(canvas, indices) == self._reference(
                 canvas, indices
             ), (buildings, indices)
 
@@ -12170,8 +12240,8 @@ class TestCanvasClone:
 class TestAltitudeProfileCache:
     def test_ramped_profile_puts_the_half_level_on_the_via_cell(self) -> None:
         path = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 0)]
-        unit = freeform._LEVEL_HEIGHT
-        assert freeform._altitude_profile(path, ramped=True) == [
+        unit = routing_domain._LEVEL_HEIGHT
+        assert routing_domain._altitude_profile(path, ramped=True) == [
             0 * unit,
             0 * unit + catalog.BELT_CLIMB_PER_TILE,
             1 * unit,
@@ -12180,19 +12250,21 @@ class TestAltitudeProfileCache:
         ]
 
     def test_consecutive_ramps_have_no_profile(self) -> None:
-        assert freeform._altitude_profile([(0, 0, 0), (1, 0, 1), (2, 0, 2)], ramped=True) is None
+        assert (
+            routing_domain._altitude_profile([(0, 0, 0), (1, 0, 1), (2, 0, 2)], ramped=True) is None
+        )
 
     def test_unramped_profile_steps_whole_levels(self) -> None:
-        unit = freeform._LEVEL_HEIGHT
-        assert freeform._altitude_profile([(0, 0, 0), (1, 0, 1)], ramped=False) == [0, unit]
+        unit = routing_domain._LEVEL_HEIGHT
+        assert routing_domain._altitude_profile([(0, 0, 0), (1, 0, 1)], ramped=False) == [0, unit]
 
     def test_callers_get_a_fresh_list_each_time(self) -> None:
         path = ((0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1))
-        first = freeform._altitude_profile(path, ramped=True)
-        second = freeform._altitude_profile(list(path), ramped=True)
+        first = routing_domain._altitude_profile(path, ramped=True)
+        second = routing_domain._altitude_profile(list(path), ramped=True)
         assert first == second and first is not second
         first.append(Fraction(99))
-        assert freeform._altitude_profile(path, ramped=True) == second
+        assert routing_domain._altitude_profile(path, ramped=True) == second
 
 
 @pytest.mark.parametrize(
@@ -12242,7 +12314,7 @@ def test_linkless_static_extension_rechecks_orthogonal_cleanup_survivors(
         bounds,
     )
 
-    observed_prefix, observed_bounds = freeform._cleanup_snapshot_with_linkless_static(
+    observed_prefix, observed_bounds = routing_domain._cleanup_snapshot_with_linkless_static(
         prefix,
         bounds,
         candidate,
@@ -12300,7 +12372,7 @@ class TestABuildingDeniesOnlyTheBandUnderItsCollider:
         all three read blocked.
         """
         top = LEVELS - 1
-        assert top * freeform._LEVEL_HEIGHT > colliders.belt_crossing_height(
+        assert top * routing_domain._LEVEL_HEIGHT > colliders.belt_crossing_height(
             catalog.building(2020).model_index
         ), "pick a shorter building: this one does not fit under the lattice"
         canvas = _Canvas()
@@ -12368,7 +12440,7 @@ class TestABuildingDeniesOnlyTheBandUnderItsCollider:
         """
         for item_id in _packable_machine_ids() | {catalog.TESLA_TOWER_ID, 2020, 2030}:
             info = catalog.building(item_id)
-            banned = set(freeform._crossing_ban_levels(self._at(item_id, 0, 0)))
+            banned = set(routing_domain._crossing_ban_levels(self._at(item_id, 0, 0)))
             placed = colliders.Placed(info.model_index, 0.0, 0.0, 0.0, 0.0)
             w, h = catalog.footprint(item_id)
             tiles = [
@@ -12377,7 +12449,7 @@ class TestABuildingDeniesOnlyTheBandUnderItsCollider:
                 for dy in range(-(h // 2) - 1, h // 2 + 2)
             ]
             for lvl in range(LEVELS):
-                z = float(lvl * freeform._LEVEL_HEIGHT)
+                z = float(lvl * routing_domain._LEVEL_HEIGHT)
                 probe = [colliders.Placed(35, dx, dy, z, 0.0) for dx, dy in tiles]
                 hits = bool(colliders.belt_crossings(probe, [placed]))
                 assert (lvl in banned) == hits, (
@@ -12396,7 +12468,7 @@ class TestABuildingDeniesOnlyTheBandUnderItsCollider:
         the model's own collider answers.
         """
         got = {
-            item_id: freeform._crossing_ban_levels(self._at(item_id, 0, 0))
+            item_id: routing_domain._crossing_ban_levels(self._at(item_id, 0, 0))
             for item_id in (2011, 2020, 2101, 2102, 2303, 2305)
         }
         assert got[2011] != got[2020], "Sorter and Splitter share a ban band"
@@ -12408,8 +12480,10 @@ class TestABuildingDeniesOnlyTheBandUnderItsCollider:
 
     def test_the_band_rises_with_the_buildings_own_altitude(self) -> None:
         """The bound is measured from the building's ground, not the world's."""
-        low = freeform._crossing_ban_levels(self._at(2011, 0, 0))
-        high = freeform._crossing_ban_levels(dataclasses.replace(self._at(2011, 0, 0), z=F(2)))
+        low = routing_domain._crossing_ban_levels(self._at(2011, 0, 0))
+        high = routing_domain._crossing_ban_levels(
+            dataclasses.replace(self._at(2011, 0, 0), z=F(2))
+        )
         assert len(high) > len(low), (
             f"a Sorter lifted to z=2 must deny more of the lattice than one on "
             f"the ground; got {low} then {high}"
@@ -12436,7 +12510,7 @@ class TestPortAccessIsReservedForEveryRole:
         c = _Port(2, 8, 0, 8, 8)
         _reserve_port_access(
             canvas,
-            freeform._port_access_inventory(
+            routing_domain._port_access_inventory(
                 [_Net(src=a, dst=b, item="x"), _Net(src=b, dst=c, item="x")]
             ).demands,
         )
@@ -12459,7 +12533,7 @@ class TestPortAccessIsReservedForEveryRole:
             canvas.add(_belt(*cell))
         reservation = _reserve_port_access(
             canvas,
-            freeform._port_access_inventory(
+            routing_domain._port_access_inventory(
                 [
                     _Net(src=source, dst=middle, item="x"),
                     _Net(src=middle, dst=sink, item="x"),
@@ -12489,7 +12563,7 @@ class TestPortAccessIsReservedForEveryRole:
         far = _Port(2, 4, 0, 4, 4)
         _reserve_port_access(
             canvas,
-            freeform._port_access_inventory(
+            routing_domain._port_access_inventory(
                 [_Net(src=p, dst=q, item="x"), _Net(src=q, dst=far, item="x")]
             ).demands,
         )
@@ -12528,7 +12602,7 @@ class TestPortAccessIsReservedForEveryRole:
         e = _Port(1, -1, -1, -1, -1)
         _reserve_port_access(
             canvas,
-            freeform._port_access_inventory(
+            routing_domain._port_access_inventory(
                 [_Net(src=e, dst=d, item="x"), _Net(src=d, dst=far, item="x")]
             ).demands,
         )
@@ -12565,7 +12639,7 @@ class TestPortAccessIsReservedForEveryRole:
         port = _Port(0, 0, 0, 0, 0)
         _reserve_port_access(
             canvas,
-            freeform._port_access_inventory([_Net(src=port, dst=far, item="x")]).demands,
+            routing_domain._port_access_inventory([_Net(src=port, dst=far, item="x")]).demands,
         )
 
         assert canvas.reserved.get((1, 0, 0)) == (0, 0, 0), (
@@ -12589,7 +12663,7 @@ class TestPortAccessIsReservedForEveryRole:
         port = _Port(0, 0, 0, 0, 0)
         _reserve_port_access(
             canvas,
-            freeform._port_access_inventory([_Net(src=port, dst=far, item="x")]).demands,
+            routing_domain._port_access_inventory([_Net(src=port, dst=far, item="x")]).demands,
         )
 
         for_port = [cell for cell, key in canvas.reserved.items() if key == (0, 0, 0)]
@@ -12598,9 +12672,9 @@ class TestPortAccessIsReservedForEveryRole:
         )
 
     def test_selected_corridors_never_share_an_exit_cell(self) -> None:
-        first = _access_demand((0, 0, 0), freeform.PortAccessKind.INTERNAL_DEPARTURE, belt=1)
-        second = _access_demand((2, 0, 0), freeform.PortAccessKind.INTERNAL_DEPARTURE, belt=2)
-        matched = freeform._match_access_corridors(
+        first = _access_demand((0, 0, 0), routing_domain.PortAccessKind.INTERNAL_DEPARTURE, belt=1)
+        second = _access_demand((2, 0, 0), routing_domain.PortAccessKind.INTERNAL_DEPARTURE, belt=2)
+        matched = routing_domain._match_access_corridors(
             (first, second),
             {
                 first: (((1, 0, 0), (1, 1, 0)),),
@@ -12632,10 +12706,10 @@ class TestPortAccessIsReservedForEveryRole:
         )
         assert _reserve_port_access(
             canvas,
-            freeform._port_access_inventory([net]).demands,
+            routing_domain._port_access_inventory([net]).demands,
         ).complete
         assert len(canvas.reserved) == 4
-        monkeypatch.setattr(freeform, "_commit_paths", lambda *_args, **_kwargs: ())
+        monkeypatch.setattr(routing_domain, "_commit_paths", lambda *_args, **_kwargs: ())
 
         result = _route_all(canvas, [net], 2001, 35, (-2, -2, 6, 2))
 
@@ -12668,7 +12742,7 @@ class TestPortAccessIsReservedForEveryRole:
 
             reservation = _reserve_port_access(
                 canvas,
-                freeform._port_access_inventory(
+                routing_domain._port_access_inventory(
                     [
                         _Net(src=source, dst=first_sink, item="hydrogen"),
                         _Net(src=blocker, dst=second_sink, item="hydrogen"),
@@ -12689,7 +12763,7 @@ class TestPortAccessIsReservedForEveryRole:
                 )
                 != (0, 0, 0)
                 and (canvas.free(candidate) or canvas.reserved.get(candidate) == (0, 0, 0))
-                for dx, dy in freeform._STEPS
+                for dx, dy in routing_domain._STEPS
             )
             return len(reservation.missing), access, usable
 
@@ -12718,7 +12792,7 @@ def test_a_middle_lane_head_in_twice_cannot_hold_its_second_corridor() -> None:
     middle = (0, 1, 0)
     reservation = _reserve_port_access(
         canvas,
-        freeform._port_access_inventory(
+        routing_domain._port_access_inventory(
             [_Net(src=far, dst=head, item="hydrogen") for head in heads],
             boundary_inputs=(("hydrogen", heads[1], None),),
         ).demands,
@@ -12729,16 +12803,16 @@ def test_a_middle_lane_head_in_twice_cannot_hold_its_second_corridor() -> None:
 
 
 def _two_ports_with_two_corridors_each() -> tuple[
-    tuple[freeform.PortAccessDemand, ...],
-    dict[freeform.PortAccessDemand, tuple[tuple[Cell, Cell], ...]],
+    tuple[routing_domain.PortAccessDemand, ...],
+    dict[routing_domain.PortAccessDemand, tuple[tuple[Cell, Cell], ...]],
 ]:
     """Two lane heads, each with two disjoint corridor options.
 
     The rank solve can serve both claims, and the tie-break then has a real
     ordering choice to polish -- the shape the boundary rematch tests use.
     """
-    first = _access_demand((0, 0, 0), freeform.PortAccessKind.BOUNDARY_ARRIVAL, belt=1)
-    second = _access_demand((4, 0, 0), freeform.PortAccessKind.BOUNDARY_ARRIVAL, belt=2)
+    first = _access_demand((0, 0, 0), routing_domain.PortAccessKind.BOUNDARY_ARRIVAL, belt=1)
+    second = _access_demand((4, 0, 0), routing_domain.PortAccessKind.BOUNDARY_ARRIVAL, belt=2)
     return (first, second), {
         first: (((1, 0, 0), (2, 0, 0)), ((0, 1, 0), (0, 2, 0))),
         second: (((3, 0, 0), (2, 0, 0)), ((4, 1, 0), (4, 2, 0))),
@@ -12757,13 +12831,13 @@ def test_corridor_tie_break_never_outruns_its_work_cap(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(cp_model.CpSolver, "solve", recording_solve)
     demands, corridors = _two_ports_with_two_corridors_each()
-    assigned = freeform._match_access_corridors(
+    assigned = routing_domain._match_access_corridors(
         demands, corridors, validate=lambda _assigned: None, deadline=time.monotonic() + 30.0
     ).assigned
     assert len(assigned) == len(demands)
     assert seen, "the matcher solved nothing"
     assert all(work > 0.0 for work, _wall in seen), seen
-    assert all(work <= freeform._ACCESS_RANK_DETERMINISTIC_WORK for work, _wall in seen), seen
+    assert all(work <= routing_domain._ACCESS_RANK_DETERMINISTIC_WORK for work, _wall in seen), seen
 
 
 def test_corridor_matcher_falls_back_to_the_rank_solution_when_polish_is_cut_short(
@@ -12782,7 +12856,7 @@ def test_corridor_matcher_falls_back_to_the_rank_solution_when_polish_is_cut_sho
 
     monkeypatch.setattr(cp_model.CpSolver, "solve", flaky_solve)
     demands, corridors = _two_ports_with_two_corridors_each()
-    assigned = freeform._match_access_corridors(
+    assigned = routing_domain._match_access_corridors(
         demands, corridors, validate=lambda _assigned: None, deadline=time.monotonic() + 30.0
     ).assigned
     assert len(assigned) == len(demands)
@@ -12932,12 +13006,12 @@ class TestProliferatorSupplyIsOneReachableTree:
     def test_portable_boundary_lends_only_the_height_needed_for_unique_roots(self) -> None:
         core = (-1, 0, 231, 144)
 
-        expanded = freeform._extend_core_for_unique_proliferator_roots(
+        expanded = routing_domain._extend_core_for_unique_proliferator_roots(
             core,
             coater_count=76,
             boundary_core_height=154,
         )
-        already_tall = freeform._extend_core_for_unique_proliferator_roots(
+        already_tall = routing_domain._extend_core_for_unique_proliferator_roots(
             (0, 0, 20, 8),
             coater_count=5,
             boundary_core_height=154,
@@ -12949,6 +13023,7 @@ class TestProliferatorSupplyIsOneReachableTree:
     def test_small_proliferated_factory_certifies_with_splitter_fanout(self) -> None:
         spec = proliferated_spec()
         placement = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=3.0)
@@ -12956,6 +13031,7 @@ class TestProliferatorSupplyIsOneReachableTree:
         report = validate.certify(
             placement,
             spec,
+            belt_rules=_BELT_RULES,
             expect_power=True,
         )
         assert not report.errors, "\n".join(f.message for f in report.errors)
@@ -13012,6 +13088,7 @@ class TestTheExtentIsDecidedBeforeAnythingRoutes:
     def test_every_lane_the_player_must_fill_can_be_reached(self, factory: SpecFactory) -> None:
         spec = factory()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy(_LEGACY_BAND_BY_SPEC_LABEL[spec.label]),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=1.0)
@@ -13022,6 +13099,7 @@ class TestTheExtentIsDecidedBeforeAnythingRoutes:
     def test_requested_products_leave_on_the_block_boundary(self) -> None:
         spec = single_recipe_spec()
         placement = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=1.0)
@@ -13048,6 +13126,7 @@ class TestTheExtentIsDecidedBeforeAnythingRoutes:
         """
         spec = proliferated_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=1.0)
@@ -13162,6 +13241,7 @@ class TestEveryShardDrainsEveryProduct:
                 "hydrogen",
             }, f"shard {s.out_lanes} cannot drain both products"
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=1.0)
@@ -13317,6 +13397,7 @@ class TestOneLaneCanServeSeveralDestinations:
     def test_the_merged_plan_lays_out_and_validates(self) -> None:
         spec = one_machine_fan_out_spec(4)
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=4.0)
@@ -13359,6 +13440,7 @@ class TestOneLaneCanServeSeveralDestinations:
             f"{len(consumers)} consumer lane(s) against a {producers[0].width}-tile lane"
         )
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=8.0)
@@ -13401,7 +13483,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
     ) -> None:
         """A legal route-ring junction must not be the router's dark surprise."""
         demands: list[tuple[tuple[int, int, int, int], tuple[tuple[int, int], ...]]] = []
-        plan = freeform._power_plan
+        plan = routing_domain._power_plan
 
         def observe_demand(
             canvas: _Canvas,
@@ -13418,7 +13500,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
                 additional_demand=additional_demand,
             )
 
-        monkeypatch.setattr(freeform, "_power_plan", observe_demand)
+        monkeypatch.setattr(routing_domain, "_power_plan", observe_demand)
         spec = two_stage_spec()
         strips = plan_strips(spec)
         prepared = _prepare_routing_problem(
@@ -13438,7 +13520,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
         workspace.canvas.add(junction.make_splitter(*route_ring))
         workspace.canvas.add(junction.make_splitter(*control))
         workspace.canvas.keep_out.clear()
-        freeform._place_power(workspace.canvas, prepared.power_sites)
+        routing_domain._place_power(workspace.canvas, prepared.power_sites)
 
         tower = catalog.building(catalog.TESLA_TOWER_ID)
         reach2 = math.floor((2 * tower.cover_radius) ** 2)
@@ -13455,14 +13537,14 @@ class TestPowerClaimsItsGroundBeforeRouting:
         assert demands == [(prepared.route_bounds, ())]
 
     def test_splitter_candidate_power_check_uses_exact_tower_radius(self) -> None:
-        discs = freeform._power_coverage_discs((), ((0, 0),))
+        discs = routing_domain._power_coverage_discs((), ((0, 0),))
 
-        assert freeform._buildings_are_powered(
-            freeform._splitter_stack_geometry(10, 0, 1),
+        assert routing_domain._buildings_are_powered(
+            routing_domain._splitter_stack_geometry(10, 0, 1),
             discs,
         )
-        assert not freeform._buildings_are_powered(
-            freeform._splitter_stack_geometry(11, 0, 1),
+        assert not routing_domain._buildings_are_powered(
+            routing_domain._splitter_stack_geometry(11, 0, 1),
             discs,
         )
 
@@ -13526,18 +13608,18 @@ class TestPowerClaimsItsGroundBeforeRouting:
         core = (0, 0, 60, 9)
         canvas = _Canvas(limit=core)
         self._pin_projection_extent(canvas, core)
-        cache = freeform._StagedStaticCache()
+        cache = routing_domain._StagedStaticCache()
         frame_queries = 0
-        original_frames = freeform._cached_junction_projection_frames
+        original_frames = routing_domain._cached_junction_projection_frames
 
         def counted_frames(
-            cache: freeform._StagedStaticCache,
+            cache: routing_domain._StagedStaticCache,
             occupied: tuple[int, int, int, int],
             limit: tuple[int, int, int, int],
             policy: BandPolicy,
             *,
             cancelled: Callable[[], bool] | None = None,
-        ) -> tuple[freeform._JunctionProjectionFrame, ...]:
+        ) -> tuple[routing_domain._JunctionProjectionFrame, ...]:
             nonlocal frame_queries
             frame_queries += 1
             return original_frames(
@@ -13549,7 +13631,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
             )
 
         monkeypatch.setattr(
-            freeform,
+            routing_domain,
             "_cached_junction_projection_frames",
             counted_frames,
         )
@@ -13572,7 +13654,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
         canvas = _Canvas(limit=core)
         self._pin_projection_extent(canvas, core)
         initial_buildings = len(canvas.buildings)
-        cache = freeform._StagedStaticCache()
+        cache = routing_domain._StagedStaticCache()
 
         sites = _power_plan(
             canvas,
@@ -13595,7 +13677,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
             projection,
         )
         assert seam_failure is not None
-        assert freeform._projected_power_peer_possible(
+        assert routing_domain._projected_power_peer_possible(
             candidate,
             seam_peer,
             contexts,
@@ -13609,7 +13691,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
             )
             gated_failure = (
                 exact_failure
-                if freeform._projected_power_peer_possible(
+                if routing_domain._projected_power_peer_possible(
                     candidate,
                     peer,
                     contexts,
@@ -13728,7 +13810,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
         selection: BandSelection,
     ) -> None:
         policy = BandPolicy(selection)
-        assert freeform._projection_envelope(
+        assert routing_domain._projection_envelope(
             occupied,
             limit,
             policy,
@@ -13767,7 +13849,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
 
     def test_power_plan_rejects_flat_legal_pair_in_required_projection(self) -> None:
         bounds = (0, 0, 199, 4)
-        envelope = freeform._projection_envelope(
+        envelope = routing_domain._projection_envelope(
             bounds,
             bounds,
             BandPolicy("portable"),
@@ -13844,7 +13926,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
                     for anchor in band.anchors(candidate.frame.height)
                 )
 
-        envelope = freeform._projection_envelope(
+        envelope = routing_domain._projection_envelope(
             occupied,
             limit,
             policy,
@@ -13882,7 +13964,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
                 tower.power_node,
             ),
         )
-        limit_only = freeform._projection_envelope(limit, limit, policy)
+        limit_only = routing_domain._projection_envelope(limit, limit, policy)
         assert all(
             finalize.projected_power_failure(pair, projection) is None for projection in limit_only
         )
@@ -13933,7 +14015,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
         canvas.add(_belt(3, 3))
         canvas.add(_belt(161, 13))
         planning_envelope = set(
-            freeform._power_projection_envelope(
+            routing_domain._power_projection_envelope(
                 canvas,
                 policy,
             )
@@ -13943,6 +14025,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
         compacted = finalize.compact_open_boundary_belts(
             Placement(buildings=tuple(canvas.buildings)),
             two_stage_spec(),
+            belt_rules=_BELT_RULES,
             expect_power=False,
         )
         assert compacted.bounds == (6, 6, 160, 10)
@@ -13993,9 +14076,9 @@ class TestPowerClaimsItsGroundBeforeRouting:
             seen.append(policy)
             raise _Unpowerable("projected power refusal", failure=failure)
 
-        monkeypatch.setattr(freeform, "_power_plan", refuse)
+        monkeypatch.setattr(routing_domain, "_power_plan", refuse)
         monkeypatch.setattr(
-            freeform,
+            routing_domain,
             "_route_all",
             lambda *_args, **_kwargs: pytest.fail("routing started after a power refusal"),
         )
@@ -14107,6 +14190,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
 
     def test_towers_still_cover_when_the_plan_claims_its_cells(self) -> None:
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(proliferated_spec(), time_budget_s=1.0)
@@ -14121,7 +14205,7 @@ def test_substation_emission_refuses_a_belt_in_its_clearance_halo(
     canvas = _Canvas(power_building=catalog.power_tower_building("satellite-substation"))
     canvas.add(_belt(*belt_site))
     with pytest.raises(_Unpowerable):
-        freeform._place_power(canvas, [(0, 0)])
+        routing_domain._place_power(canvas, [(0, 0)])
 
 
 def test_substation_planner_refuses_a_footprint_sized_hole_without_clearance() -> None:
@@ -14172,7 +14256,7 @@ def _two_power_nodes() -> tuple[
         (
             band.columns,
             projection.rotated,
-            freeform._minimum_projection_grid_scale((band,)),
+            routing_domain._minimum_projection_grid_scale((band,)),
         ),
     )
     return _power_node_at(0, 0), _power_node_at(1, band.columns - 1), contexts
@@ -14187,13 +14271,13 @@ class TestPowerPlanIsExact:
         def centre(b: PlacedBuilding) -> tuple[float, float, float]:
             return codec.tile_to_local_offset(b.x, b.y, b.z, b.width, b.height)
 
-        assert freeform._projected_power_peer_possible(
+        assert routing_domain._projected_power_peer_possible(
             candidate,
             peer,
             contexts,
             candidate_centre=centre(candidate[1]),
             peer_centre=centre(peer[1]),
-        ) == freeform._projected_power_peer_possible(candidate, peer, contexts)
+        ) == routing_domain._projected_power_peer_possible(candidate, peer, contexts)
 
     def test_blocked_column_shortcut_matches_the_per_level_probe(self) -> None:
         canvas = _Canvas(limit=(0, 0, 9, 9))
@@ -14203,7 +14287,7 @@ class TestPowerPlanIsExact:
         for x in range(10):
             for y in range(10):
                 assert ((x, y) in blocked_columns) == any(
-                    (x, y, level) in canvas.blocked for level in range(freeform.LEVELS)
+                    (x, y, level) in canvas.blocked for level in range(routing_domain.LEVELS)
                 )
 
 
@@ -14600,6 +14684,7 @@ class TestAShardThatCannotFeedItself:
     def test_it_lays_out_and_conserves_flow(self) -> None:
         spec = starved_shard_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("100"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=0.5)
@@ -14634,6 +14719,7 @@ class TestTheTimeBudgetIsAWall:
         monkeypatch.setattr(FreeformLayout, "_sweep", refuse)
         with pytest.raises(NoValidLayout):
             FreeformLayout(
+                belt_rules=_BELT_RULES,
                 band_policy=BandPolicy("portable"),
             ).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
 
@@ -14650,6 +14736,7 @@ class TestTheTimeBudgetIsAWall:
         # A deadline already in the past: every phase must decline to start.
         assert (
             FreeformLayout(
+                belt_rules=_BELT_RULES,
                 band_policy=BandPolicy("portable"),
             )._sweep(
                 spec,
@@ -14829,7 +14916,7 @@ class TestAPathThatReachesNothingIsUnrouted:
         canvas.buildings[last] = _relink(canvas.buildings[last], output_obj=sink)
 
         assert cycle_leg not in (first, last)
-        assert freeform._committed_path_closes_cycle(canvas, (first, last))
+        assert routing_domain._committed_path_closes_cycle(canvas, (first, last))
 
     def test_a_committed_linear_path_is_not_a_cycle(self) -> None:
         canvas = _Canvas()
@@ -14839,7 +14926,7 @@ class TestAPathThatReachesNothingIsUnrouted:
         canvas.buildings[first] = _relink(canvas.buildings[first], output_obj=last)
         canvas.buildings[last] = _relink(canvas.buildings[last], output_obj=sink)
 
-        assert not freeform._committed_path_closes_cycle(canvas, (first, last))
+        assert not routing_domain._committed_path_closes_cycle(canvas, (first, last))
 
     def test_a_tail_one_level_above_its_lane_head_does_not_link(self) -> None:
         """One level apart across one tile is the ILLEGAL step, not a legal link.
@@ -15141,7 +15228,7 @@ class TestABranchLeavesFromItsOwnSource:
         for cell in first_path:
             canvas.blocked[cell] = _TENTATIVE
         provenance: dict[Cell, Cell] = {}
-        frontier = freeform._merge_frontier(
+        frontier = routing_domain._merge_frontier(
             canvas,
             {0: first_path},
             (0,),
@@ -15201,7 +15288,7 @@ class TestABranchLeavesFromItsOwnSource:
             1: ((2, 1, 0), (3, 1, 0), (4, 1, 0), (5, 1, 0)),
             2: ((0, 2, 0), (1, 2, 0), (1, 1, 0)),
         }
-        details: dict[int, freeform._CommitFailure] = {}
+        details: dict[int, routing_domain._CommitFailure] = {}
 
         unlinked = _commit_paths(
             canvas,
@@ -15382,9 +15469,9 @@ class TestDetailedRoutingDiagnostics:
                 0,
             )
 
-        monkeypatch.setattr("flab2bp.layout.freeform._astar", inspect_starts)
-        monkeypatch.setattr("flab2bp.layout.freeform.RRR_MAX", 1)
-        monkeypatch.setattr("flab2bp.layout.freeform._REPAIR_PASSES", 0)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._astar", inspect_starts)
+        monkeypatch.setattr("flab2bp.layout.routing_domain.RRR_MAX", 1)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._REPAIR_PASSES", 0)
 
         _route_all(canvas, [net], 2001, 35, bounds)
 
@@ -15470,12 +15557,12 @@ class TestDetailedRoutingDiagnostics:
             return original_astar(*args, **kwargs)  # type: ignore[arg-type]
 
         shared_budget = {"left": 1000}
-        monkeypatch.setattr("flab2bp.layout.freeform._astar", capped_repair_astar)
-        monkeypatch.setattr("flab2bp.layout.freeform._MAX_EXPANSIONS", 1)
-        monkeypatch.setattr("flab2bp.layout.freeform.RRR_MAX", 1)
-        monkeypatch.setattr("flab2bp.layout.freeform._REPAIR_PASSES", 1)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._astar", capped_repair_astar)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._MAX_EXPANSIONS", 1)
+        monkeypatch.setattr("flab2bp.layout.routing_domain.RRR_MAX", 1)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._REPAIR_PASSES", 1)
         monkeypatch.setattr(
-            "flab2bp.layout.freeform._commit_paths",
+            "flab2bp.layout.routing_domain._commit_paths",
             lambda *_args, **_kwargs: (),
         )
 
@@ -15526,12 +15613,12 @@ class TestDetailedRoutingDiagnostics:
             return original_astar(*args, **kwargs)  # type: ignore[arg-type]
 
         shared_budget = {"left": 1000}
-        monkeypatch.setattr("flab2bp.layout.freeform._astar", capped_victim_astar)
-        monkeypatch.setattr("flab2bp.layout.freeform._MAX_EXPANSIONS", 1)
-        monkeypatch.setattr("flab2bp.layout.freeform.RRR_MAX", 1)
-        monkeypatch.setattr("flab2bp.layout.freeform._REPAIR_PASSES", 1)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._astar", capped_victim_astar)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._MAX_EXPANSIONS", 1)
+        monkeypatch.setattr("flab2bp.layout.routing_domain.RRR_MAX", 1)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._REPAIR_PASSES", 1)
         monkeypatch.setattr(
-            "flab2bp.layout.freeform._commit_paths",
+            "flab2bp.layout.routing_domain._commit_paths",
             lambda *_args, **_kwargs: (),
         )
 
@@ -15595,17 +15682,17 @@ class TestDetailedRoutingDiagnostics:
         ticks = iter((0.0, 0.0, 2.0, 2.0))
 
         monkeypatch.setattr(
-            freeform,
+            routing_domain,
             "_astar",
             lambda *_args, **_kwargs: next(searches),
         )
-        monkeypatch.setattr(freeform, "_REPAIR_PASSES", 0)
+        monkeypatch.setattr(routing_domain, "_REPAIR_PASSES", 0)
         monkeypatch.setattr(
             "flab2bp.layout.freeform.time.monotonic",
             lambda: next(ticks),
         )
         monkeypatch.setattr(
-            freeform,
+            routing_domain,
             "_commit_paths",
             lambda *_args, **_kwargs: pytest.fail("an expired routing round reached path commit"),
         )
@@ -15649,7 +15736,7 @@ class TestDetailedRoutingDiagnostics:
         ticks = iter((0.0, 0.0, 2.0))
 
         monkeypatch.setattr(
-            freeform,
+            routing_domain,
             "_astar",
             lambda *_args, **_kwargs: next(searches),
         )
@@ -15658,7 +15745,7 @@ class TestDetailedRoutingDiagnostics:
             lambda: next(ticks),
         )
         monkeypatch.setattr(
-            freeform,
+            routing_domain,
             "_commit_paths",
             lambda *_args, **_kwargs: pytest.fail(
                 "an expired successful round reached commit preflight"
@@ -15821,11 +15908,11 @@ class TestDetailedRoutingDiagnostics:
                 assert goals == set()
             return result
 
-        monkeypatch.setattr("flab2bp.layout.freeform._astar", scripted_astar)
-        monkeypatch.setattr("flab2bp.layout.freeform.RRR_MAX", 1)
-        monkeypatch.setattr("flab2bp.layout.freeform._REPAIR_PASSES", 0)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._astar", scripted_astar)
+        monkeypatch.setattr("flab2bp.layout.routing_domain.RRR_MAX", 1)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._REPAIR_PASSES", 0)
         monkeypatch.setattr(
-            "flab2bp.layout.freeform._commit_paths",
+            "flab2bp.layout.routing_domain._commit_paths",
             lambda *_args, **_kwargs: (),
         )
 
@@ -15878,11 +15965,11 @@ class TestDetailedRoutingDiagnostics:
                 assert starts == []
             return result
 
-        monkeypatch.setattr("flab2bp.layout.freeform._astar", scripted_astar)
-        monkeypatch.setattr("flab2bp.layout.freeform.RRR_MAX", 1)
-        monkeypatch.setattr("flab2bp.layout.freeform._REPAIR_PASSES", 0)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._astar", scripted_astar)
+        monkeypatch.setattr("flab2bp.layout.routing_domain.RRR_MAX", 1)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._REPAIR_PASSES", 0)
         monkeypatch.setattr(
-            "flab2bp.layout.freeform._commit_paths",
+            "flab2bp.layout.routing_domain._commit_paths",
             lambda *_args, **_kwargs: (),
         )
 
@@ -15897,14 +15984,14 @@ class TestDetailedRoutingDiagnostics:
         path = ((0, 0, 0),)
         canvas.blocked[0, 1, 0] = _TENTATIVE
 
-        strict = freeform._merge_frontier(
+        strict = routing_domain._merge_frontier(
             canvas,
             {0: path},
             (0,),
             lambda _x, _y, _level: True,
         )
         provenance: dict[Cell, Cell] = {}
-        repair = freeform._merge_frontier(
+        repair = routing_domain._merge_frontier(
             canvas,
             {0: path},
             (0,),
@@ -15949,7 +16036,7 @@ class TestDetailedRoutingDiagnostics:
         branch_head = branch_path[0]
         promised_tap = (3, 0, 1)
         latest_provenance: list[dict[Cell, Cell]] = []
-        original_merge = freeform._merge_frontier
+        original_merge = routing_domain._merge_frontier
 
         def capture_frontier(
             canvas: _Canvas,
@@ -16015,11 +16102,11 @@ class TestDetailedRoutingDiagnostics:
             committed_hints.append(dict(source_hints or {}))
             return ()
 
-        monkeypatch.setattr(freeform, "_merge_frontier", capture_frontier)
-        monkeypatch.setattr(freeform, "_astar", scripted_astar)
-        monkeypatch.setattr(freeform, "_commit_paths", capture_commit)
-        monkeypatch.setattr(freeform, "RRR_MAX", 1)
-        monkeypatch.setattr(freeform, "_REPAIR_PASSES", 1)
+        monkeypatch.setattr(routing_domain, "_merge_frontier", capture_frontier)
+        monkeypatch.setattr(routing_domain, "_astar", scripted_astar)
+        monkeypatch.setattr(routing_domain, "_commit_paths", capture_commit)
+        monkeypatch.setattr(routing_domain, "RRR_MAX", 1)
+        monkeypatch.setattr(routing_domain, "_REPAIR_PASSES", 1)
 
         result = _route_all(
             canvas,
@@ -16087,14 +16174,14 @@ class TestDetailedRoutingDiagnostics:
             _dst_group: Mapping[int, tuple[int, ...]] | None = None,
             *,
             source_hints: Mapping[int, Cell] | None = None,
-            failure_details: dict[int, freeform._CommitFailure] | None = None,
+            failure_details: dict[int, routing_domain._CommitFailure] | None = None,
             **_kwargs: object,
         ) -> tuple[int, ...]:
             committed_hints.append(dict(source_hints or {}))
             if len(committed_hints) != 1:
                 return ()
             if failure_details is not None:
-                failure_details[1] = freeform._CommitFailure(
+                failure_details[1] = routing_domain._CommitFailure(
                     cell=initial_branch[0],
                     side="source",
                     blocking_indices=(),
@@ -16103,10 +16190,10 @@ class TestDetailedRoutingDiagnostics:
                 )
             return (1,)
 
-        monkeypatch.setattr(freeform, "_astar", scripted_astar)
-        monkeypatch.setattr(freeform, "_commit_paths", reject_initial_branch)
-        monkeypatch.setattr(freeform, "RRR_MAX", 1)
-        monkeypatch.setattr(freeform, "_REPAIR_PASSES", 0)
+        monkeypatch.setattr(routing_domain, "_astar", scripted_astar)
+        monkeypatch.setattr(routing_domain, "_commit_paths", reject_initial_branch)
+        monkeypatch.setattr(routing_domain, "RRR_MAX", 1)
+        monkeypatch.setattr(routing_domain, "_REPAIR_PASSES", 0)
 
         result = _route_all(
             canvas,
@@ -16179,10 +16266,10 @@ class TestDetailedRoutingDiagnostics:
                 1,
             )
 
-        monkeypatch.setattr(freeform, "_astar", scripted_astar)
-        monkeypatch.setattr(freeform, "RRR_MAX", 1)
-        monkeypatch.setattr(freeform, "_REPAIR_PASSES", 0)
-        monkeypatch.setattr(freeform, "_commit_paths", lambda *_args, **_kwargs: ())
+        monkeypatch.setattr(routing_domain, "_astar", scripted_astar)
+        monkeypatch.setattr(routing_domain, "RRR_MAX", 1)
+        monkeypatch.setattr(routing_domain, "_REPAIR_PASSES", 0)
+        monkeypatch.setattr(routing_domain, "_commit_paths", lambda *_args, **_kwargs: ())
 
         result = _route_all(
             canvas,
@@ -16204,14 +16291,14 @@ class TestDetailedRoutingDiagnostics:
         branch = (1, 0, 0)
         canvas.guard.add(branch)
 
-        refused = freeform._merge_frontier(
+        refused = routing_domain._merge_frontier(
             canvas,
             {0: path},
             (0,),
             lambda x, y, level: (x, y, level) == (0, 0, 0),
             belt_prefab=(2001, 35),
         )
-        owned = freeform._merge_frontier(
+        owned = routing_domain._merge_frontier(
             canvas,
             {0: path},
             (0,),
@@ -16311,11 +16398,11 @@ class TestDetailedRoutingDiagnostics:
                 0,
             )
 
-        monkeypatch.setattr(freeform, "_astar", scripted_astar)
-        monkeypatch.setattr(freeform, "RRR_MAX", 1)
-        monkeypatch.setattr(freeform, "_REPAIR_PASSES", 0)
+        monkeypatch.setattr(routing_domain, "_astar", scripted_astar)
+        monkeypatch.setattr(routing_domain, "RRR_MAX", 1)
+        monkeypatch.setattr(routing_domain, "_REPAIR_PASSES", 0)
         monkeypatch.setattr(
-            freeform,
+            routing_domain,
             "_commit_paths",
             lambda *_args, **_kwargs: (),
         )
@@ -16396,9 +16483,9 @@ class TestDetailedRoutingDiagnostics:
                 0,
             )
 
-        monkeypatch.setattr(freeform, "_astar", scripted_astar)
-        monkeypatch.setattr(freeform, "RRR_MAX", 1)
-        monkeypatch.setattr(freeform, "_REPAIR_PASSES", 0)
+        monkeypatch.setattr(routing_domain, "_astar", scripted_astar)
+        monkeypatch.setattr(routing_domain, "RRR_MAX", 1)
+        monkeypatch.setattr(routing_domain, "_REPAIR_PASSES", 0)
 
         result = _route_all(canvas, nets, 2001, 35, bounds)
 
@@ -16417,7 +16504,7 @@ class TestDetailedRoutingDiagnostics:
             tap_cell: branch_path,
         }
 
-        victims = freeform._junction_guard_victims(
+        victims = routing_domain._junction_guard_victims(
             owner,
             (guard_cell, tap_cell),
             excused={tap_cell},
@@ -16435,7 +16522,7 @@ class TestDetailedRoutingDiagnostics:
             (85, 97, 2),
         )
 
-        assert not freeform._junction_belt_clear(
+        assert not routing_domain._junction_belt_clear(
             canvas,
             (84, 97, 2),
             path,
@@ -16517,11 +16604,11 @@ class TestDetailedRoutingDiagnostics:
         def scripted_astar(*_args: object, **_kwargs: object) -> _PathSearchResult:
             return next(searches)
 
-        monkeypatch.setattr("flab2bp.layout.freeform._astar", scripted_astar)
-        monkeypatch.setattr("flab2bp.layout.freeform.RRR_MAX", 1)
-        monkeypatch.setattr("flab2bp.layout.freeform._REPAIR_PASSES", 0)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._astar", scripted_astar)
+        monkeypatch.setattr("flab2bp.layout.routing_domain.RRR_MAX", 1)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._REPAIR_PASSES", 0)
         monkeypatch.setattr(
-            "flab2bp.layout.freeform._commit_paths",
+            "flab2bp.layout.routing_domain._commit_paths",
             lambda *_args, **_kwargs: (),
         )
 
@@ -16563,11 +16650,11 @@ class TestDetailedRoutingDiagnostics:
         def scripted_astar(*_args: object, **_kwargs: object) -> _PathSearchResult:
             return next(searches)
 
-        monkeypatch.setattr("flab2bp.layout.freeform._astar", scripted_astar)
-        monkeypatch.setattr("flab2bp.layout.freeform.RRR_MAX", 1)
-        monkeypatch.setattr("flab2bp.layout.freeform._REPAIR_PASSES", 0)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._astar", scripted_astar)
+        monkeypatch.setattr("flab2bp.layout.routing_domain.RRR_MAX", 1)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._REPAIR_PASSES", 0)
         monkeypatch.setattr(
-            "flab2bp.layout.freeform._commit_paths",
+            "flab2bp.layout.routing_domain._commit_paths",
             lambda *_args, **_kwargs: (),
         )
 
@@ -16601,9 +16688,9 @@ class TestDetailedRoutingDiagnostics:
             seen.append(label)
             return _PathSearchResult((min(starts), min(goals)), None, (), 1)
 
-        monkeypatch.setattr("flab2bp.layout.freeform._astar", scripted_astar)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._astar", scripted_astar)
         monkeypatch.setattr(
-            "flab2bp.layout.freeform._commit_paths",
+            "flab2bp.layout.routing_domain._commit_paths",
             lambda *_args, **_kwargs: (),
         )
 
@@ -16665,9 +16752,9 @@ class TestDetailedRoutingDiagnostics:
             seen.append(label)
             return _PathSearchResult((min(goals),), None, (), 1)
 
-        monkeypatch.setattr("flab2bp.layout.freeform._astar", scripted_astar)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._astar", scripted_astar)
         monkeypatch.setattr(
-            "flab2bp.layout.freeform._commit_paths",
+            "flab2bp.layout.routing_domain._commit_paths",
             lambda *_args, **_kwargs: (),
         )
 
@@ -16732,9 +16819,9 @@ class TestDetailedRoutingDiagnostics:
             seen.append(label)
             return _PathSearchResult((min(goals),), None, (), 1)
 
-        monkeypatch.setattr("flab2bp.layout.freeform._astar", scripted_astar)
+        monkeypatch.setattr("flab2bp.layout.routing_domain._astar", scripted_astar)
         monkeypatch.setattr(
-            "flab2bp.layout.freeform._commit_paths",
+            "flab2bp.layout.routing_domain._commit_paths",
             lambda *_args, **_kwargs: (),
         )
 
@@ -16893,7 +16980,7 @@ class TestAFailedSearchNamesTheWallThatCutIt:
 
         assert result.path is None
         assert result.kind is RouteFailureKind.SEALED_POCKET
-        assert result.expansions > freeform._BLAME_MAX_POCKET
+        assert result.expansions > routing_domain._BLAME_MAX_POCKET
         assert len(result.wall) == 1
         assert owner[result.wall[0]] == 7
 
@@ -17088,12 +17175,12 @@ class TestAltitudeProfile:
 
     def test_flat_path_stays_on_the_ground(self) -> None:
         path = [(0, 0, 0), (1, 0, 0), (2, 0, 0)]
-        assert freeform._altitude_profile(path, ramped=True) == [F(0), F(0), F(0)]
+        assert routing_domain._altitude_profile(path, ramped=True) == [F(0), F(0), F(0)]
 
     def test_a_crossing_reads_exactly_as_the_corpus_does(self) -> None:
         """``0, 1/2, 1, ..., 1, 1/2, 0`` -- the shape every real elevated run has."""
         path = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 1), (5, 0, 0)]
-        assert freeform._altitude_profile(path, ramped=True) == [
+        assert routing_domain._altitude_profile(path, ramped=True) == [
             F(0),
             F(1, 2),
             F(1),
@@ -17105,12 +17192,12 @@ class TestAltitudeProfile:
     def test_the_ramp_tile_is_one_the_router_already_reserved(self) -> None:
         """The profile adds no cells: it renames the altitude of existing ones."""
         path = [(0, 0, 0), (1, 0, 0), (2, 0, 1)]
-        prof = freeform._altitude_profile(path, ramped=True)
+        prof = routing_domain._altitude_profile(path, ramped=True)
         assert prof is not None and len(prof) == len(path)
 
     def test_every_step_is_a_legal_transition(self) -> None:
         path = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 0), (5, 0, 0)]
-        prof = freeform._altitude_profile(path, ramped=True)
+        prof = routing_domain._altitude_profile(path, ramped=True)
         assert prof is not None
         for i in range(len(path) - 1):
             dz = prof[i + 1] - prof[i]
@@ -17134,12 +17221,14 @@ class TestAltitudeProfile:
         over 12 layouts, once `LEVELS` rose to 3 and made consecutive ramps
         reachable.
         """
-        assert freeform._altitude_profile([(0, 0, 0), (1, 0, 1), (2, 0, 2)], ramped=True) is None
+        assert (
+            routing_domain._altitude_profile([(0, 0, 0), (1, 0, 1), (2, 0, 2)], ramped=True) is None
+        )
 
     def test_commit_records_a_path_with_no_legal_altitude_profile(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(freeform, "_altitude_profile", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(routing_domain, "_altitude_profile", lambda *_args, **_kwargs: None)
         canvas = _Canvas(ramped=True)
         source = _Port(0, 0, 0, 0, 0)
         destination = _Port(0, 2, 0, 2, 2)
@@ -17149,12 +17238,12 @@ class TestAltitudeProfile:
 
     def test_ramps_separated_by_a_flat_cell_are_fine(self) -> None:
         path = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 2)]
-        prof = freeform._altitude_profile(path, ramped=True)
+        prof = routing_domain._altitude_profile(path, ramped=True)
         assert prof == [F(0), F(1, 2), F(1), F(3, 2), F(2)]
 
     def test_a_wider_jump_than_the_ramp_table_offers_is_refused(self) -> None:
         with pytest.raises(AssertionError, match="jumps 2 levels"):
-            freeform._altitude_profile([(0, 0, 0), (1, 0, 2)], ramped=True)
+            routing_domain._altitude_profile([(0, 0, 0), (1, 0, 2)], ramped=True)
 
 
 class TestTheSlopeLimitIsConditional:
@@ -17175,16 +17264,16 @@ class TestTheSlopeLimitIsConditional:
     LEVELS_PATH = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 0)]
 
     def test_without_the_tech_we_ramp(self) -> None:
-        prof = freeform._altitude_profile(self.LEVELS_PATH, ramped=True)
+        prof = routing_domain._altitude_profile(self.LEVELS_PATH, ramped=True)
         assert prof == [F(0), F(1, 2), F(1), F(1, 2), F(0)]
 
     def test_with_the_tech_we_emit_the_dense_form(self) -> None:
-        prof = freeform._altitude_profile(self.LEVELS_PATH, ramped=False)
+        prof = routing_domain._altitude_profile(self.LEVELS_PATH, ramped=False)
         assert prof == [F(0), F(0), F(1), F(1), F(0)]
 
     def test_without_the_tech_no_step_exceeds_the_slope_limit(self) -> None:
         """The ramped profile is legal on a save with NO technologies."""
-        prof = freeform._altitude_profile(self.LEVELS_PATH, ramped=True)
+        prof = routing_domain._altitude_profile(self.LEVELS_PATH, ramped=True)
         assert prof is not None
         for i in range(len(prof) - 1):
             a, b = self.LEVELS_PATH[i], self.LEVELS_PATH[i + 1]
@@ -17195,7 +17284,7 @@ class TestTheSlopeLimitIsConditional:
 
     def test_with_the_tech_the_dense_form_would_break_that_limit(self) -> None:
         """Which is exactly why it is gated rather than always used."""
-        prof = freeform._altitude_profile(self.LEVELS_PATH, ramped=False)
+        prof = routing_domain._altitude_profile(self.LEVELS_PATH, ramped=False)
         assert prof is not None
         worst = max(
             abs(prof[i + 1] - prof[i]) / catalog.BELT_Z_PER_WORLD_UNIT for i in range(len(prof) - 1)
@@ -17204,16 +17293,21 @@ class TestTheSlopeLimitIsConditional:
 
     def test_the_link_rule_follows_the_same_gate(self) -> None:
         one_level_across_one_tile = (0, 0, F(0), 1, 0, F(1))
-        assert not freeform._legal_link(*one_level_across_one_tile, ramped=True)
-        assert freeform._legal_link(*one_level_across_one_tile, ramped=False)
+        assert not routing_domain._legal_link(*one_level_across_one_tile, ramped=True)
+        assert routing_domain._legal_link(*one_level_across_one_tile, ramped=False)
 
     def test_the_default_save_has_the_tech_so_is_not_ramped(self) -> None:
         """An absent technology set means every technology researched."""
-        assert freeform.FreeformLayout(band_policy=BandPolicy("portable")).ramped is False
+        assert (
+            freeform.FreeformLayout(
+                belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")
+            ).ramped
+            is False
+        )
         assert (
             freeform.FreeformLayout(
                 band_policy=BandPolicy("portable"),
-                belt_vertical_construction=False,
+                belt_rules=dataclasses.replace(_BELT_RULES, vertical_construction=False),
             ).ramped
             is True
         )
@@ -17494,14 +17588,14 @@ class TestPreparedJunctionLegalityIsThreeDimensional:
         level: int,
     ) -> None:
         machine = self._building(item, machine_x, machine_y)
-        ban = freeform._prepared_junction_ban((machine,), ())
+        ban = routing_domain._prepared_junction_ban((machine,), ())
 
         assert (splitter_x, splitter_y, level) in ban
-        assert not freeform._junction_site_is_clear((machine,), splitter_x, splitter_y, level)
+        assert not routing_domain._junction_site_is_clear((machine,), splitter_x, splitter_y, level)
 
     def test_a_reserved_tesla_tower_bans_an_elevated_neighbour(self) -> None:
         site = (30, 26)
-        ban = freeform._prepared_junction_ban((), (site,))
+        ban = routing_domain._prepared_junction_ban((), (site,))
 
         assert (29, 26, 2) in ban
 
@@ -17529,12 +17623,12 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
         )
 
     def _ban(self) -> frozenset[Cell]:
-        frames = freeform._junction_projection_frames(
+        frames = routing_domain._junction_projection_frames(
             (0, 0, 42, 34),
             (0, 0, 42, 34),
             BandPolicy("portable"),
         )
-        return freeform._prepared_junction_ban(
+        return routing_domain._prepared_junction_ban(
             (self._coater(),),
             (),
             projection_frames=frames,
@@ -17553,7 +17647,7 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
         self,
     ) -> None:
         coater = replace(self._coater(), x=5, y=5, yaw=0.0)
-        frames = freeform._junction_projection_frames(
+        frames = routing_domain._junction_projection_frames(
             (-8, -8, 8, 8),
             (-8, -8, 8, 8),
             BandPolicy("100"),
@@ -17582,15 +17676,15 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
             candidate=rotated.candidate,
         )
         failure = finalize.projected_coater_splitter_failure(
-            (0, freeform._collision_pose(materialized_coater)),
-            (1, freeform._collision_pose(materialized_splitter)),
+            (0, routing_domain._collision_pose(materialized_coater)),
+            (1, routing_domain._collision_pose(materialized_splitter)),
             projection,
         )
         assert failure is not None
         assert failure.check == "game.addon_splitter_clearance"
         assert failure.band == 100
-        flat_only = freeform._prepared_junction_ban((coater,), ())
-        ban = freeform._prepared_junction_ban(
+        flat_only = routing_domain._prepared_junction_ban((coater,), ())
+        ban = routing_domain._prepared_junction_ban(
             (coater,),
             (),
             projection_frames=frames,
@@ -17618,7 +17712,7 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
 
         assert unlinked
         assert all(not net.src_group for net in unlinked)
-        assert not freeform._junction_geometry_required(
+        assert not routing_domain._junction_geometry_required(
             unlinked,
             prepared.building_templates,
         )
@@ -17639,7 +17733,7 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
             src_group=(source.net_id,),
         )
 
-        assert freeform._junction_geometry_required(
+        assert routing_domain._junction_geometry_required(
             (source_with_sibling,),
             prepared.building_templates,
         )
@@ -17662,7 +17756,7 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
             output_obj=source.dst.belt_index,
         )
 
-        assert freeform._junction_geometry_required(
+        assert routing_domain._junction_geometry_required(
             (source,),
             buildings,
         )
@@ -17695,7 +17789,7 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
         )
 
         assert all(net.dst_group for net in destination_only)
-        assert not freeform._junction_geometry_required(
+        assert not routing_domain._junction_geometry_required(
             destination_only,
             prepared.building_templates,
         )
@@ -17710,7 +17804,7 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
             )
             tap = (25, y, 2)
             canvas.blocked[tap] = _TENTATIVE
-            return freeform._merge_frontier(
+            return routing_domain._merge_frontier(
                 canvas,
                 {5: (tap,)},
                 (5,),
@@ -17740,7 +17834,7 @@ class TestProjectedCoaterSplitterBanIsPreparedBeforeRouting:
                 canvas.buildings[source],
                 output_obj=onward,
             )
-            attached = freeform._tap_source(
+            attached = routing_domain._tap_source(
                 canvas,
                 source,
                 branch,
@@ -17792,7 +17886,7 @@ class TestSourceTapMaterializesSupportedSplitterStacks:
     def test_level_one_tap_uses_model_40_with_a_lower_branch_plane(self) -> None:
         canvas, source, branch = self._scene(1, branch_level=0)
 
-        attached = freeform._tap_source(
+        attached = routing_domain._tap_source(
             canvas,
             source,
             branch,
@@ -17822,7 +17916,7 @@ class TestSourceTapMaterializesSupportedSplitterStacks:
     def test_level_one_model_40_carry_is_one_valid_occupancy(self) -> None:
         canvas, source, branch = self._scene(1, branch_level=0)
 
-        assert freeform._tap_source(
+        assert routing_domain._tap_source(
             canvas,
             source,
             branch,
@@ -17842,7 +17936,7 @@ class TestSourceTapMaterializesSupportedSplitterStacks:
     def test_level_one_model_40_uses_both_lower_branch_ports(self) -> None:
         canvas, source, first_branch = self._scene(1, branch_level=0)
 
-        assert freeform._tap_source(
+        assert routing_domain._tap_source(
             canvas,
             source,
             first_branch,
@@ -17851,7 +17945,7 @@ class TestSourceTapMaterializesSupportedSplitterStacks:
             excused={(-1, 0, 1), (0, 0, 1), (1, 0, 1), (0, -1, 0)},
         )
         second_branch = canvas.add(replace(_belt(0, 1, item="gear"), z=F(0)))
-        assert freeform._tap_source(
+        assert routing_domain._tap_source(
             canvas,
             source,
             second_branch,
@@ -17876,7 +17970,7 @@ class TestSourceTapMaterializesSupportedSplitterStacks:
     def test_level_three_tap_uses_ground_support_and_model_40_top(self) -> None:
         canvas, source, branch = self._scene(3, branch_level=2)
 
-        assert freeform._tap_source(
+        assert routing_domain._tap_source(
             canvas,
             source,
             branch,
@@ -17921,7 +18015,7 @@ class TestSourceTapMaterializesSupportedSplitterStacks:
     ) -> None:
         canvas, source, branch = self._scene(2)
 
-        attached = freeform._tap_source(
+        attached = routing_domain._tap_source(
             canvas,
             source,
             branch,
@@ -17952,7 +18046,7 @@ class TestSourceTapMaterializesSupportedSplitterStacks:
         canvas.add(_belt(1, 0, item="foreign"))
         rejected_reason: list[str] = []
 
-        attached = freeform._tap_source(
+        attached = routing_domain._tap_source(
             canvas,
             source,
             branch,
@@ -18000,7 +18094,7 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
         )
         rejected_reason: list[str] = []
 
-        attached = freeform._tap_source(
+        attached = routing_domain._tap_source(
             canvas,
             source,
             branch,
@@ -18024,9 +18118,9 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
         canvas = _Canvas(limit=(-2, -2, 2, 2))
         path = ((0, -1, 2), (0, 0, 2), (0, 1, 2))
         for cell in path:
-            canvas.blocked[cell] = freeform._TENTATIVE
+            canvas.blocked[cell] = routing_domain._TENTATIVE
 
-        frontier = freeform._merge_frontier(
+        frontier = routing_domain._merge_frontier(
             canvas,
             {5: path},
             (5,),
@@ -18042,9 +18136,9 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
         canvas = _Canvas(limit=(-2, -2, 2, 2))
         path = ((0, -1, 1), (0, 0, 1), (0, 1, 1))
         for cell in path:
-            canvas.blocked[cell] = freeform._TENTATIVE
+            canvas.blocked[cell] = routing_domain._TENTATIVE
 
-        frontier = freeform._merge_frontier(
+        frontier = routing_domain._merge_frontier(
             canvas,
             {5: path},
             (5,),
@@ -18080,7 +18174,7 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
             )
         )
 
-        assert freeform._tap_source(
+        assert routing_domain._tap_source(
             canvas,
             source,
             branch,
@@ -18094,7 +18188,7 @@ class TestSourceTapPreservesPhysicalSplitterPortIdentity:
                 (1, 0, 2),
             },
         )
-        assert freeform._tap_source(
+        assert routing_domain._tap_source(
             canvas,
             source,
             second_branch,
@@ -18142,7 +18236,7 @@ class TestTheMergeFrontierWithdrawsSitesAJunctionCannotHold:
 
     def test_a_cell_whose_tap_is_dirty_is_not_offered(self) -> None:
         canvas, paths = self._scene()
-        got = freeform._merge_frontier(canvas, paths, (5,), lambda x, y, level: True)
+        got = routing_domain._merge_frontier(canvas, paths, (5,), lambda x, y, level: True)
         assert (-1, 0, 0) not in got and (0, -1, 0) not in got, (
             f"a merge was offered whose junction would stand beside a foreign belt: {sorted(got)}"
         )
@@ -18157,7 +18251,7 @@ class TestTheMergeFrontierWithdrawsSitesAJunctionCannotHold:
         path = [(0, 0, 0), (1, 0, 0), (2, 0, 0)]
         for cell in path:
             canvas.blocked[cell] = _TENTATIVE
-        got = freeform._merge_frontier(canvas, {5: path}, (5,), lambda x, y, level: True)
+        got = routing_domain._merge_frontier(canvas, {5: path}, (5,), lambda x, y, level: True)
         assert {(-1, 0, 0), (0, -1, 0), (0, 1, 0)} <= got, sorted(got)
 
 
@@ -18211,7 +18305,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         port: _Port,
     ) -> int:
         """Add a same-strip peer with a real projected-only collision relation."""
-        cx, cy = freeform._coater_seats(
+        cx, cy = routing_domain._coater_seats(
             canvas,
             port,
             west_channel=strip.west_channel,
@@ -18240,10 +18334,10 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             yaw=Facing.EAST.value,
             owner_strip=0,
         )
-        relation = freeform._staged_static_clearance_key(peer, candidate)
+        relation = routing_domain._staged_static_clearance_key(peer, candidate)
 
-        assert not freeform._coater_keepout_hits(canvas.buildings, candidate)
-        assert freeform._staged_static_relation_projection_risk(
+        assert not routing_domain._coater_keepout_hits(canvas.buildings, candidate)
+        assert routing_domain._staged_static_relation_projection_risk(
             relation,
             BandPolicy("portable"),
         )
@@ -18307,8 +18401,8 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         before = tuple(canvas.buildings)
         assert canvas.limit is None
 
-        with pytest.raises(freeform._Unseatable) as caught:
-            freeform._place_coaters(
+        with pytest.raises(routing_domain._Unseatable) as caught:
+            routing_domain._place_coaters(
                 canvas,
                 spec,
                 strips,
@@ -18350,8 +18444,8 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         )
         before = tuple(canvas.buildings)
 
-        with pytest.raises(freeform._Unseatable) as caught:
-            freeform._place_coaters(
+        with pytest.raises(routing_domain._Unseatable) as caught:
+            routing_domain._place_coaters(
                 canvas,
                 spec,
                 [strips[0], strips[0]],
@@ -18371,7 +18465,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
     def test_coater_seat_allows_splitter_at_known_projected_separation(self) -> None:
         canvas, spec, strips, ports, _splitter_index = self._broke2_fixture(18)
 
-        got = freeform._place_coaters(
+        got = routing_domain._place_coaters(
             canvas,
             spec,
             strips,
@@ -18407,14 +18501,14 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             policy: BandPolicy,
         ) -> list[CoaterSupplyPort]:
             seen.append(policy)
-            raise freeform._Unseatable(
+            raise routing_domain._Unseatable(
                 "projected coater/Splitter refusal",
                 failure=failure,
             )
 
-        monkeypatch.setattr(freeform, "_place_coaters", refuse)
+        monkeypatch.setattr(routing_domain, "_place_coaters", refuse)
         monkeypatch.setattr(
-            freeform,
+            routing_domain,
             "_route_all",
             lambda *_args, **_kwargs: pytest.fail(
                 "detailed routing started after projected coater refusal"
@@ -18424,7 +18518,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         strips = plan_strips(spec)
         pack = _greedy_pack(strips, _height_seed(strips))
 
-        with pytest.raises(freeform._Unseatable) as caught:
+        with pytest.raises(routing_domain._Unseatable) as caught:
             _build(
                 spec,
                 strips,
@@ -18444,15 +18538,15 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         w3 = replace(strip, west_channel=freeform._COATER_WEST_CHANNEL)
         risky = tuple(
             relation
-            for relation in freeform._staged_static_clearance_keys(w3)
-            if freeform._staged_static_preclearance_proved(relation, policy)
+            for relation in routing_domain._staged_static_clearance_keys(w3)
+            if routing_domain._staged_static_preclearance_proved(relation, policy)
         )
 
         assert risky, "fixture lost the exact W3 relation that requires preclearance"
         assert strip.west_channel == freeform._COATER_WEST_CHANNEL + 1 == 4
         assert all(
-            not freeform._staged_static_relation_projection_risk(relation, policy)
-            for relation in freeform._staged_static_clearance_keys(strip)
+            not routing_domain._staged_static_relation_projection_risk(relation, policy)
+            for relation in routing_domain._staged_static_clearance_keys(strip)
         )
 
     def test_universally_safe_sprayed_relation_keeps_the_w3_body_reservation(
@@ -18464,21 +18558,21 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             for strip in plan_strips(band_160_all_products_spec(), band_policy=policy)
             if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
             and strip.west_channel == freeform._COATER_WEST_CHANNEL
-            and freeform._staged_static_clearance_keys(strip)
+            and routing_domain._staged_static_clearance_keys(strip)
         )
-        relations = freeform._staged_static_clearance_keys(safe)
+        relations = routing_domain._staged_static_clearance_keys(safe)
 
         assert relations
         assert all(
-            not freeform._staged_static_relation_projection_risk(relation, policy)
+            not routing_domain._staged_static_relation_projection_risk(relation, policy)
             for relation in relations
         )
 
     def test_a_lane_too_short_to_seat_a_coater_is_refused(self) -> None:
         """One tile: ``_coater_seats`` has no tile with a lane tile either side."""
         canvas, spec, strips, ports = self._fixture(1)
-        with pytest.raises(freeform._Unseatable, match="tile"):
-            freeform._place_coaters(
+        with pytest.raises(routing_domain._Unseatable, match="tile"):
+            routing_domain._place_coaters(
                 canvas,
                 spec,
                 strips,
@@ -18495,7 +18589,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         by placing no coater -- which reads as "this lane needs none".
         """
         canvas, spec, strips, ports = self._fixture(3)
-        seats = freeform._coater_seats(
+        seats = routing_domain._coater_seats(
             canvas,
             ports[0][self.ITEM],
             west_channel=strips[0].west_channel,
@@ -18512,8 +18606,8 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         )
         canvas.blocked[drop] = 999
         assert not canvas.free(drop), "the fixture failed to block the drop cell"
-        with pytest.raises(freeform._Unseatable, match="proliferator drop"):
-            freeform._place_coaters(
+        with pytest.raises(routing_domain._Unseatable, match="proliferator drop"):
+            routing_domain._place_coaters(
                 canvas,
                 spec,
                 strips,
@@ -18578,13 +18672,13 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             y=round(coater_record.y),
             yaw=coater_record.yaw,
         )
-        assert freeform._coater_keepout_hits(
+        assert routing_domain._coater_keepout_hits(
             canvas.buildings,
             proposed,
         ) == (assembler_index,)
 
-        with pytest.raises(freeform._Unseatable, match="keepout"):
-            freeform._place_coaters(
+        with pytest.raises(routing_domain._Unseatable, match="keepout"):
+            routing_domain._place_coaters(
                 canvas,
                 spec,
                 strips,
@@ -18621,11 +18715,11 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             x=0,
             y=0,
         )
-        assert freeform._coater_keepout_hits(records, candidate) == (0,)
-        assert freeform._coater_keepout_hits(
+        assert routing_domain._coater_keepout_hits(records, candidate) == (0,)
+        assert routing_domain._coater_keepout_hits(
             canvas.buildings,
             candidate,
-            max_obstacle_span=freeform._static_collider_span(obstacle),
+            max_obstacle_span=routing_domain._static_collider_span(obstacle),
         ) == (0,)
 
     def test_staged_static_alternate_seat_advances_in_order(
@@ -18642,10 +18736,10 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
 
         def projected_failure(
             indexed: Sequence[tuple[int, PlacedBuilding]],
-            _frames: Sequence[freeform._JunctionProjectionFrame],
+            _frames: Sequence[routing_domain._JunctionProjectionFrame],
             *,
             candidate_index: int,
-            cache: freeform._StagedStaticCache,
+            cache: routing_domain._StagedStaticCache,
             cancelled: Callable[[], bool] | None = None,
         ) -> finalize.ProjectionFailure | None:
             candidate = next(building for index, building in indexed if index == candidate_index)
@@ -18660,17 +18754,17 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             )
 
         monkeypatch.setattr(
-            freeform,
+            routing_domain,
             "_coater_keepout_hits",
             lambda _buildings, _candidate, *, max_obstacle_span=None: (),
         )
         monkeypatch.setattr(
-            freeform,
+            routing_domain,
             "_prospective_static_failure",
             projected_failure,
         )
 
-        got = freeform._place_coaters(
+        got = routing_domain._place_coaters(
             canvas,
             spec,
             strips,
@@ -18700,10 +18794,10 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
 
         def projected_failure(
             indexed: Sequence[tuple[int, PlacedBuilding]],
-            _frames: Sequence[freeform._JunctionProjectionFrame],
+            _frames: Sequence[routing_domain._JunctionProjectionFrame],
             *,
             candidate_index: int,
-            cache: freeform._StagedStaticCache,
+            cache: routing_domain._StagedStaticCache,
             cancelled: Callable[[], bool] | None = None,
         ) -> finalize.ProjectionFailure | None:
             candidate = next(building for index, building in indexed if index == candidate_index)
@@ -18718,18 +18812,18 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             )
 
         monkeypatch.setattr(
-            freeform,
+            routing_domain,
             "_coater_keepout_hits",
             lambda _buildings, _candidate, *, max_obstacle_span=None: (),
         )
         monkeypatch.setattr(
-            freeform,
+            routing_domain,
             "_prospective_static_failure",
             projected_failure,
         )
 
-        with pytest.raises(freeform._Unseatable) as caught:
-            freeform._place_coaters(
+        with pytest.raises(routing_domain._Unseatable) as caught:
+            routing_domain._place_coaters(
                 canvas,
                 spec,
                 strips,
@@ -18772,10 +18866,10 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
 
         def projected_failure(
             indexed: Sequence[tuple[int, PlacedBuilding]],
-            _frames: Sequence[freeform._JunctionProjectionFrame],
+            _frames: Sequence[routing_domain._JunctionProjectionFrame],
             *,
             candidate_index: int,
-            cache: freeform._StagedStaticCache,
+            cache: routing_domain._StagedStaticCache,
             cancelled: Callable[[], bool] | None = None,
         ) -> finalize.ProjectionFailure | None:
             candidate = next(building for index, building in indexed if index == candidate_index)
@@ -18787,15 +18881,15 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
                 160,
             )
 
-        monkeypatch.setattr(freeform, "_coater_keepout_hits", keepout_hits)
+        monkeypatch.setattr(routing_domain, "_coater_keepout_hits", keepout_hits)
         monkeypatch.setattr(
-            freeform,
+            routing_domain,
             "_prospective_static_failure",
             projected_failure,
         )
 
-        with pytest.raises(freeform._Unseatable) as caught:
-            freeform._place_coaters(
+        with pytest.raises(routing_domain._Unseatable) as caught:
+            routing_domain._place_coaters(
                 canvas,
                 spec,
                 strips,
@@ -18815,7 +18909,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
     def test_the_same_fixture_unblocked_seats_one(self) -> None:
         """Without this the two above pass for a fixture that seats nothing."""
         canvas, spec, strips, ports = self._fixture(4)
-        got = freeform._place_coaters(
+        got = routing_domain._place_coaters(
             canvas,
             spec,
             strips,
@@ -18842,7 +18936,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         checked: list[int] = []
 
         def projected_supply(
-            candidate: freeform._StagedCoater,
+            candidate: routing_domain._StagedCoater,
             _host: PlacedBuilding,
             _projections: Sequence[planet.Projection],
             *,
@@ -18853,12 +18947,12 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             return failure if len(checked) == 1 else None
 
         monkeypatch.setattr(
-            freeform,
+            routing_domain,
             "_projected_coater_supply_failure",
             projected_supply,
         )
 
-        got = freeform._place_coaters(
+        got = routing_domain._place_coaters(
             canvas,
             spec,
             strips,
@@ -18876,14 +18970,14 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        cache = freeform._StagedStaticCache()
+        cache = routing_domain._StagedStaticCache()
         checks = 0
-        original = freeform._projected_coater_supply_frame_failure
+        original = routing_domain._projected_coater_supply_frame_failure
 
         def counted(
-            candidate: freeform._StagedCoater,
+            candidate: routing_domain._StagedCoater,
             host: PlacedBuilding,
-            frame: freeform._JunctionProjectionFrame,
+            frame: routing_domain._JunctionProjectionFrame,
             *,
             cancelled: Callable[[], bool] | None = None,
         ) -> finalize.ProjectionFailure | None:
@@ -18892,13 +18986,13 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             return original(candidate, host, frame, cancelled=cancelled)
 
         monkeypatch.setattr(
-            freeform,
+            routing_domain,
             "_projected_coater_supply_frame_failure",
             counted,
         )
         for _attempt in range(2):
             canvas, spec, strips, ports = self._fixture(4)
-            got = freeform._place_coaters(
+            got = routing_domain._place_coaters(
                 canvas,
                 spec,
                 strips,
@@ -18926,7 +19020,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         )
         ports[0][other] = ports[0][self.ITEM]
 
-        got = freeform._place_coaters(
+        got = routing_domain._place_coaters(
             canvas,
             spec,
             strips,
@@ -18952,8 +19046,8 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         """The loop never reaches such an item, so the clauses inside cannot fire."""
         canvas, spec, strips, ports = self._fixture(4)
         spec = spec.model_copy(update={"spray_lanes": {**spec.spray_lanes, "gear": False}})
-        with pytest.raises(freeform._Unseatable, match="gear"):
-            freeform._place_coaters(
+        with pytest.raises(routing_domain._Unseatable, match="gear"):
+            routing_domain._place_coaters(
                 canvas,
                 spec,
                 strips,
@@ -19031,10 +19125,10 @@ def test_coater_seat_rejects_a_tile_with_a_belt_merge() -> None:
     seat at all and the clean control below would be vacuous.
     """
     canvas, port = _canvas_with_lane_merge_at(x=53, y=20, z=0)
-    assert freeform._coater_seats(canvas, port, west_channel=2) == ()
+    assert routing_domain._coater_seats(canvas, port, west_channel=2) == ()
 
     clean_canvas, clean_port = _canvas_with_straight_lane_at(x=53, y=20, z=0)
-    assert freeform._coater_seats(clean_canvas, clean_port, west_channel=2) == ((53, 20),)
+    assert routing_domain._coater_seats(clean_canvas, clean_port, west_channel=2) == ((53, 20),)
 
 
 # --- belt docked into a building PORT ---------------------------------------
@@ -19164,7 +19258,7 @@ class TestPreparedBeltPortDocking:
         ]
 
         assert (
-            freeform._dock_lane(
+            routing_domain._dock_lane(
                 canvas,
                 [machine],
                 lane,
@@ -19254,7 +19348,7 @@ def test_freeform_band_120_dropped_height_has_actual_clean_layout_control(
     )
     assert result.routing.status is DetailedRouteStatus.ROUTED
     assert result.placement is not None
-    assert validate.certify(result.placement, spec, expect_power=False).ok
+    assert validate.certify(result.placement, spec, belt_rules=_BELT_RULES, expect_power=False).ok
     assert (
         finalize.finalize_placement(
             result.placement,
@@ -19295,12 +19389,12 @@ def test_freeform_extent_gate_stops_before_power_planning_in_both_orientations(
         height=core_height,
     )
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_power_plan",
         lambda *_args, **_kwargs: pytest.fail("infeasible extent reached power planning"),
     )
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_core_bounds",
         lambda _canvas: (0, 0, core_width - 1, core_height - 1),
     )
@@ -19366,7 +19460,7 @@ def test_staged_static_effective_anchor_ranges_replace_padding_cross_product(
         )
     }
 
-    ranges = freeform._staged_static_effective_anchor_ranges(pair_height, band)
+    ranges = routing_domain._staged_static_effective_anchor_ranges(pair_height, band)
 
     assert len(ranges) <= 2
     assert tuple(anchor for interval in ranges for anchor in interval) == tuple(sorted(reference))
@@ -19379,9 +19473,9 @@ def test_staged_static_projection_risk_uses_one_exact_pair_per_relation(
     strip = next(
         strip
         for strip in plan_strips(proliferated_spec())
-        if freeform._staged_static_clearance_keys(strip)
+        if routing_domain._staged_static_clearance_keys(strip)
     )
-    relation = next(iter(freeform._staged_static_clearance_keys(strip)))
+    relation = next(iter(routing_domain._staged_static_clearance_keys(strip)))
     original = planet.collisions_at
     pair_counts: list[int] = []
 
@@ -19408,7 +19502,7 @@ def test_staged_static_projection_risk_uses_one_exact_pair_per_relation(
 
     monkeypatch.setattr(planet, "collisions_at", counted)
 
-    result = freeform._staged_static_relation_projection_risk_uncached(
+    result = routing_domain._staged_static_relation_projection_risk_uncached(
         relation,
         BandPolicy("160"),
     )
@@ -19423,7 +19517,7 @@ def test_staged_static_preclearance_batches_both_exact_relations(
 ) -> None:
     peer = catalog.building(2305)
     coater = catalog.building(catalog.SPRAY_COATER_ID)
-    relation = freeform.StagedStaticClearanceKey(
+    relation = routing_domain.StagedStaticClearanceKey(
         peer_item_id=2305,
         peer_model_index=peer.model_index,
         peer_width=peer.width,
@@ -19464,7 +19558,7 @@ def test_staged_static_preclearance_batches_both_exact_relations(
 
     monkeypatch.setattr(planet, "collisions_at", counted)
 
-    assert freeform._staged_static_preclearance_proof_uncached(
+    assert routing_domain._staged_static_preclearance_proof_uncached(
         relation,
         BandPolicy("160"),
     )
@@ -19506,8 +19600,8 @@ def test_staged_static_clearance_reuses_only_the_same_physical_relation() -> Non
         if strip.item_id == catalog.item_id("assembling-machine-2")
         and strip.west_channel == freeform._COATER_WEST_CHANNEL + 1
         and any(
-            freeform._staged_static_preclearance_proved(relation, policy)
-            for relation in freeform._staged_static_clearance_keys(
+            routing_domain._staged_static_preclearance_proved(relation, policy)
+            for relation in routing_domain._staged_static_clearance_keys(
                 replace(strip, west_channel=freeform._COATER_WEST_CHANNEL)
             )
         )
@@ -19518,11 +19612,11 @@ def test_staged_static_clearance_reuses_only_the_same_physical_relation() -> Non
     )
     relation = next(
         relation
-        for relation in freeform._staged_static_clearance_keys(unsafe_w3)
-        if freeform._staged_static_preclearance_proved(relation, policy)
+        for relation in routing_domain._staged_static_clearance_keys(unsafe_w3)
+        if routing_domain._staged_static_preclearance_proved(relation, policy)
     )
-    assert freeform._staged_static_relation_projection_risk(relation, policy)
-    assert not freeform._staged_static_relation_projection_risk(
+    assert routing_domain._staged_static_relation_projection_risk(relation, policy)
+    assert not routing_domain._staged_static_relation_projection_risk(
         replace(relation, delta_x=relation.delta_x + 1),
         policy,
     )
@@ -19532,13 +19626,13 @@ def test_staged_static_clearance_reuses_only_the_same_physical_relation() -> Non
         for strip in ordinary
         if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
         and strip.west_channel == freeform._COATER_WEST_CHANNEL
-        and freeform._staged_static_clearance_keys(strip)
+        and routing_domain._staged_static_clearance_keys(strip)
         and all(
-            not freeform._staged_static_relation_projection_risk(candidate, policy)
-            for candidate in freeform._staged_static_clearance_keys(strip)
+            not routing_domain._staged_static_relation_projection_risk(candidate, policy)
+            for candidate in routing_domain._staged_static_clearance_keys(strip)
         )
     )
-    assert relation not in freeform._staged_static_clearance_keys(safe)
+    assert relation not in routing_domain._staged_static_clearance_keys(safe)
 
     regenerated = plan_strips(
         spec,
@@ -19551,7 +19645,7 @@ def test_staged_static_clearance_reuses_only_the_same_physical_relation() -> Non
         strip
         for strip in regenerated
         if relation
-        in freeform._staged_static_clearance_keys(
+        in routing_domain._staged_static_clearance_keys(
             replace(strip, west_channel=freeform._COATER_WEST_CHANNEL)
         )
     ]
@@ -19570,11 +19664,11 @@ def test_all_products_band_160_cold_proof_reaches_a_valid_layout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spec = band_160_all_products_spec()
-    freeform._staged_static_preclearance_proved.cache_clear()
+    routing_domain._staged_static_preclearance_proved.cache_clear()
     # Pin only the already-proved packing. This test owns cold projection,
     # detailed routing, and certification; the corpus gate owns stochastic
     # packing quality and the 15-second production contract.
-    pack = freeform._Pack(
+    pack = routing_domain._Pack(
         at={
             index: origin
             for index, origin in enumerate(
@@ -19607,19 +19701,20 @@ def test_all_products_band_160_cold_proof_reaches_a_valid_layout(
     monkeypatch.setattr(freeform, "_pack", lambda *_args, **_kwargs: pack)
 
     placement = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
     ).lay_out(spec, time_budget_s=15.0)
 
     assert placement.frame is not None
     assert placement.frame.primary_band == 160
-    assert validate.certify(placement, spec, expect_power=True).ok
+    assert validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True).ok
 
 
 @pytest.mark.usefixtures("off_arm")
 def test_plan_strips_batches_all_exact_preclearance_relations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    freeform._staged_static_preclearance_proved.cache_clear()
+    routing_domain._staged_static_preclearance_proved.cache_clear()
     original = planet.collisions_at
     pair_counts: list[int] = []
 
@@ -19665,9 +19760,9 @@ def test_batched_relation_anchor_collection_cancels_without_caching(
     strip = next(
         strip
         for strip in plan_strips(proliferated_spec())
-        if freeform._staged_static_clearance_keys(strip)
+        if routing_domain._staged_static_clearance_keys(strip)
     )
-    relation = next(iter(freeform._staged_static_clearance_keys(strip)))
+    relation = next(iter(routing_domain._staged_static_clearance_keys(strip)))
 
     class InstrumentedAnchors:
         yielded = 0
@@ -19685,29 +19780,29 @@ def test_batched_relation_anchor_collection_cancels_without_caching(
 
     anchors = InstrumentedAnchors()
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_staged_static_effective_anchor_ranges",
         lambda _pair_height, _band: (AnchorBounds(),),
     )
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "range",
         lambda _start, _stop: anchors,
         raising=False,
     )
-    freeform._STAGED_STATIC_RELATION_RISK_CACHE.clear()
-    token = freeform._STAGED_STATIC_PROOF_CANCELLED.set(lambda: anchors.yielded >= 1)
+    routing_domain._STAGED_STATIC_RELATION_RISK_CACHE.clear()
+    token = routing_domain._STAGED_STATIC_PROOF_CANCELLED.set(lambda: anchors.yielded >= 1)
     try:
-        with pytest.raises(freeform._PreparationDeadline):
-            freeform._staged_static_relation_projection_risks(
+        with pytest.raises(routing_domain._PreparationDeadline):
+            routing_domain._staged_static_relation_projection_risks(
                 (relation,),
                 BandPolicy("portable"),
             )
     finally:
-        freeform._STAGED_STATIC_PROOF_CANCELLED.reset(token)
+        routing_domain._STAGED_STATIC_PROOF_CANCELLED.reset(token)
 
     assert not anchors.exhausted
-    assert not freeform._STAGED_STATIC_RELATION_RISK_CACHE
+    assert not routing_domain._STAGED_STATIC_RELATION_RISK_CACHE
 
 
 @pytest.mark.usefixtures("off_arm")
@@ -19717,10 +19812,10 @@ def test_staged_static_preclearance_cancels_inside_cold_proof_without_caching(
     strip = next(
         strip
         for strip in plan_strips(proliferated_spec())
-        if freeform._staged_static_clearance_keys(strip)
+        if routing_domain._staged_static_clearance_keys(strip)
     )
-    relation = next(iter(freeform._staged_static_clearance_keys(strip)))
-    freeform._staged_static_preclearance_proved.cache_clear()
+    relation = next(iter(routing_domain._staged_static_clearance_keys(strip)))
+    routing_domain._staged_static_preclearance_proved.cache_clear()
     checks = 0
 
     def cancelled() -> bool:
@@ -19728,25 +19823,25 @@ def test_staged_static_preclearance_cancels_inside_cold_proof_without_caching(
         checks += 1
         return checks >= 8
 
-    with pytest.raises(freeform._PreparationDeadline):
-        freeform._staged_static_preclearance_proved(
+    with pytest.raises(routing_domain._PreparationDeadline):
+        routing_domain._staged_static_preclearance_proved(
             relation,
             BandPolicy("portable"),
             cancelled=cancelled,
         )
 
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_staged_static_preclearance_proof_uncached",
         lambda _relation, _policy: True,
     )
-    assert freeform._staged_static_preclearance_proved(
+    assert routing_domain._staged_static_preclearance_proved(
         relation,
         BandPolicy("portable"),
     )
     assert checks == 8
     monkeypatch.undo()
-    freeform._staged_static_preclearance_proved.cache_clear()
+    routing_domain._staged_static_preclearance_proved.cache_clear()
 
 
 def test_power_projection_envelope_cancels_inside_rectangle_generation(
@@ -19783,8 +19878,8 @@ def test_power_projection_envelope_cancels_inside_rectangle_generation(
         checks += 1
         return checks >= 8
 
-    with pytest.raises(freeform._PreparationDeadline):
-        freeform._power_projection_envelope(
+    with pytest.raises(routing_domain._PreparationDeadline):
+        routing_domain._power_projection_envelope(
             canvas,
             BandPolicy("portable"),
             cancelled=cancelled,
@@ -19794,7 +19889,7 @@ def test_power_projection_envelope_cancels_inside_rectangle_generation(
 
 
 def test_cancelled_junction_frame_cache_miss_never_installs_partial_frames() -> None:
-    cache = freeform._StagedStaticCache()
+    cache = routing_domain._StagedStaticCache()
     checks = 0
 
     def cancelled() -> bool:
@@ -19802,8 +19897,8 @@ def test_cancelled_junction_frame_cache_miss_never_installs_partial_frames() -> 
         checks += 1
         return checks >= 10
 
-    with pytest.raises(freeform._PreparationDeadline):
-        freeform._cached_junction_projection_frames(
+    with pytest.raises(routing_domain._PreparationDeadline):
+        routing_domain._cached_junction_projection_frames(
             cache,
             (0, 0, 1, 1),
             (-3, -3, 4, 4),
@@ -19827,7 +19922,7 @@ def test_prepared_junction_ban_cancels_inside_cell_level_scan(
         width=machine.width,
         height=machine.height,
     )
-    cache = freeform._StagedStaticCache()
+    cache = routing_domain._StagedStaticCache()
     sites = 0
 
     def site_is_clear(
@@ -19840,10 +19935,10 @@ def test_prepared_junction_ban_cancels_inside_cell_level_scan(
         sites += 1
         return True
 
-    monkeypatch.setattr(freeform, "_junction_site_is_clear", site_is_clear)
+    monkeypatch.setattr(routing_domain, "_junction_site_is_clear", site_is_clear)
 
-    with pytest.raises(freeform._PreparationDeadline):
-        freeform._prepared_junction_ban(
+    with pytest.raises(routing_domain._PreparationDeadline):
+        routing_domain._prepared_junction_ban(
             (obstacle,),
             (),
             cancelled=lambda: sites >= 1,
@@ -19869,8 +19964,8 @@ def test_prepared_junction_ban_reuses_complete_immutable_offsets(
         )
         for x in (0, 20)
     )
-    expected = freeform._prepared_junction_ban(obstacles, ())
-    original = freeform._cancellable_junction_ban_offsets
+    expected = routing_domain._prepared_junction_ban(obstacles, ())
+    original = routing_domain._cancellable_junction_ban_offsets
     calls = 0
 
     def counted(
@@ -19894,9 +19989,9 @@ def test_prepared_junction_ban_reuses_complete_immutable_offsets(
             cancelled,
         )
 
-    monkeypatch.setattr(freeform, "_cancellable_junction_ban_offsets", counted)
-    cache = freeform._StagedStaticCache()
-    actual = freeform._prepared_junction_ban(
+    monkeypatch.setattr(routing_domain, "_cancellable_junction_ban_offsets", counted)
+    cache = routing_domain._StagedStaticCache()
+    actual = routing_domain._prepared_junction_ban(
         obstacles,
         (),
         cancelled=lambda: False,
@@ -19930,12 +20025,12 @@ def test_prepared_junction_ban_reuses_complete_geometry_offsets_per_attempt(
         return frozenset({(-1, 1, 2)})
 
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_cancellable_junction_ban_offsets",
         offsets,
     )
 
-    ban = freeform._prepared_junction_ban(
+    ban = routing_domain._prepared_junction_ban(
         tuple(obstacles),
         (),
         cancelled=lambda: False,
@@ -19948,29 +20043,29 @@ def test_prepared_junction_ban_reuses_complete_geometry_offsets_per_attempt(
 def test_cancellable_junction_ban_offsets_are_shared_process_wide(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import flab2bp.layout.freeform as freeform_module
+    from flab2bp.layout import routing_domain
 
     # conftest.py's autouse `_layout_memo_policy` fixture clears
     # `_JUNCTION_BAN_OFFSET_CACHE` and `_junction_ban_offsets`'s `lru_cache`
     # before any test that requests `monkeypatch`, so this test starts cold.
     probes: list[tuple[int, int, int]] = []
-    original = freeform_module._junction_site_is_clear
+    original = routing_domain._junction_site_is_clear
 
     def counting(buildings: Sequence[PlacedBuilding], x: int, y: int, level: int) -> bool:
         probes.append((x, y, level))
         return original(buildings, x, y, level)
 
-    monkeypatch.setattr(freeform_module, "_junction_site_is_clear", counting)
+    monkeypatch.setattr(routing_domain, "_junction_site_is_clear", counting)
     smelter_id = catalog.item_id("arc-smelter")
     smelter = catalog.building(smelter_id)
     key = (smelter_id, smelter.model_index, smelter.width, smelter.height, 0.0, F(0))
 
-    first = freeform_module._cancellable_junction_ban_offsets(*key, lambda: False)
+    first = routing_domain._cancellable_junction_ban_offsets(*key, lambda: False)
     probed_once = len(probes)
     assert probed_once > 0
 
-    second = freeform_module._cancellable_junction_ban_offsets(*key, lambda: False)
-    third = freeform_module._junction_ban_offsets(*key)
+    second = routing_domain._cancellable_junction_ban_offsets(*key, lambda: False)
+    third = routing_domain._junction_ban_offsets(*key)
 
     assert second == first
     assert third == first
@@ -20010,11 +20105,11 @@ def test_projected_coater_supply_is_checked_during_preparation(
         y=0,
         z=1,
     )
-    staged = freeform._StagedCoater(
+    staged = routing_domain._StagedCoater(
         approach=approach,
         supply=supply,
         coater=coater,
-        projected_pair=(3, freeform._collision_pose(coater)),
+        projected_pair=(3, routing_domain._collision_pose(coater)),
         port=port,
     )
     band = planet.bands()[0]
@@ -20073,7 +20168,7 @@ def test_projected_coater_supply_is_checked_during_preparation(
     monkeypatch.setattr(finalize, "_projected_addon_failure_from_context", reject)
 
     assert (
-        freeform._projected_coater_supply_failure(
+        routing_domain._projected_coater_supply_failure(
             staged,
             host,
             (projection, projection),
@@ -20109,7 +20204,7 @@ def test_projected_coater_junction_bans_reuse_identical_exact_relations(
         colliders.PLANET_SEGMENT,
         colliders.PLANET_RADIUS,
     )
-    frame = freeform._JunctionProjectionFrame(
+    frame = routing_domain._JunctionProjectionFrame(
         placement.bounds,
         candidate,
         (projection,),
@@ -20151,7 +20246,7 @@ def test_projected_coater_junction_bans_reuse_identical_exact_relations(
     monkeypatch.setattr(colliders, "target_boxes", splitter_boxes)
     monkeypatch.setattr(colliders, "obb_overlap", no_overlap)
 
-    bans = freeform._projected_coater_junction_bans_by_frame(
+    bans = routing_domain._projected_coater_junction_bans_by_frame(
         ((0, coater), (1, coater)),
         (frame,),
         placement.bounds,
@@ -20184,9 +20279,9 @@ def test_relative_rigid_frame_pose_matches_every_portable_frame_candidate() -> N
         width=coater_info.width,
         height=coater_info.height,
     )
-    coater_pose = freeform._collision_pose(coater)
+    coater_pose = routing_domain._collision_pose(coater)
     splitter_stacks = tuple(
-        freeform._splitter_stack_geometry(x, y, level)
+        routing_domain._splitter_stack_geometry(x, y, level)
         for x, y, level in (
             (7, 11, 0),
             (18, 16, 1),
@@ -20195,7 +20290,7 @@ def test_relative_rigid_frame_pose_matches_every_portable_frame_candidate() -> N
     )
 
     for candidate in candidates:
-        materialized_coater = freeform._collision_pose(
+        materialized_coater = routing_domain._collision_pose(
             finalize.materialize_frame_building(
                 coater,
                 bounds=bounds,
@@ -20203,7 +20298,7 @@ def test_relative_rigid_frame_pose_matches_every_portable_frame_candidate() -> N
             )
         )
         for splitter in itertools.chain.from_iterable(splitter_stacks):
-            expected = freeform._collision_pose(
+            expected = routing_domain._collision_pose(
                 finalize.materialize_frame_building(
                     splitter,
                     bounds=bounds,
@@ -20211,8 +20306,8 @@ def test_relative_rigid_frame_pose_matches_every_portable_frame_candidate() -> N
                 )
             )
             assert (
-                freeform._relative_rigid_frame_pose(
-                    freeform._collision_pose(splitter),
+                routing_domain._relative_rigid_frame_pose(
+                    routing_domain._collision_pose(splitter),
                     coater_pose,
                     materialized_coater,
                     rotated=candidate.frame.rotated,
@@ -20244,7 +20339,7 @@ def test_projected_coater_junction_bans_cancel_inside_obb_product(
         colliders.PLANET_SEGMENT,
         colliders.PLANET_RADIUS,
     )
-    frame = freeform._JunctionProjectionFrame(
+    frame = routing_domain._JunctionProjectionFrame(
         placement.bounds,
         candidate,
         (projection,),
@@ -20261,8 +20356,8 @@ def test_projected_coater_junction_bans_cancel_inside_obb_product(
     monkeypatch.setattr(colliders, "target_boxes", lambda *_args: boxes)
     monkeypatch.setattr(colliders, "obb_overlap", overlap_once)
 
-    with pytest.raises(freeform._PreparationDeadline):
-        freeform._projected_coater_junction_bans_by_frame(
+    with pytest.raises(routing_domain._PreparationDeadline):
+        routing_domain._projected_coater_junction_bans_by_frame(
             ((0, coater),),
             (frame,),
             placement.bounds,
@@ -20295,11 +20390,11 @@ def test_power_peer_broad_phase_cancels_before_no_hit_pruning() -> None:
     context = (
         band.columns,
         False,
-        freeform._minimum_projection_grid_scale((band,)),
+        routing_domain._minimum_projection_grid_scale((band,)),
     )
     candidate = node(0, 0)
     peer = node(1, band.columns // 2)
-    assert not freeform._projected_power_peer_possible(candidate, peer, (context,))
+    assert not routing_domain._projected_power_peer_possible(candidate, peer, (context,))
 
     for context_count in (1, 8):
         checks = 0
@@ -20309,7 +20404,7 @@ def test_power_peer_broad_phase_cancels_before_no_hit_pruning() -> None:
             checks += 1
             return False
 
-        assert not freeform._projected_power_peer_possible(
+        assert not routing_domain._projected_power_peer_possible(
             candidate,
             peer,
             (context,) * context_count,
@@ -20324,8 +20419,8 @@ def test_power_peer_broad_phase_cancels_before_no_hit_pruning() -> None:
         checks += 1
         return checks >= 3
 
-    with pytest.raises(freeform._PreparationDeadline):
-        freeform._projected_power_peer_possible(
+    with pytest.raises(routing_domain._PreparationDeadline):
+        routing_domain._projected_power_peer_possible(
             candidate,
             peer,
             (context,) * 8,
@@ -20377,7 +20472,7 @@ def test_power_plan_cancels_inside_proposal_projection_node_scan(
         return None
 
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_power_projection_envelope",
         lambda *_args, **_kwargs: tuple(projections),
     )
@@ -20398,13 +20493,13 @@ def test_power_plan_cancels_inside_proposal_projection_node_scan(
         return True
 
     monkeypatch.setattr(
-        freeform,
+        routing_domain,
         "_projected_power_peer_possible",
         retain_power_peer,
     )
-    cache = freeform._StagedStaticCache()
+    cache = routing_domain._StagedStaticCache()
 
-    with pytest.raises(freeform._PreparationDeadline):
+    with pytest.raises(routing_domain._PreparationDeadline):
         _power_plan(
             canvas,
             (-2, -2, 4, 4),
@@ -20428,12 +20523,12 @@ def test_regular_build_maps_cancelled_preparation_to_budget(
         *_args: object,
         cancelled: Callable[[], bool] | None = None,
         **_kwargs: object,
-    ) -> freeform._PreparedRoutingProblem:
+    ) -> routing_domain._PreparedRoutingProblem:
         assert cancelled is not None
         assert cancelled()
-        raise freeform._PreparationDeadline
+        raise routing_domain._PreparationDeadline
 
-    monkeypatch.setattr(freeform, "_prepare_routing_problem", cancel_preparation)
+    monkeypatch.setattr(routing_domain, "_prepare_routing_problem", cancel_preparation)
 
     result = _build(
         spec,
@@ -20456,10 +20551,10 @@ def test_regular_build_freezes_preparation_time_before_detailed_routing(
     strips = plan_strips(spec, strip_len=6)
     pack = _greedy_pack(strips, max(_box(strip)[1] for strip in strips))
     now = [100.0]
-    prepared = cast(freeform._PreparedRoutingProblem, object())
+    prepared = cast(routing_domain._PreparedRoutingProblem, object())
     routing = DetailedRouteResult(DetailedRouteStatus.ROUTED, (), (), 0, 0)
 
-    def prepare(*_args: object, **_kwargs: object) -> freeform._PreparedRoutingProblem:
+    def prepare(*_args: object, **_kwargs: object) -> routing_domain._PreparedRoutingProblem:
         now[0] += 2.0
         return prepared
 
@@ -20468,7 +20563,7 @@ def test_regular_build_freezes_preparation_time_before_detailed_routing(
         return _BuildResult(None, routing, None, ())
 
     monkeypatch.setattr(time, "monotonic", lambda: now[0])
-    monkeypatch.setattr(freeform, "_prepare_routing_problem", prepare)
+    monkeypatch.setattr(routing_domain, "_prepare_routing_problem", prepare)
     monkeypatch.setattr(freeform, "_build_prepared", build_prepared)
 
     result = _build(
@@ -20491,7 +20586,7 @@ def test_post_feedback_replan_deadline_is_a_typed_preparation_refusal(
         *_args: object,
         **_kwargs: object,
     ) -> Placement | None:
-        raise freeform._PreparationDeadline
+        raise routing_domain._PreparationDeadline
 
     monkeypatch.setattr(FreeformLayout, "_sweep", expire_replan)
 
@@ -20499,20 +20594,20 @@ def test_post_feedback_replan_deadline_is_a_typed_preparation_refusal(
         NoValidLayout,
         match="PREPARATION deadline passed while applying learned projection geometry",
     ) as caught:
-        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+        FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
             two_stage_spec(),
             time_budget_s=1.0,
         )
 
-    assert isinstance(caught.value.__cause__, freeform._PreparationDeadline)
+    assert isinstance(caught.value.__cause__, routing_domain._PreparationDeadline)
 
 
 def test_freeform_placement_records_route_backend() -> None:
     from flab2bp.layout import route_kernel
 
-    placement = FreeformLayout(band_policy=BandPolicy("portable"), workers=1).lay_out(
-        two_stage_spec(), time_budget_s=4.0
-    )
+    placement = FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=1
+    ).lay_out(two_stage_spec(), time_budget_s=4.0)
     assert placement.stats["route_backend"] == route_kernel.selected_backend()
     for key in (
         "planning_time_s",
@@ -20559,12 +20654,12 @@ def test_lay_out_raises_a_lane_that_needs_a_faster_belt() -> None:
         belt_items_per_second=F(12),
         belt_upgrades=(BeltTier(item_id="conveyor-belt-3", items_per_second=F(30)),),
     )
-    layout = FreeformLayout(band_policy=BandPolicy("portable"), workers=1)
+    layout = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=1)
     placement = layout.lay_out(spec, time_budget_s=15.0)
     tiers = {b.item_id for b in placement.buildings if catalog.is_belt(b.item_id)}
     assert 2003 in tiers
     assert placement.stats["belt_runs_upgraded"] >= 1
-    assert validate.certify(placement, spec, expect_power=True).ok
+    assert validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True).ok
 
 
 def test_shared_lane_capacity_is_judged_against_the_fastest_allowed_belt() -> None:
@@ -20584,11 +20679,11 @@ def test_shared_lane_capacity_is_judged_against_the_fastest_allowed_belt() -> No
         belt_items_per_second=F(12),
         belt_upgrades=(BeltTier(item_id="conveyor-belt-3", items_per_second=F(30)),),
     )
-    group = next(iter(freeform._adapt(spec).values()))
+    group = next(iter(routing_domain._adapt(spec).values()))
     freeform._check_shared_lane_capacity(group, (("copper-ingot", "iron-ingot"),), 1, spec)
 
     floor_only = spec.model_copy(update={"belt_upgrades": ()})
-    group = next(iter(freeform._adapt(floor_only).values()))
+    group = next(iter(routing_domain._adapt(floor_only).values()))
     with pytest.raises(ValueError, match="cannot share a belt"):
         freeform._check_shared_lane_capacity(
             group, (("copper-ingot", "iron-ingot"),), 1, floor_only
@@ -20612,7 +20707,7 @@ def test_a_shared_lane_is_judged_against_the_stack_its_cargo_carries() -> None:
         belt_item_id="conveyor-belt-3",
         belt_items_per_second=F(30),
     )
-    group = next(iter(freeform._adapt(spec).values()))
+    group = next(iter(routing_domain._adapt(spec).values()))
     lane = (("copper-ingot", "iron-ingot"),)
     with pytest.raises(ValueError, match="cannot share a belt"):
         freeform._check_shared_lane_capacity(group, lane, 1, spec, stack=1)
@@ -20634,7 +20729,7 @@ def test_a_shared_lane_defaults_to_stack_one() -> None:
         belt_item_id="conveyor-belt-3",
         belt_items_per_second=F(30),
     )
-    group = next(iter(freeform._adapt(spec).values()))
+    group = next(iter(routing_domain._adapt(spec).values()))
     with pytest.raises(ValueError, match="cannot share a belt"):
         freeform._check_shared_lane_capacity(group, (("copper-ingot", "iron-ingot"),), 1, spec)
 
@@ -20670,27 +20765,27 @@ def test_pick_sorter_keeps_the_stack_the_lane_was_planned_at() -> None:
     planned at stack 4 needs a sorter that can PLACE 4, or the lane it feeds
     would be built at 1 and the validator would judge it at 1.
     """
-    stacks = freeform._SorterStacks(
+    stacks = routing_domain._SorterStacks(
         place_by_tier={2011: 1, 2012: 1, 2013: 1, 2014: 4},
         pick_by_tier={2011: 1, 2012: 1, 2013: 1, 2014: 4},
     )
     tiers = (2011, 2012, 2013, 2014)
-    tier, _ = freeform._pick_sorter(F(1), 1, 1, tiers, stacks=stacks, min_place_stack=4)
+    tier, _ = routing_domain._pick_sorter(F(1), 1, 1, tiers, stacks=stacks, min_place_stack=4)
     assert tier == 2014
-    tier, _ = freeform._pick_sorter(F(1), 1, 1, tiers, stacks=stacks, min_pick_stack=4)
+    tier, _ = routing_domain._pick_sorter(F(1), 1, 1, tiers, stacks=stacks, min_pick_stack=4)
     assert tier == 2014
-    tier, _ = freeform._pick_sorter(F(1), 1, 1, tiers, stacks=stacks)
+    tier, _ = routing_domain._pick_sorter(F(1), 1, 1, tiers, stacks=stacks)
     assert tier == 2011, "an unstacked lane must still take the cheapest tier"
 
 
 def test_pick_sorter_returns_the_fastest_tier_when_no_tier_keeps_the_promise() -> None:
     """Same contract as the rate case: never emit a tier the save cannot
     build; leave the refusal to the validator's `flow.sorter_capacity`."""
-    stacks = freeform._SorterStacks(
+    stacks = routing_domain._SorterStacks(
         place_by_tier={2011: 1, 2012: 1, 2013: 1},
         pick_by_tier={2011: 1, 2012: 1, 2013: 1},
     )
-    tier, _ = freeform._pick_sorter(
+    tier, _ = routing_domain._pick_sorter(
         F(1), 1, 1, (2011, 2012, 2013), stacks=stacks, min_place_stack=2
     )
     assert tier == 2013
@@ -20742,7 +20837,7 @@ def test_a_both_fed_item_keeps_a_stack_for_each_side_of_the_strip() -> None:
     assert spec.planning_stack("hydrogen") == 2
     assert spec.planning_stack("hydrogen", external=False) == 3
 
-    stacks = freeform._lane_stacks_for(spec)
+    stacks = routing_domain._lane_stacks_for(spec)
     assert stacks.into("hydrogen") == 2, "the lane a consumer picks from"
     assert stacks.out_of("hydrogen") == 3, "the lane the producer places onto"
     # An item with only one lane answers the same on both sides.
@@ -20756,10 +20851,10 @@ def test_the_producer_sorter_is_asked_for_the_stack_its_output_lane_promises() -
     lane that promises 3, and the lane would be built a tier too small.
     """
     spec = _both_fed_stacked_spec()
-    lanes = freeform._lane_stacks_for(spec)
-    sorter_stacks = freeform._sorter_stacks_for(spec)
-    tiers = freeform._sorter_tiers_for(spec)
-    tier, _ = freeform._pick_sorter(
+    lanes = routing_domain._lane_stacks_for(spec)
+    sorter_stacks = routing_domain._sorter_stacks_for(spec)
+    tiers = routing_domain._sorter_tiers_for(spec)
+    tier, _ = routing_domain._pick_sorter(
         F(1), 1, 1, tiers, stacks=sorter_stacks, min_place_stack=lanes.out_of("hydrogen")
     )
     assert sorter_stacks.place(tier) >= 3
@@ -20767,18 +20862,18 @@ def test_the_producer_sorter_is_asked_for_the_stack_its_output_lane_promises() -
 
 
 def test_pick_sorter_never_leaves_the_allowed_tiers() -> None:
-    tier, _ = freeform._pick_sorter(F(10), 1, 1, tiers=(2011, 2012, 2013))
+    tier, _ = routing_domain._pick_sorter(F(10), 1, 1, tiers=(2011, 2012, 2013))
     assert tier == 2013, "the fastest ALLOWED tier, not the Pile Sorter"
-    tier, _ = freeform._pick_sorter(F(10), 1, 1, tiers=(2011, 2012, 2013, 2014))
+    tier, _ = routing_domain._pick_sorter(F(10), 1, 1, tiers=(2011, 2012, 2013, 2014))
     assert tier == 2014
-    tier, _ = freeform._pick_sorter(F(1), 1, 1, tiers=(2012, 2013))
+    tier, _ = routing_domain._pick_sorter(F(1), 1, 1, tiers=(2012, 2013))
     assert tier == 2012, "the cheapest allowed tier that carries the rate"
 
 
 def test_sorter_tiers_for_spec_maps_ids_and_keeps_catalog_order() -> None:
     spec = single_recipe_spec().model_copy(update={"sorter_item_ids": ("sorter-2", "sorter-1")})
-    assert freeform._sorter_tiers_for(spec) == (2011, 2012)
-    assert freeform._sorter_tiers_for(single_recipe_spec()) == catalog.SORTER_TIERS
+    assert routing_domain._sorter_tiers_for(spec) == (2011, 2012)
+    assert routing_domain._sorter_tiers_for(single_recipe_spec()) == catalog.SORTER_TIERS
 
 
 def _piler_two_stage_spec(
@@ -20826,7 +20921,7 @@ def _piler_two_stage_spec(
 def _prepare_piler_strips(
     spec: BuildSpec,
     strips: list[Strip],
-) -> freeform._PreparedRoutingProblem:
+) -> routing_domain._PreparedRoutingProblem:
     return _prepare_routing_problem(
         spec,
         strips,
@@ -21161,7 +21256,7 @@ def test_prepared_problem_hands_the_spec_sorter_tiers_to_the_workspace() -> None
     those, so the workspace canvas has to know."""
     # The smallest real one: every field has a default except the geometry
     # tuples, which may be empty.
-    prepared = freeform._PreparedRoutingProblem(
+    prepared = routing_domain._PreparedRoutingProblem(
         building_templates=(),
         blocked=(),
         solid=frozenset(),
@@ -21305,9 +21400,9 @@ def test_a_pack_with_no_stranded_net_never_runs_the_cluster_search(
         return original(problem, environment)  # type: ignore[arg-type]
 
     monkeypatch.setattr(last_mile_module, "solve_cluster", counting)
-    placement = FreeformLayout(band_policy=BandPolicy("portable"), workers=1).lay_out(
-        plastic_spec(), time_budget_s=8.0
-    )
+    placement = FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=1
+    ).lay_out(plastic_spec(), time_budget_s=8.0)
 
     # A pack that never routed would satisfy "the search never ran" for the
     # wrong reason, so the premise is asserted alongside the claim.
@@ -21330,7 +21425,7 @@ def test_a_bounded_cluster_search_restores_the_round_exactly(
     monkeypatch.setattr(last_mile_module, "solve_cluster", always_bounded)
     canvas, nets, bounds = _one_stranded_net_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -21357,7 +21452,7 @@ def test_failed_cluster_preserves_order_beside_unrelated_stakes(
     saved: list[tuple[tuple[int, tuple[Cell, ...]], ...]] = []
     live: list[Mapping[int, tuple[Cell, ...]]] = []
     subsequent: list[tuple[int, ...]] = []
-    commit = freeform._commit_paths
+    commit = routing_domain._commit_paths
 
     def cluster(*args: object, **kwargs: object) -> last_mile.ClusterProblem:
         paths = cast(Mapping[int, tuple[Cell, ...]], kwargs["paths"])
@@ -21380,8 +21475,8 @@ def test_failed_cluster_preserves_order_beside_unrelated_stakes(
 
     monkeypatch.setattr(last_mile, "build_cluster", cluster)
     monkeypatch.setattr(last_mile, "solve_cluster", lambda *_args: _bounded_result())
-    monkeypatch.setattr(freeform, "_commit_paths", observe_commit)
-    monkeypatch.setattr(freeform, "RRR_MAX", 1)
+    monkeypatch.setattr(routing_domain, "_commit_paths", observe_commit)
+    monkeypatch.setattr(routing_domain, "RRR_MAX", 1)
     result = _route_all(canvas, nets, 2001, 35, bounds)
 
     assert saved and tuple(index for index, _path in saved[0]) == (0, 2)
@@ -21396,10 +21491,10 @@ def test_reservation_abort_restores_held_corridor_precedence(
     unexpected: bool,
 ) -> None:
     canvas = _Canvas(limit=(-4, -4, 10, 6))
-    held = _access_demand((0, 0, 0), freeform.PortAccessKind.INTERNAL_DEPARTURE, belt=1)
-    incoming = _access_demand((6, 0, 0), freeform.PortAccessKind.INTERNAL_ARRIVAL, belt=2)
-    first = freeform.PortAccessCorridor((1, 0, 0), (2, 0, 0), held.kind)
-    second = freeform.PortAccessCorridor((0, 1, 0), (0, 2, 0), incoming.kind)
+    held = _access_demand((0, 0, 0), routing_domain.PortAccessKind.INTERNAL_DEPARTURE, belt=1)
+    incoming = _access_demand((6, 0, 0), routing_domain.PortAccessKind.INTERNAL_ARRIVAL, belt=2)
+    first = routing_domain.PortAccessCorridor((1, 0, 0), (2, 0, 0), held.kind)
+    second = routing_domain.PortAccessCorridor((0, 1, 0), (0, 2, 0), incoming.kind)
     unrelated = (9, 5, 0)
     canvas.reserved[unrelated] = (9, 6, 0)
     for corridor in (first, second):
@@ -21416,7 +21511,7 @@ def test_reservation_abort_restores_held_corridor_precedence(
             raise RuntimeError("reservation probe")
         return checks == 2
 
-    with pytest.raises(RuntimeError if unexpected else freeform._PreparationDeadline):
+    with pytest.raises(RuntimeError if unexpected else routing_domain._PreparationDeadline):
         _reserve_port_access(canvas, (incoming,), held={held: first}, cancelled=cancelled)
 
     assert (tuple(canvas.reserved.items()), tuple(canvas.port_corridors.items())) == before
@@ -21441,13 +21536,13 @@ def test_failed_cluster_restores_two_corridors_and_unrelated_grid(
         canvas.solid.discard((x, y))
         for level in range(LEVELS):
             canvas.blocked.pop((x, y, level), None)
-    departure = freeform.PortAccessCorridor(
-        (0, -1, 0), (0, 0, 0), freeform.PortAccessKind.INTERNAL_DEPARTURE
+    departure = routing_domain.PortAccessCorridor(
+        (0, -1, 0), (0, 0, 0), routing_domain.PortAccessKind.INTERNAL_DEPARTURE
     )
-    arrival = freeform.PortAccessCorridor(
-        (-1, -2, 0), (-2, -2, 0), freeform.PortAccessKind.INTERNAL_ARRIVAL
+    arrival = routing_domain.PortAccessCorridor(
+        (-1, -2, 0), (-2, -2, 0), routing_domain.PortAccessKind.INTERNAL_ARRIVAL
     )
-    unrelated = freeform.PortAccessCorridor((-3, 3, 0), (-3, 4, 0))
+    unrelated = routing_domain.PortAccessCorridor((-3, 3, 0), (-3, 4, 0))
     for port, corridors in (((-4, 3, 0), (unrelated,)), ((0, -2, 0), (departure, arrival))):
         canvas.port_corridors[port] = corridors
         for corridor in corridors:
@@ -21456,9 +21551,9 @@ def test_failed_cluster_restores_two_corridors_and_unrelated_grid(
     grid: list[_Grid] = []
     before: list[tuple[object, ...]] = []
     after: list[tuple[object, ...]] = []
-    make_grid = freeform._make_grid
+    make_grid = routing_domain._make_grid
     build_cluster = last_mile.build_cluster
-    commit_paths = freeform._commit_paths
+    commit_paths = routing_domain._commit_paths
 
     def capture_grid(*args: object, **kwargs: object) -> _Grid:
         value = make_grid(*args, **kwargs)  # type: ignore[arg-type]
@@ -21492,11 +21587,11 @@ def test_failed_cluster_restores_two_corridors_and_unrelated_grid(
             after.append(state())
         return commit_paths(*args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(freeform, "_make_grid", capture_grid)
+    monkeypatch.setattr(routing_domain, "_make_grid", capture_grid)
     monkeypatch.setattr(last_mile, "build_cluster", cluster)
     monkeypatch.setattr(last_mile, "solve_cluster", abort)
-    monkeypatch.setattr(freeform, "_commit_paths", next_commit)
-    monkeypatch.setattr(freeform, "RRR_MAX", 1)
+    monkeypatch.setattr(routing_domain, "_commit_paths", next_commit)
+    monkeypatch.setattr(routing_domain, "RRR_MAX", 1)
     if unexpected:
         with pytest.raises(RuntimeError, match="cluster probe"):
             _route_all(canvas, nets, 2001, 35, bounds)
@@ -21545,7 +21640,7 @@ def test_a_hostile_cluster_solution_never_raises_and_never_routes(
     monkeypatch.setattr(last_mile_module, "solve_cluster", hostile)
     canvas, nets, bounds = _one_stranded_net_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -21580,7 +21675,7 @@ def test_too_many_stranded_nets_never_reach_the_cluster_search(
     monkeypatch.setattr(last_mile_module, "B_MAX_STRANDED", 0)
     canvas, nets, bounds = _one_stranded_net_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
-    freeform._route_all(
+    routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -21608,7 +21703,7 @@ def test_the_cluster_search_runs_at_most_once_per_routing_pass(
     monkeypatch.setattr(last_mile_module, "solve_cluster", always_bounded)
     canvas, nets, bounds = _one_stranded_net_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
-    freeform._route_all(
+    routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -21641,7 +21736,7 @@ def test_placement_stats_count_the_last_mile_outcome(
     monkeypatch.setattr(last_mile_module, "solve_cluster", always_bounded)
     canvas, nets, bounds = _one_stranded_net_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
-    routing = freeform_module._route_all(
+    routing = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -21682,7 +21777,7 @@ def test_a_cluster_solution_is_staked_and_routes_the_pack() -> None:
     canvas, nets, bounds = _joint_only_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
 
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -21723,7 +21818,7 @@ def test_an_unsorted_reservation_tuple_is_not_a_restore_mismatch(
     from flab2bp.layout import last_mile as last_mile_module
 
     canvas, nets, bounds = _one_stranded_net_fixture()
-    original_reserve = freeform._reserve_port_access
+    original_reserve = routing_domain._reserve_port_access
     spectator = (5, 5, 0)
 
     def reserve_with_a_spectator(
@@ -21734,12 +21829,12 @@ def test_an_unsorted_reservation_tuple_is_not_a_restore_mismatch(
     ) -> None:
         original_reserve(reserve_canvas, reserve_nets, *args, **kwargs)  # type: ignore[arg-type]
         reserve_canvas.port_corridors[spectator] = (
-            freeform.PortAccessCorridor(access=(5, 5, 0), exit=(5, 4, 0)),
+            routing_domain.PortAccessCorridor(access=(5, 5, 0), exit=(5, 4, 0)),
         )
         reserve_canvas.reserved[(5, 5, 0)] = spectator
         reserve_canvas.reserved[(5, 4, 0)] = spectator
 
-    monkeypatch.setattr(freeform, "_reserve_port_access", reserve_with_a_spectator)
+    monkeypatch.setattr(routing_domain, "_reserve_port_access", reserve_with_a_spectator)
 
     def always_proved(
         problem: last_mile_module.ClusterProblem,
@@ -21758,7 +21853,7 @@ def test_an_unsorted_reservation_tuple_is_not_a_restore_mismatch(
     # cluster search runs, the release has already canonicalised it.
     entered: list[tuple[int, ...]] = []
     entered_pairs: list[tuple[tuple[int, Cell], ...]] = []
-    original_make_grid = freeform._make_grid
+    original_make_grid = routing_domain._make_grid
 
     def watching_make_grid(*args: object, **kwargs: object) -> _Grid:
         grid = original_make_grid(*args, **kwargs)  # type: ignore[arg-type]
@@ -21766,9 +21861,9 @@ def test_an_unsorted_reservation_tuple_is_not_a_restore_mismatch(
         entered_pairs.append(tuple(grid.reserved))
         return grid
 
-    monkeypatch.setattr(freeform, "_make_grid", watching_make_grid)
+    monkeypatch.setattr(routing_domain, "_make_grid", watching_make_grid)
     belt_id = catalog.item_id("conveyor-belt-1")
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -21852,7 +21947,7 @@ def test_only_one_stranded_net_of_a_blocked_source_lane_joins_the_cluster(
 
     monkeypatch.setattr(last_mile_module, "solve_cluster", watching)
     belt_id = catalog.item_id("conveyor-belt-1")
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -21903,7 +21998,7 @@ def test_a_seed_the_cluster_dropped_is_still_a_failure_after_a_commit(
             seconds=0.0,
         )
 
-    original = freeform._commit_paths
+    original = routing_domain._commit_paths
 
     def accepting(
         for_canvas: _Canvas,
@@ -21920,9 +22015,9 @@ def test_a_seed_the_cluster_dropped_is_still_a_failure_after_a_commit(
         return original(for_canvas, for_nets, for_paths, *args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(last_mile_module, "solve_cluster", solving)
-    monkeypatch.setattr(freeform, "_commit_paths", accepting)
+    monkeypatch.setattr(routing_domain, "_commit_paths", accepting)
     belt_id = catalog.item_id("conveyor-belt-1")
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -21955,7 +22050,7 @@ def test_a_cluster_solution_rejected_at_commit_is_rolled_back(
     """
     canvas, nets, bounds = _joint_only_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
-    original = freeform._commit_paths
+    original = routing_domain._commit_paths
 
     def refusing(
         commit_canvas: object,
@@ -21974,8 +22069,8 @@ def test_a_cluster_solution_rejected_at_commit_is_rolled_back(
             **kwargs,  # type: ignore[arg-type]
         )
 
-    monkeypatch.setattr(freeform, "_commit_paths", refusing)
-    result = freeform._route_all(
+    monkeypatch.setattr(routing_domain, "_commit_paths", refusing)
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -22018,7 +22113,7 @@ def test_a_short_cluster_solution_degrades_instead_of_raising(
     canvas, nets, bounds = _one_stranded_net_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
 
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -22058,8 +22153,8 @@ def _last_mile_route(
         if pinned_off:
             context.setattr(last_mile, "B_MAX_STRANDED", 0)
         if never_expired:
-            context.setattr(freeform, "_expired", lambda _deadline: False)
-        return freeform._route_all(
+            context.setattr(routing_domain, "_expired", lambda _deadline: False)
+        return routing_domain._route_all(
             canvas,
             nets,
             belt_id,
@@ -22161,7 +22256,7 @@ def test_a_cluster_search_that_drains_its_allowance_is_only_a_bound(
     canvas, nets, bounds = _one_stranded_net_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
 
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -22305,7 +22400,7 @@ def test_a_relaxed_run_that_closes_records_the_cluster_strips(
     canvas, nets, bounds = _two_strip_stranded_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
 
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -22365,9 +22460,9 @@ def test_the_relaxed_run_never_re_reserves_a_served_nets_corridor(
     # the same fixture -- the live canvas has already been routed by the time
     # anything can look at it.
     plan_canvas, plan_nets, _plan_bounds = _served_corridor_stranded_fixture()
-    freeform._reserve_port_access(
+    routing_domain._reserve_port_access(
         plan_canvas,
-        freeform._port_access_inventory(plan_nets).demands,
+        routing_domain._port_access_inventory(plan_nets).demands,
     )
     every_corridor = frozenset(plan_canvas.reserved)
     seen: list[tuple[frozenset[Cell], frozenset[Cell]]] = []
@@ -22385,7 +22480,7 @@ def test_the_relaxed_run_never_re_reserves_a_served_nets_corridor(
         return _always_proved(problem, environment)
 
     monkeypatch.setattr(last_mile, "solve_cluster", probing)
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -22421,7 +22516,7 @@ def _capture_can_junction(
     question inside run 1, inside run 2, and after the pass.
     """
     captured: list[Callable[[int, int, int], bool]] = []
-    original = freeform._merge_frontier
+    original = routing_domain._merge_frontier
 
     def capturing(
         merge_canvas: _Canvas,
@@ -22440,7 +22535,7 @@ def _capture_can_junction(
             **kwargs,  # type: ignore[arg-type]
         )
 
-    monkeypatch.setattr(freeform, "_merge_frontier", capturing)
+    monkeypatch.setattr(routing_domain, "_merge_frontier", capturing)
     return captured
 
 
@@ -22517,7 +22612,7 @@ def test_the_relaxed_run_starts_with_no_planned_taps(
         return _always_proved(problem, environment)
 
     monkeypatch.setattr(last_mile, "solve_cluster", probing)
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -22569,7 +22664,7 @@ def test_a_permanent_guard_cell_is_junctionable_only_during_the_relaxed_run(
         return _always_proved(problem, environment)
 
     monkeypatch.setattr(last_mile, "solve_cluster", probing)
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -22609,7 +22704,7 @@ def test_a_cluster_with_a_sibling_never_runs_the_relaxed_search(
     canvas, nets, bounds = _sibling_stranded_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
 
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -22638,7 +22733,7 @@ def test_a_skipped_relaxed_run_leaves_the_strict_claim_alone(
     monkeypatch.setattr(last_mile, "solve_cluster", _always_proved)
     sibling_canvas, sibling_nets, sibling_bounds = _sibling_stranded_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
-    skipped = freeform._route_all(
+    skipped = routing_domain._route_all(
         sibling_canvas,
         sibling_nets,
         belt_id,
@@ -22646,7 +22741,7 @@ def test_a_skipped_relaxed_run_leaves_the_strict_claim_alone(
         sibling_bounds,
     )
     canvas, nets, bounds = _two_strip_stranded_fixture()
-    relaxed = freeform._route_all(
+    relaxed = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -22694,7 +22789,7 @@ def test_a_bounded_relaxed_run_records_no_relation(
     canvas, nets, bounds = _two_strip_stranded_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
 
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -22748,7 +22843,7 @@ def test_a_bounded_strict_run_never_reaches_the_relaxed_search(
     canvas, nets, bounds = _two_strip_stranded_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
 
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -22796,7 +22891,7 @@ def test_a_relaxed_run_that_loses_the_round_withdraws_both_claims(
         return _always_proved(problem, environment)
 
     monkeypatch.setattr(last_mile, "solve_cluster", scripted)
-    result = freeform._route_all(
+    result = routing_domain._route_all(
         canvas,
         nets,
         belt_id,
@@ -22844,7 +22939,7 @@ def _only_a_window_charge_is_affordable(
     return completion_tail_s + next_candidate_s >= freeform.C_WINDOW_SECONDS
 
 
-def _window_solve_outcome(pack: freeform._Pack) -> freeform._PackSolveOutcome:
+def _window_solve_outcome(pack: routing_domain._Pack) -> freeform._PackSolveOutcome:
     """Return the typed successful result produced by the real window solver."""
     return freeform._PackSolveOutcome(
         pack=pack,
@@ -22953,7 +23048,7 @@ def _sweep_over_a_stranded_first_candidate(
     # placement, and the two `two_stage` strips are 14 and 18 wide, so they are
     # spaced 25 apart rather than the 10 the older sweep harnesses use.
     packs = {
-        (height, arrangement): freeform._Pack(
+        (height, arrangement): routing_domain._Pack(
             at={index: (index * 25 + 5 + arrangement * 7, 0) for index in range(len(strips))},
             width=pack_width,
             height=height,
@@ -22976,7 +23071,7 @@ def _sweep_over_a_stranded_first_candidate(
         height: int,
         arrangement: int,
         **_kwargs: object,
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         # `slow_pack` makes ONE candidate's packing expensive and everything
         # else instant, which is the only way a stubbed sweep can give a
         # candidate a total much larger than its own post-pack remainder.
@@ -22990,7 +23085,7 @@ def _sweep_over_a_stranded_first_candidate(
     def build(
         _spec: BuildSpec,
         _strips: list[Strip],
-        candidate_pack: freeform._Pack,
+        candidate_pack: routing_domain._Pack,
         **_kwargs: object,
     ) -> _BuildResult:
         repair_index = builds.count("window")
@@ -23024,7 +23119,7 @@ def _sweep_over_a_stranded_first_candidate(
 
     def repair(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome:
         seed = kwargs["seed"]
-        assert isinstance(seed, freeform._Pack)
+        assert isinstance(seed, routing_domain._Pack)
         return _window_solve_outcome(
             replace(
                 seed,
@@ -23069,7 +23164,9 @@ def _sweep_over_a_stranded_first_candidate(
         # Only `replan_strips_for_learned_geometry` reaches `plan_strips` from
         # inside `_sweep`; the harness planned its own strips before this.
         monkeypatch.setattr(freeform, "plan_strips", lambda *_args, **_kwargs: replanned_strips)
-    monkeypatch.setattr(validate, "certify", lambda *_args, **_kwargs: validate.Report(findings=()))
+    monkeypatch.setattr(
+        finalize, "_certify", lambda *_args, **_kwargs: validate.Report(findings=())
+    )
     monkeypatch.setattr(
         finalize,
         "finalize_placement",
@@ -23081,6 +23178,7 @@ def _sweep_over_a_stranded_first_candidate(
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=2,
     )._sweep(spec, strips, time_budget_s, session=session, telemetry=telemetry)
@@ -23200,7 +23298,7 @@ def test_the_sweep_repairs_a_window_when_a_full_resolve_is_unaffordable(
     def recording(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome:
         windows.append(dict(kwargs))
         seed = kwargs["seed"]
-        assert isinstance(seed, freeform._Pack)
+        assert isinstance(seed, routing_domain._Pack)
         return _window_solve_outcome(
             replace(
                 seed,
@@ -23251,7 +23349,7 @@ def test_the_sweep_never_solves_the_same_window_twice(
         assert key not in keys, f"window {key} solved twice"
         keys.append(key)
         seed = kwargs["seed"]
-        assert isinstance(seed, freeform._Pack)
+        assert isinstance(seed, routing_domain._Pack)
         return _window_solve_outcome(
             replace(
                 seed,
@@ -23468,7 +23566,7 @@ def test_lay_out_arms_only_the_repair_operator_its_window_actually_runs(
         return Placement(buildings=(), stats={})
 
     monkeypatch.setattr(FreeformLayout, "_sweep", capture)
-    FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+    FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
         two_stage_spec(),
         time_budget_s=1.0,
     )
@@ -23503,7 +23601,7 @@ def test_the_freeform_window_counts_the_no_goods_its_model_declined(
         assert callable(on_skipped)
         on_skipped(2)
         seed = kwargs["seed"]
-        assert isinstance(seed, freeform._Pack)
+        assert isinstance(seed, routing_domain._Pack)
         return _window_solve_outcome(
             replace(
                 seed,
@@ -23612,7 +23710,7 @@ def test_a_repair_that_fails_again_settles_before_it_asks_for_another_window(
     def solving(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome:
         log.append("solve")
         seed = kwargs["seed"]
-        assert isinstance(seed, freeform._Pack)
+        assert isinstance(seed, routing_domain._Pack)
         return _window_solve_outcome(
             replace(
                 seed,
@@ -23888,7 +23986,7 @@ def test_a_repair_that_dies_after_routing_is_paid_on_the_pass_it_ran(
 @pytest.mark.slow
 def test_freeform_placement_stats_carry_the_operator_telemetry() -> None:
     """The whole `lay_out` path stamps the telemetry on a real corpus spec."""
-    placement = FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+    placement = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
         plastic_spec(), time_budget_s=15.0
     )
     for key in (
@@ -24132,7 +24230,7 @@ def test_lay_out_honours_an_absolute_deadline_from_another_process() -> None:
     An absolute deadline already in the past must refuse immediately rather than
     run for `time_budget_s` more seconds.
     """
-    layout = FreeformLayout(band_policy=BandPolicy("portable"))
+    layout = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"))
     started = time.monotonic()
 
     with pytest.raises(NoValidLayout):
@@ -24252,6 +24350,7 @@ def test_a_portfolio_bound_never_costs_the_placement(
     monkeypatch.setattr(freeform_module, "_portfolio_soft_deadline", recording)
 
     placement = freeform.FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         portfolio_incumbent=lambda: (1, 1),
     ).lay_out(two_stage_spec(), time_budget_s=20.0)
@@ -24297,9 +24396,9 @@ def test_without_a_portfolio_bound_the_sweep_sees_only_its_own_soft(
 
     monkeypatch.setattr(freeform_module, "_room_for_another", spying)
 
-    placement = freeform.FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
-        two_stage_spec(), time_budget_s=20.0
-    )
+    placement = freeform.FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")
+    ).lay_out(two_stage_spec(), time_budget_s=20.0)
 
     assert placement.area > 0
     assert len(set(seen)) == 1, "an unraced sweep charges every site its own single soft"
@@ -24313,6 +24412,7 @@ def test_the_sweep_publishes_every_incumbent_it_certifies(
     published: list[Placement] = []
 
     placement = freeform.FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         publish_incumbent=published.append,
     ).lay_out(two_stage_spec(), time_budget_s=20.0)
@@ -24350,7 +24450,9 @@ def test_an_over_band_seed_is_skipped_and_never_reported_as_wired(
     skipped: list[int] = []
     rejected: list[freeform._RefusalFinding] = []
 
-    result = FreeformLayout(band_policy=BandPolicy("portable"), arrangements=1)._sweep(
+    result = FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), arrangements=1
+    )._sweep(
         spec,
         strips,
         1.0,
@@ -24387,7 +24489,7 @@ def _port_seating_attempt(count: int, *, expansions: int = 0) -> freeform.PackAt
     for index in range(count):
         strip_label = f"casimir-crystal#{index + 1}"
         ports.append(
-            freeform.StrandedPort(
+            routing_domain.StrandedPort(
                 cell=(1, 10 + index, 0),
                 item="hydrogen",
                 strip_label=strip_label,
@@ -24500,7 +24602,7 @@ def test_lay_out_names_the_skipped_seed_gate_when_every_height_was_skipped(
     monkeypatch.setattr(FreeformLayout, "_sweep", skip_every_height)
 
     with pytest.raises(NoValidLayout) as caught:
-        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+        FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
             two_stage_spec(), time_budget_s=1.0
         )
 
@@ -24531,7 +24633,7 @@ def test_lay_out_reports_a_neutral_refusal_when_no_pack_and_no_skip_explain_it(
     monkeypatch.setattr(FreeformLayout, "_sweep", produce_nothing)
 
     with pytest.raises(NoValidLayout) as caught:
-        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+        FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
             two_stage_spec(), time_budget_s=1.0
         )
 
@@ -24575,7 +24677,7 @@ def test_a_neutral_refusal_names_an_unknown_pack_solve_and_the_unspent_wall(
     monkeypatch.setattr(freeform, "_DETERMINISTIC_PACK_STRIPS", 1)
 
     with pytest.raises(NoValidLayout) as caught:
-        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+        FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
             two_stage_spec(), time_budget_s=30.0
         )
 
@@ -24622,7 +24724,9 @@ def test_lay_out_bounds_a_routed_refusal_to_the_recurring_net(
     monkeypatch.setattr(FreeformLayout, "_sweep", report_two_stranded_attempts)
 
     with pytest.raises(NoValidLayout) as caught:
-        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(spec, time_budget_s=1.0)
+        FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
+            spec, time_budget_s=1.0
+        )
 
     message = str(caught.value)
     assert "route evidence from 2 packs at candidate heights 20, 24" in message
@@ -24721,7 +24825,7 @@ def test_the_schedule_replaces_the_over_band_height_with_the_boundary(
 
     real_greedy_pack = freeform._greedy_pack
 
-    def widened_seed_at_the_tallest(strips_: list[Strip], height: int) -> freeform._Pack:
+    def widened_seed_at_the_tallest(strips_: list[Strip], height: int) -> routing_domain._Pack:
         pack = real_greedy_pack(strips_, height)
         if height != 166:
             return pack
@@ -24758,7 +24862,9 @@ def test_a_freeform_refusal_carries_the_sweep_s_own_counters(
     monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: [20])
     telemetry: dict[str, float | str] = {}
 
-    FreeformLayout(band_policy=BandPolicy("portable"), arrangements=1)._sweep(
+    FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), arrangements=1
+    )._sweep(
         spec,
         strips,
         1.0,
@@ -24792,9 +24898,9 @@ def test_band_scheduler_uses_the_requested_seed_clearance(
         height: int,
         *,
         route_clearance: int = 0,
-    ) -> freeform._Pack:
+    ) -> routing_domain._Pack:
         clearances.append(route_clearance)
-        return freeform._Pack(
+        return routing_domain._Pack(
             at={index: (index * 100, 0) for index in range(len(current))},
             width=10_000,
             height=height,
@@ -24868,7 +24974,7 @@ def test_a_freeform_refusal_carries_the_sweep_s_telemetry_end_to_end(
     monkeypatch.setattr(FreeformLayout, "_sweep", stub_sweep)
 
     with pytest.raises(NoValidLayout) as caught:
-        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+        FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
             two_stage_spec(), time_budget_s=1.0
         )
 
@@ -25040,13 +25146,13 @@ def test_prepared_routing_bound_counts_only_cleanup_protected_fixed_belts() -> N
     )
     problem = _prepared_bound_problem(buildings=(*belts, sorter))
 
-    bound = freeform_module._prepared_routing_lower_bound(problem)
+    bound = routing_domain._prepared_routing_lower_bound(problem)
 
     assert sum(catalog.is_belt(building.item_id) for building in problem.building_templates) == 3
     assert bound.protected_template_belts == 1
     assert bound.route_floor == 0
     assert bound.total == 1
-    assert freeform_module._prepared_candidate_area_lower_bound(problem) == 1
+    assert routing_domain._prepared_candidate_area_lower_bound(problem) == 1
 
 
 def test_prepared_routing_bound_uses_component_max_and_unrelated_component_sum() -> None:
@@ -25068,7 +25174,7 @@ def test_prepared_routing_bound_uses_component_max_and_unrelated_component_sum()
     )
     unrelated = _prepared_bound_net(2, (0, 10), (3, 10))
 
-    bound = freeform_module._prepared_routing_lower_bound(
+    bound = routing_domain._prepared_routing_lower_bound(
         _prepared_bound_problem(nets=(first, second, unrelated))
     )
 
@@ -25131,7 +25237,7 @@ def test_prepared_routing_bound_allows_differing_shared_source_taps() -> None:
         src_group=(first_id,),
     )
 
-    bound = freeform_module._prepared_routing_lower_bound(
+    bound = routing_domain._prepared_routing_lower_bound(
         _prepared_bound_problem(
             buildings=(*fixed_belts, *sorters),
             nets=(first, second),
@@ -25155,7 +25261,7 @@ def test_prepared_routing_bound_uses_nearest_boundary_goal() -> None:
         boundary_goals=((0, 0, 0), (5, 2, 0), (9, 9, 0)),
     )
 
-    bound = freeform_module._prepared_routing_lower_bound(_prepared_bound_problem(nets=(external,)))
+    bound = routing_domain._prepared_routing_lower_bound(_prepared_bound_problem(nets=(external,)))
 
     assert bound.component_count == 1
     assert bound.route_floor == 3
@@ -25165,7 +25271,7 @@ def test_prepared_routing_bound_omits_direct_and_prelinked_route_demand() -> Non
     direct = DirectInsertId(0, 1, "direct", CargoDomain.UNSPRAYED)
     prelinked = _prepared_bound_net(0, (0, 0), (20, 0), prelinked=True)
 
-    bound = freeform_module._prepared_routing_lower_bound(
+    bound = routing_domain._prepared_routing_lower_bound(
         _prepared_bound_problem(
             nets=(prelinked,),
             realized_direct=frozenset({direct}),
@@ -25226,7 +25332,7 @@ def _broke7_spec() -> BuildSpec:
     )
 
 
-def _broke7_fixture() -> tuple[BuildSpec, list[Strip], freeform._Pack, freeform._Pack]:
+def _broke7_fixture() -> tuple[BuildSpec, list[Strip], routing_domain._Pack, routing_domain._Pack]:
     spec = _broke7_spec()
     strips = plan_strips(spec)
     assert [_box(strip) for strip in strips] == [
@@ -25238,7 +25344,7 @@ def _broke7_fixture() -> tuple[BuildSpec, list[Strip], freeform._Pack, freeform.
         (25, 9),
         (19, 8),
     ]
-    refusing = freeform._Pack(
+    refusing = routing_domain._Pack(
         at=dict(enumerate(_BROKE7_REFUSING_ORIGINS)),
         width=82,
         height=21,
@@ -25252,7 +25358,7 @@ def _broke7_fixture() -> tuple[BuildSpec, list[Strip], freeform._Pack, freeform.
     return spec, strips, refusing, swapped
 
 
-def _box_cells(strips: Sequence[Strip], pack: freeform._Pack) -> frozenset[tuple[int, int]]:
+def _box_cells(strips: Sequence[Strip], pack: routing_domain._Pack) -> frozenset[tuple[int, int]]:
     return frozenset(
         (x, y)
         for index, strip in enumerate(strips)
@@ -25266,12 +25372,12 @@ def _box_cells(strips: Sequence[Strip], pack: freeform._Pack) -> frozenset[tuple
 
 def _access_demand(
     cell: Cell,
-    kind: freeform.PortAccessKind,
+    kind: routing_domain.PortAccessKind,
     *,
     belt: int = 0,
     strip_index: int | None = 0,
-) -> freeform.PortAccessDemand:
-    return freeform.PortAccessDemand(
+) -> routing_domain.PortAccessDemand:
+    return routing_domain.PortAccessDemand(
         cell=cell,
         kind=kind,
         item="ore",
@@ -25284,23 +25390,23 @@ def _access_demand(
 def test_prepare_holds_external_access_before_coater_placement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original = freeform._place_coaters
-    observed: list[tuple[freeform.PortAccessCorridor, ...]] = []
+    original = routing_domain._place_coaters
+    observed: list[tuple[routing_domain.PortAccessCorridor, ...]] = []
 
     def inspect_first_hold(
         canvas: _Canvas,
         *args: object,
         **kwargs: object,
-    ) -> list[freeform.CoaterSupplyPort]:
+    ) -> list[routing_domain.CoaterSupplyPort]:
         observed.extend(canvas.port_corridors.values())
         assert any(
-            corridor.kind is freeform.PortAccessKind.BOUNDARY_ARRIVAL
+            corridor.kind is routing_domain.PortAccessKind.BOUNDARY_ARRIVAL
             for corridors in canvas.port_corridors.values()
             for corridor in corridors
         ), "the pre-coater hold omitted every external-only boundary arrival"
         return original(canvas, *args, **kwargs)
 
-    monkeypatch.setattr(freeform, "_place_coaters", inspect_first_hold)
+    monkeypatch.setattr(routing_domain, "_place_coaters", inspect_first_hold)
     spec = proliferated_spec()
     strips = plan_strips(spec)
     _prepare_routing_problem(
@@ -25326,7 +25432,7 @@ def test_boundary_port_physical_claim_counts() -> None:
         _Net(shared_source, both_fed_sink, "ore"),
         _Net(trunk_root, both_fed_sink, "ore"),
     )
-    inventory = freeform._port_access_inventory(
+    inventory = routing_domain._port_access_inventory(
         nets,
         boundary_inputs=(
             ("pure-input", _Port(6, 24, 0, 24, 24), 6),
@@ -25352,7 +25458,7 @@ def test_boundary_port_physical_claim_counts() -> None:
     assert shared_source.belt in inventory.late_output_belts
 
 
-def _corridor_scene(*, internal: bool = False) -> tuple[_Canvas, freeform.PortAccessDemand]:
+def _corridor_scene(*, internal: bool = False) -> tuple[_Canvas, routing_domain.PortAccessDemand]:
     canvas = _Canvas(limit=(0, 0, 6, 6))
     port_cell = (3, 3, 0)
     port = canvas.add(_belt(3, 3))
@@ -25361,16 +25467,16 @@ def _corridor_scene(*, internal: bool = False) -> tuple[_Canvas, freeform.PortAc
         canvas.add(_belt(x, y))
     canvas.keep_out.update((*walls, (3, 3)))
     kind = (
-        freeform.PortAccessKind.INTERNAL_DEPARTURE
+        routing_domain.PortAccessKind.INTERNAL_DEPARTURE
         if internal
-        else freeform.PortAccessKind.BOUNDARY_ARRIVAL
+        else routing_domain.PortAccessKind.BOUNDARY_ARRIVAL
     )
     return canvas, _access_demand(port_cell, kind, belt=port)
 
 
 def _boundary_reachable_port_fixture() -> tuple[
     _Canvas,
-    tuple[freeform.PortAccessDemand, ...],
+    tuple[routing_domain.PortAccessDemand, ...],
     tuple[tuple[int, int, int], ...],
     tuple[int, int, int, int] | None,
 ]:
@@ -25388,7 +25494,7 @@ def _boundary_reachable_port_fixture() -> tuple[
 def test_boundary_access_rematches_away_from_unreachable_first_corridor() -> None:
     canvas, demands, boundary, bounds = _boundary_reachable_port_fixture()
     demand = demands[0]
-    reservation = freeform._reserve_port_access(
+    reservation = routing_domain._reserve_port_access(
         canvas,
         demands,
         boundary=boundary,
@@ -25402,22 +25508,24 @@ def test_boundary_access_rematches_away_from_unreachable_first_corridor() -> Non
 
 def test_port_access_probes_share_one_grid(monkeypatch: pytest.MonkeyPatch) -> None:
     builds = {"n": 0}
-    real_make_grid = freeform._make_grid
+    real_make_grid = routing_domain._make_grid
 
-    def counting_make_grid(*args: object, **kwargs: object) -> freeform._Grid:
+    def counting_make_grid(*args: object, **kwargs: object) -> routing_domain._Grid:
         builds["n"] += 1
         return real_make_grid(*args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(freeform, "_make_grid", counting_make_grid)
+    monkeypatch.setattr(routing_domain, "_make_grid", counting_make_grid)
     canvas, demands, boundary, bounds = _boundary_reachable_port_fixture()
-    reservation = freeform._reserve_port_access(canvas, demands, boundary=boundary, bounds=bounds)
+    reservation = routing_domain._reserve_port_access(
+        canvas, demands, boundary=boundary, bounds=bounds
+    )
     assert reservation.assigned
     assert builds["n"] == 1, builds
 
 
 def test_internal_only_enclosed_ports_are_not_boundary_filtered() -> None:
     canvas, demand = _corridor_scene(internal=True)
-    reservation = freeform._reserve_port_access(
+    reservation = routing_domain._reserve_port_access(
         canvas,
         (demand,),
         boundary=((0, 3, 0),),
@@ -25428,10 +25536,10 @@ def test_internal_only_enclosed_ports_are_not_boundary_filtered() -> None:
 
 
 def test_two_reachable_boundary_claims_are_jointly_rematched() -> None:
-    first = _access_demand((0, 0, 0), freeform.PortAccessKind.BOUNDARY_ARRIVAL, belt=1)
-    second = _access_demand((4, 0, 0), freeform.PortAccessKind.BOUNDARY_ARRIVAL, belt=2)
+    first = _access_demand((0, 0, 0), routing_domain.PortAccessKind.BOUNDARY_ARRIVAL, belt=1)
+    second = _access_demand((4, 0, 0), routing_domain.PortAccessKind.BOUNDARY_ARRIVAL, belt=2)
     shared = (2, 0, 0)
-    matched = freeform._match_access_corridors(
+    matched = routing_domain._match_access_corridors(
         (first, second),
         {
             first: (((1, 0, 0), shared), ((0, 1, 0), (0, 2, 0))),
@@ -25448,7 +25556,7 @@ def test_validated_access_rematching_keeps_each_tie_break_solve_bounded(
 ) -> None:
     demand = _access_demand(
         (0, 0, 0),
-        freeform.PortAccessKind.BOUNDARY_ARRIVAL,
+        routing_domain.PortAccessKind.BOUNDARY_ARRIVAL,
         belt=1,
     )
     original_solve = cp_model.CpSolver.solve
@@ -25462,16 +25570,16 @@ def test_validated_access_rematching_keeps_each_tie_break_solve_bounded(
         deterministic_limits.append(solver.parameters.max_deterministic_time)
         return status
 
-    validations: list[tuple[freeform.PortAccessCorridor, ...]] = []
+    validations: list[tuple[routing_domain.PortAccessCorridor, ...]] = []
 
     def reject_first(
-        assigned: Mapping[freeform.PortAccessDemand, freeform.PortAccessCorridor],
-    ) -> Collection[freeform.PortAccessDemand] | None:
+        assigned: Mapping[routing_domain.PortAccessDemand, routing_domain.PortAccessCorridor],
+    ) -> Collection[routing_domain.PortAccessDemand] | None:
         validations.append(tuple(assigned.values()))
         return (demand,) if len(validations) == 1 else None
 
     monkeypatch.setattr(cp_model.CpSolver, "solve", record_limit)
-    matched = freeform._match_access_corridors(
+    matched = routing_domain._match_access_corridors(
         (demand,),
         {
             demand: (
@@ -25485,8 +25593,8 @@ def test_validated_access_rematching_keeps_each_tie_break_solve_bounded(
     assert matched
     assert len(validations) == 2
     assert deterministic_limits[-2:] == [
-        freeform._ACCESS_TIE_DETERMINISTIC_WORK,
-        freeform._ACCESS_TIE_DETERMINISTIC_WORK,
+        routing_domain._ACCESS_TIE_DETERMINISTIC_WORK,
+        routing_domain._ACCESS_TIE_DETERMINISTIC_WORK,
     ]
 
 
@@ -25495,7 +25603,7 @@ def test_tie_work_limit_unknown_uses_ranked_fallback_before_wall_deadline(
 ) -> None:
     demand = _access_demand(
         (0, 0, 0),
-        freeform.PortAccessKind.BOUNDARY_ARRIVAL,
+        routing_domain.PortAccessKind.BOUNDARY_ARRIVAL,
         belt=1,
     )
     original_solve = cp_model.CpSolver.solve
@@ -25504,12 +25612,15 @@ def test_tie_work_limit_unknown_uses_ranked_fallback_before_wall_deadline(
         solver: cp_model.CpSolver,
         model: cp_model.CpModel,
     ) -> cp_model.CpSolverStatus:
-        if solver.parameters.max_deterministic_time == freeform._ACCESS_TIE_DETERMINISTIC_WORK:
+        if (
+            solver.parameters.max_deterministic_time
+            == routing_domain._ACCESS_TIE_DETERMINISTIC_WORK
+        ):
             return cp_model.UNKNOWN
         return original_solve(solver, model)
 
     monkeypatch.setattr(cp_model.CpSolver, "solve", stop_at_tie_work_limit)
-    matched = freeform._match_access_corridors(
+    matched = routing_domain._match_access_corridors(
         (demand,),
         {demand: (((1, 0, 0), (2, 0, 0)),)},
         deadline=time.monotonic() + 60.0,
@@ -25523,7 +25634,7 @@ def test_tie_work_limit_after_validation_cut_never_reuses_cut_assignment(
 ) -> None:
     demand = _access_demand(
         (0, 0, 0),
-        freeform.PortAccessKind.BOUNDARY_ARRIVAL,
+        routing_domain.PortAccessKind.BOUNDARY_ARRIVAL,
         belt=1,
     )
     original_solve = cp_model.CpSolver.solve
@@ -25532,15 +25643,18 @@ def test_tie_work_limit_after_validation_cut_never_reuses_cut_assignment(
         solver: cp_model.CpSolver,
         model: cp_model.CpModel,
     ) -> cp_model.CpSolverStatus:
-        if solver.parameters.max_deterministic_time == freeform._ACCESS_TIE_DETERMINISTIC_WORK:
+        if (
+            solver.parameters.max_deterministic_time
+            == routing_domain._ACCESS_TIE_DETERMINISTIC_WORK
+        ):
             return cp_model.UNKNOWN
         return original_solve(solver, model)
 
-    validations: list[tuple[freeform.PortAccessCorridor, ...]] = []
+    validations: list[tuple[routing_domain.PortAccessCorridor, ...]] = []
 
     def reject_first_assignment(
-        assigned: Mapping[freeform.PortAccessDemand, freeform.PortAccessCorridor],
-    ) -> Collection[freeform.PortAccessDemand] | None:
+        assigned: Mapping[routing_domain.PortAccessDemand, routing_domain.PortAccessCorridor],
+    ) -> Collection[routing_domain.PortAccessDemand] | None:
         selected = tuple(assigned.values())
         validations.append(selected)
         if len(validations) == 1:
@@ -25549,7 +25663,7 @@ def test_tie_work_limit_after_validation_cut_never_reuses_cut_assignment(
         return None
 
     monkeypatch.setattr(cp_model.CpSolver, "solve", stop_each_tie_solve)
-    matched = freeform._match_access_corridors(
+    matched = routing_domain._match_access_corridors(
         (demand,),
         {
             demand: (
@@ -25567,7 +25681,7 @@ def test_tie_work_limit_after_validation_cut_never_reuses_cut_assignment(
 def test_true_no_complete_boundary_matching_is_exhaustive_static_access() -> None:
     canvas, demand = _corridor_scene()
     canvas.add(_belt(2, 3))
-    reservation = freeform._reserve_port_access(
+    reservation = routing_domain._reserve_port_access(
         canvas,
         (demand,),
         boundary=((0, 3, 0),),
@@ -25578,7 +25692,9 @@ def test_true_no_complete_boundary_matching_is_exhaustive_static_access() -> Non
     assert reservation.evidence[0].reachable_options == 0
 
 
-def _internal_pocket(*, sealed: bool) -> tuple[_Canvas, freeform.PortAccessDemand, frozenset[Cell]]:
+def _internal_pocket(
+    *, sealed: bool
+) -> tuple[_Canvas, routing_domain.PortAccessDemand, frozenset[Cell]]:
     """A one-cell lane head in a pocket, with a goal two cells past its wall.
 
     The head at ``(3, 3, 0)`` keeps exactly ONE local corridor -- access
@@ -25597,25 +25713,27 @@ def _internal_pocket(*, sealed: bool) -> tuple[_Canvas, freeform.PortAccessDeman
     for x, y in walls:
         canvas.add(_belt(x, y))
     canvas.keep_out.update((*walls, (3, 3)))
-    demand = _access_demand((3, 3, 0), freeform.PortAccessKind.INTERNAL_ARRIVAL, belt=port)
+    demand = _access_demand((3, 3, 0), routing_domain.PortAccessKind.INTERNAL_ARRIVAL, belt=port)
     return canvas, demand, frozenset({(8, 3, 0)})
 
 
-def _walled_in_internal_demand() -> tuple[_Canvas, freeform.PortAccessDemand, frozenset[Cell]]:
+def _walled_in_internal_demand() -> tuple[
+    _Canvas, routing_domain.PortAccessDemand, frozenset[Cell]
+]:
     """The pocket with its mouth bricked up: the goal is unreachable."""
     return _internal_pocket(sealed=True)
 
 
-def _open_internal_demand() -> tuple[_Canvas, freeform.PortAccessDemand, frozenset[Cell]]:
+def _open_internal_demand() -> tuple[_Canvas, routing_domain.PortAccessDemand, frozenset[Cell]]:
     """The same head with the wall removed: the goal is two open cells away."""
     return _internal_pocket(sealed=False)
 
 
-def _second_internal_demand(canvas: _Canvas) -> freeform.PortAccessDemand:
+def _second_internal_demand(canvas: _Canvas) -> routing_domain.PortAccessDemand:
     """Another lane head on the same canvas, standing in open ground."""
     port = canvas.add(_belt(1, 1))
     canvas.keep_out.add((1, 1))
-    return _access_demand((1, 1, 0), freeform.PortAccessKind.INTERNAL_DEPARTURE, belt=port)
+    return _access_demand((1, 1, 0), routing_domain.PortAccessKind.INTERNAL_DEPARTURE, belt=port)
 
 
 def test_a_goal_makes_an_internal_demand_probed_where_the_boundary_flag_cannot() -> None:
@@ -25652,7 +25770,9 @@ def test_a_demand_with_no_goal_keeps_todays_local_only_behaviour() -> None:
     assert other in dict(reservation.assigned)
 
 
-def _open_access_demand(kind: freeform.PortAccessKind) -> tuple[_Canvas, freeform.PortAccessDemand]:
+def _open_access_demand(
+    kind: routing_domain.PortAccessKind,
+) -> tuple[_Canvas, routing_domain.PortAccessDemand]:
     """A lane head standing in open ground, with twelve local options.
 
     All four `_STEPS` neighbours of ``(3, 3, 0)`` are free and each offers three
@@ -25667,24 +25787,24 @@ def _open_access_demand(kind: freeform.PortAccessKind) -> tuple[_Canvas, freefor
 
 def _recorded_reachable_options(
     monkeypatch: pytest.MonkeyPatch,
-) -> dict[freeform.PortAccessDemand, tuple[tuple[Cell, Cell], ...]]:
+) -> dict[routing_domain.PortAccessDemand, tuple[tuple[Cell, Cell], ...]]:
     """Capture the option sets `_reserve_port_access` hands the joint matcher.
 
     The reservation only reports an option count for a MISSING demand, so a
     satisfied demand's enumeration has to be read on its way into the matcher.
     """
-    recorded: dict[freeform.PortAccessDemand, tuple[tuple[Cell, Cell], ...]] = {}
-    real_match = freeform._match_access_corridors
+    recorded: dict[routing_domain.PortAccessDemand, tuple[tuple[Cell, Cell], ...]] = {}
+    real_match = routing_domain._match_access_corridors
 
     def capturing_match(
-        demands: Sequence[freeform.PortAccessDemand],
-        options: Mapping[freeform.PortAccessDemand, tuple[tuple[Cell, Cell], ...]],
+        demands: Sequence[routing_domain.PortAccessDemand],
+        options: Mapping[routing_domain.PortAccessDemand, tuple[tuple[Cell, Cell], ...]],
         **kwargs: object,
-    ) -> freeform._CorridorMatch:
+    ) -> routing_domain._CorridorMatch:
         recorded.update(options)
         return real_match(demands, options, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(freeform, "_match_access_corridors", capturing_match)
+    monkeypatch.setattr(routing_domain, "_match_access_corridors", capturing_match)
     return recorded
 
 
@@ -25700,14 +25820,14 @@ def test_a_boundary_probed_demand_still_enumerates_every_reachable_option(
     `_PORT_ACCESS_PROBE_KEEP`.
     """
     recorded = _recorded_reachable_options(monkeypatch)
-    canvas, demand = _open_access_demand(freeform.PortAccessKind.BOUNDARY_ARRIVAL)
+    canvas, demand = _open_access_demand(routing_domain.PortAccessKind.BOUNDARY_ARRIVAL)
     # `bounds` explicitly, never left to `bounds = bounds or canvas.limit`: with
     # no bounds this test would take the unprobed early-out and record all
     # twelve options WITHOUT probing, so it would pass under the very mutation
     # it exists to catch.
     reservation = _reserve_port_access(canvas, [demand], boundary=((0, 3, 0),), bounds=canvas.limit)
     assert reservation.complete
-    assert len(recorded[demand]) == 12 > freeform._PORT_ACCESS_PROBE_KEEP
+    assert len(recorded[demand]) == 12 > routing_domain._PORT_ACCESS_PROBE_KEEP
 
 
 def test_a_goal_probed_demand_stops_at_the_probe_keep_cap(
@@ -25715,12 +25835,12 @@ def test_a_goal_probed_demand_stops_at_the_probe_keep_cap(
 ) -> None:
     """The same head, the same open ground, probed towards an explicit goal."""
     recorded = _recorded_reachable_options(monkeypatch)
-    canvas, demand = _open_access_demand(freeform.PortAccessKind.INTERNAL_ARRIVAL)
+    canvas, demand = _open_access_demand(routing_domain.PortAccessKind.INTERNAL_ARRIVAL)
     reservation = _reserve_port_access(
         canvas, [demand], bounds=canvas.limit, goals={demand: frozenset({(0, 3, 0)})}
     )
     assert reservation.complete
-    assert len(recorded[demand]) == freeform._PORT_ACCESS_PROBE_KEEP
+    assert len(recorded[demand]) == routing_domain._PORT_ACCESS_PROBE_KEEP
 
 
 def test_an_empty_explicit_goal_set_is_no_goal_at_all(
@@ -25735,7 +25855,7 @@ def test_an_empty_explicit_goal_set_is_no_goal_at_all(
     with `exhaustive` False -- from what is only a caller mistake.
     """
     recorded = _recorded_reachable_options(monkeypatch)
-    canvas, demand = _open_access_demand(freeform.PortAccessKind.INTERNAL_ARRIVAL)
+    canvas, demand = _open_access_demand(routing_domain.PortAccessKind.INTERNAL_ARRIVAL)
     reservation = _reserve_port_access(
         canvas, [demand], bounds=canvas.limit, goals={demand: frozenset()}
     )
@@ -25748,10 +25868,10 @@ def test_boundary_corner_claim_already_on_perimeter_remains_reachable() -> None:
     belt = canvas.add(_belt(1, 1))
     demand = _access_demand(
         (1, 1, 0),
-        freeform.PortAccessKind.EARLY_BOUNDARY_DEPARTURE,
+        routing_domain.PortAccessKind.EARLY_BOUNDARY_DEPARTURE,
         belt=belt,
     )
-    reservation = freeform._reserve_port_access(
+    reservation = routing_domain._reserve_port_access(
         canvas,
         (demand,),
         boundary=((0, 1, 0), (1, 0, 0)),
@@ -25762,14 +25882,14 @@ def test_boundary_corner_claim_already_on_perimeter_remains_reachable() -> None:
 def test_self_consuming_requested_output_routes_from_late_tail() -> None:
     source = _Port(0, 1, 1, 1, 1)
     destination = _Port(1, 4, 1, 4, 4)
-    inventory = freeform._port_access_inventory(
+    inventory = routing_domain._port_access_inventory(
         (_Net(source, destination, "product"),),
         boundary_outputs=(("product", source),),
         late_output_belts={source.belt},
         strip_of_belt={0: 0, 1: 1},
     )
     assert tuple(demand.kind for demand in inventory.demands if demand.cell == (1, 1, 0)) == (
-        freeform.PortAccessKind.INTERNAL_DEPARTURE,
+        routing_domain.PortAccessKind.INTERNAL_DEPARTURE,
     )
     assert source.belt in inventory.late_output_belts
 
@@ -25782,7 +25902,7 @@ def test_self_consuming_requested_output_routes_from_late_tail() -> None:
         _Port(source_index, 1, 1, 1, 1),
         "product",
     )
-    late = freeform._output_tail_nets(canvas, (output,))
+    late = routing_domain._output_tail_nets(canvas, (output,))
     assert len(late) == 1
     assert late[0].source.belt == tail_index
 
@@ -25804,7 +25924,7 @@ def test_broke7_boundary_access_rematches_equal_box_pair() -> None:
     assert not first.preparation_failures
     assert not second.preparation_failures
     assert any(
-        demand.kind is freeform.PortAccessKind.BOUNDARY_ARRIVAL
+        demand.kind is routing_domain.PortAccessKind.BOUNDARY_ARRIVAL
         and demand.item == "iron-ingot"
         and demand.cell == (19, 10, 0)
         for demand in first.port_access_demands
@@ -25821,7 +25941,7 @@ def test_broke7_recorded_pack_outcomes_after_boundary_role_repair(
 ) -> None:
     spec = _broke7_spec()
     strips = plan_strips(spec)
-    pack = freeform._Pack(
+    pack = routing_domain._Pack(
         at=dict(enumerate(origins)),
         width=width,
         height=height,
@@ -25851,20 +25971,20 @@ def test_port_access_cancellation_inside_candidate_scan_restores_canvas(
 ) -> None:
     canvas, demand = _corridor_scene()
     sentinel = (0, 0, 0)
-    old_corridor = freeform.PortAccessCorridor((0, 1, 0), (0, 2, 0))
+    old_corridor = routing_domain.PortAccessCorridor((0, 1, 0), (0, 2, 0))
     canvas.reserved.clear()
     canvas.reserved.update({(0, 1, 0): sentinel, (0, 2, 0): sentinel})
     canvas.port_corridors = {sentinel: (old_corridor,)}
     stopped = False
 
-    def stop_after_search(*_args: object, **_kwargs: object) -> freeform._PathSearchResult:
+    def stop_after_search(*_args: object, **_kwargs: object) -> routing_domain._PathSearchResult:
         nonlocal stopped
         stopped = True
-        return freeform._PathSearchResult(((2, 3, 0),), None, (), 1)
+        return routing_domain._PathSearchResult(((2, 3, 0),), None, (), 1)
 
-    monkeypatch.setattr(freeform, "_astar", stop_after_search)
-    with pytest.raises(freeform._PreparationDeadline):
-        freeform._reserve_port_access(
+    monkeypatch.setattr(routing_domain, "_astar", stop_after_search)
+    with pytest.raises(routing_domain._PreparationDeadline):
+        routing_domain._reserve_port_access(
             canvas,
             (demand,),
             boundary=((0, 3, 0),),
@@ -25876,18 +25996,18 @@ def test_port_access_cancellation_inside_candidate_scan_restores_canvas(
 
 
 def test_port_access_cancellation_before_matching_resolve_aborts() -> None:
-    first = _access_demand((0, 0, 0), freeform.PortAccessKind.BOUNDARY_ARRIVAL)
+    first = _access_demand((0, 0, 0), routing_domain.PortAccessKind.BOUNDARY_ARRIVAL)
     stopped = False
 
     def stop_for_resolve(
-        _assigned: Mapping[freeform.PortAccessDemand, freeform.PortAccessCorridor],
-    ) -> tuple[freeform.PortAccessDemand, ...]:
+        _assigned: Mapping[routing_domain.PortAccessDemand, routing_domain.PortAccessCorridor],
+    ) -> tuple[routing_domain.PortAccessDemand, ...]:
         nonlocal stopped
         stopped = True
         return (first,)
 
-    with pytest.raises(freeform._PreparationDeadline):
-        freeform._match_access_corridors(
+    with pytest.raises(routing_domain._PreparationDeadline):
+        routing_domain._match_access_corridors(
             (first,),
             {first: (((1, 0, 0), (2, 0, 0)), ((0, 1, 0), (0, 2, 0)))},
             validate=stop_for_resolve,
@@ -25902,10 +26022,12 @@ def test_one_recipe_negentropy_block_lays_out_at_five_and_six(
     spec, vertical = mall_all_products
     sub = one_recipe_spec(spec, "copper-ingot", count)
     layout = FreeformLayout(
-        belt_vertical_construction=vertical, band_policy=BandPolicy.parse("portable"), workers=8
+        belt_rules=dataclasses.replace(_BELT_RULES, vertical_construction=vertical),
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
     )
     placement = layout.lay_out(sub, time_budget_s=20.0)
-    assert validate.certify(placement, sub, expect_power=True).ok
+    assert validate.certify(placement, sub, belt_rules=_BELT_RULES, expect_power=True).ok
 
 
 @pytest.fixture
@@ -25929,7 +26051,9 @@ class _RecordingObserver:
 
 def test_freeform_reports_an_incumbent_to_its_observer(small_spec: BuildSpec) -> None:
     observer = _RecordingObserver()
-    layout = FreeformLayout(band_policy=BandPolicy.parse("portable"), observer=observer)
+    layout = FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy.parse("portable"), observer=observer
+    )
     placement = layout.lay_out(small_spec, time_budget_s=0.5)
 
     incumbents = [e for e in observer.events if e.phase is SearchPhase.INCUMBENT]
@@ -25957,13 +26081,13 @@ def test_freeform_with_an_attached_observer_does_not_perturb_the_result(
     changed which candidate the sweep certifies as its incumbent.
     """
     band = BandPolicy.parse("portable")
-    a = FreeformLayout(band_policy=band, workers=DETERMINISTIC_WORKERS, observer=None).lay_out(
-        small_spec, time_budget_s=0.5
-    )
+    a = FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=band, workers=DETERMINISTIC_WORKERS, observer=None
+    ).lay_out(small_spec, time_budget_s=0.5)
     observer = _RecordingObserver()
-    b = FreeformLayout(band_policy=band, workers=DETERMINISTIC_WORKERS, observer=observer).lay_out(
-        small_spec, time_budget_s=0.5
-    )
+    b = FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=band, workers=DETERMINISTIC_WORKERS, observer=observer
+    ).lay_out(small_spec, time_budget_s=0.5)
     assert (a.area, a.stats["belt_tiles"]) == (b.area, b.stats["belt_tiles"])
     assert observer.events, "an attached observer must actually receive events"
 
@@ -26015,7 +26139,7 @@ class TestThePowerBuildingIsTheSpecsChoice:
         """Stand the planned sites and hand back only what went in as power."""
         before = len(canvas.buildings)
         canvas.keep_out.clear()
-        freeform._place_power(canvas, sites)
+        routing_domain._place_power(canvas, sites)
         return canvas.buildings[before:]
 
     def test_the_default_still_places_tesla_towers(self) -> None:
@@ -26061,14 +26185,14 @@ class TestThePowerBuildingIsTheSpecsChoice:
         substation = catalog.power_tower_building("satellite-substation")
         tesla = catalog.power_tower_building(catalog.DEFAULT_POWER_TOWER)
 
-        tesla_discs = freeform._power_coverage_discs((), ((0, 0),), tower=tesla)
-        sub_discs = freeform._power_coverage_discs((), ((0, 0),), tower=substation)
-        assert freeform._power_coverage_discs((), ((0, 0),)) == tesla_discs
+        tesla_discs = routing_domain._power_coverage_discs((), ((0, 0),), tower=tesla)
+        sub_discs = routing_domain._power_coverage_discs((), ((0, 0),), tower=substation)
+        assert routing_domain._power_coverage_discs((), ((0, 0),)) == tesla_discs
         assert sub_discs[0][2] > tesla_discs[0][2]
 
-        tesla_ban = freeform._prepared_junction_ban((), ((0, 0),), tower=tesla)
-        sub_ban = freeform._prepared_junction_ban((), ((0, 0),), tower=substation)
-        assert freeform._prepared_junction_ban((), ((0, 0),)) == tesla_ban
+        tesla_ban = routing_domain._prepared_junction_ban((), ((0, 0),), tower=tesla)
+        sub_ban = routing_domain._prepared_junction_ban((), ((0, 0),), tower=substation)
+        assert routing_domain._prepared_junction_ban((), ((0, 0),)) == tesla_ban
         #: Not a superset: the two colliders differ in height as well as in
         #: footprint, so each denies cells the other does not.  What matters is
         #: that the reservation is computed from the record it was handed.
@@ -26125,9 +26249,9 @@ class TestSubstationCoverageUsesItsFootprintCentre:
         sites = _power_plan(canvas, (28, 2, 28, 2), policy=BandPolicy("160"))
 
         assert sites == [(0, 0)]
-        discs = freeform._power_coverage_discs((), sites, tower=canvas.power_building)
+        discs = routing_domain._power_coverage_discs((), sites, tower=canvas.power_building)
         assert discs == ((5, 5, 2809),)
-        assert freeform._buildings_are_powered(canvas.buildings, discs)
+        assert routing_domain._buildings_are_powered(canvas.buildings, discs)
 
     def test_west_boundary_outside_the_actual_disc_is_refused(self) -> None:
         canvas = self._single_site(-26)
@@ -26161,11 +26285,11 @@ class TestSubstationCoverageUsesItsFootprintCentre:
         original = self._single_site(26, infill=True)
         canvas = original.clone()
 
-        sites, uncovered = freeform.plan_power_infill(canvas)
+        sites, uncovered = routing_domain.plan_power_infill(canvas)
 
         assert (sites, uncovered) == ([(0, 0)], ())
         before = len(canvas.buildings)
-        freeform._place_power(canvas, sites)
+        routing_domain._place_power(canvas, sites)
         assert [(b.item_id, b.x, b.y, b.width, b.height) for b in canvas.buildings[before:]] == [
             (2212, 0, 0, 5, 5)
         ]
@@ -26175,7 +26299,7 @@ class TestSubstationCoverageUsesItsFootprintCentre:
         canvas = self._single_site(26, infill=True)
         canvas.add(_belt(5, 2))
 
-        sites, uncovered = freeform.plan_power_infill(canvas)
+        sites, uncovered = routing_domain.plan_power_infill(canvas)
 
         assert sites == []
         assert set(uncovered) == {(x, y) for x in range(26, 29) for y in range(1, 4)}
@@ -26238,7 +26362,7 @@ class TestALargePowerBuildingClaimsItsWholeFootprint:
         sites = _power_plan(canvas, (0, 0, 60, 60), policy=BandPolicy("portable"))
         assert sites
         canvas.keep_out.clear()
-        freeform._place_power(canvas, sites)
+        routing_domain._place_power(canvas, sites)
 
         boxes = [(b.x, b.y, b.width, b.height, b.item_id) for b in canvas.buildings]
         power = [box for box in boxes if box[4] == self.SUBSTATION_ID]
@@ -26286,7 +26410,7 @@ class TestALargePowerBuildingClaimsItsWholeFootprint:
 
         # And the plan is standable, which is the property the refusal denied.
         canvas.keep_out.clear()
-        freeform._place_power(canvas, sites)
+        routing_domain._place_power(canvas, sites)
 
     def test_a_field_with_no_room_for_a_substation_is_refused(self) -> None:
         """Three-wide gaps hold no 5x5, and that is INFEASIBLE, not a squeeze.
@@ -26401,16 +26525,16 @@ class TestALargePowerBuildingClaimsItsWholeFootprint:
         self, substation_build: tuple[BuildSpec, Placement]
     ) -> None:
         spec, placement = substation_build
-        report = validate.certify(placement, spec, expect_power=True)
+        report = validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True)
 
         assert not report.errors, [f.check for f in report.errors]
 
 
-def _demand(index: int) -> freeform.PortAccessDemand:
+def _demand(index: int) -> routing_domain.PortAccessDemand:
     """One claim at a distinct cell, so `by_port` never groups two together."""
-    return freeform.PortAccessDemand(
+    return routing_domain.PortAccessDemand(
         cell=(10 * index, 0, 0),
-        kind=freeform.PortAccessKind.INTERNAL_DEPARTURE,
+        kind=routing_domain.PortAccessKind.INTERNAL_DEPARTURE,
         item="iron-ingot",
         belt=index,
         strip_index=None,
@@ -26418,7 +26542,7 @@ def _demand(index: int) -> freeform.PortAccessDemand:
     )
 
 
-def _corridors(demand: freeform.PortAccessDemand) -> tuple[tuple[Cell, Cell], ...]:
+def _corridors(demand: routing_domain.PortAccessDemand) -> tuple[tuple[Cell, Cell], ...]:
     """Two disjoint (access, exit) pairs beside this demand's own cell."""
     x, y, z = demand.cell
     return (((x + 1, y, z), (x + 2, y, z)), ((x, y + 1, z), (x, y + 2, z)))
@@ -26433,19 +26557,21 @@ def test_the_matcher_commits_the_partial_when_the_cut_loop_runs_out_of_rounds() 
     rounds = 0
 
     def validate(
-        assigned: Mapping[freeform.PortAccessDemand, freeform.PortAccessCorridor],
-    ) -> tuple[freeform.PortAccessDemand, ...]:
+        assigned: Mapping[routing_domain.PortAccessDemand, routing_domain.PortAccessCorridor],
+    ) -> tuple[routing_domain.PortAccessDemand, ...]:
         nonlocal rounds
         rounds += 1
         return (demands[rounds % len(demands)],)
 
     def survey(
-        assigned: Mapping[freeform.PortAccessDemand, freeform.PortAccessCorridor],
-    ) -> tuple[freeform.PortAccessDemand, ...]:
+        assigned: Mapping[routing_domain.PortAccessDemand, routing_domain.PortAccessCorridor],
+    ) -> tuple[routing_domain.PortAccessDemand, ...]:
         # The two the cut loop never satisfied.
         return (demands[0], demands[1])
 
-    match = freeform._match_access_corridors(demands, options, validate=validate, survey=survey)
+    match = routing_domain._match_access_corridors(
+        demands, options, validate=validate, survey=survey
+    )
 
     assert match.converged is False
     assert set(match.assigned) == set(demands[2:])
@@ -26456,7 +26582,7 @@ def test_a_converged_match_reports_converged_and_assigns_everything() -> None:
     demands = [_demand(i) for i in range(4)]
     options = {demand: _corridors(demand) for demand in demands}
 
-    match = freeform._match_access_corridors(
+    match = routing_domain._match_access_corridors(
         demands, options, validate=lambda assigned: None, survey=lambda assigned: ()
     )
 
@@ -26468,7 +26594,9 @@ def test_no_demands_is_a_converged_empty_answer_not_a_give_up() -> None:
     # `compose`'s trigger used to spell this `goal_driven.assigned or not
     # demands`; it is now spelled by `converged`, so the empty case has to
     # keep saying yes or a demandless composition would degrade for nothing.
-    match = freeform._match_access_corridors([], {}, validate=lambda a: None, survey=lambda a: ())
+    match = routing_domain._match_access_corridors(
+        [], {}, validate=lambda a: None, survey=lambda a: ()
+    )
 
     assert match.converged is True
     assert match.assigned == {}
@@ -26478,7 +26606,7 @@ def test_a_surveyed_partial_never_keeps_a_corridor_the_survey_convicted() -> Non
     demands = [_demand(i) for i in range(5)]
     options = {demand: _corridors(demand) for demand in demands}
 
-    match = freeform._match_access_corridors(
+    match = routing_domain._match_access_corridors(
         demands,
         options,
         validate=lambda assigned: (demands[0],),
@@ -26496,7 +26624,7 @@ def test_a_matcher_with_no_survey_gives_up_wholesale_as_before() -> None:
     demands = [_demand(i) for i in range(9)]
     options = {demand: _corridors(demand) for demand in demands}
 
-    match = freeform._match_access_corridors(
+    match = routing_domain._match_access_corridors(
         demands, options, validate=lambda assigned: (demands[0],)
     )
 
@@ -26513,11 +26641,11 @@ def test_a_survey_that_raises_the_preparation_deadline_gives_up_wholesale() -> N
     options = {demand: _corridors(demand) for demand in demands}
 
     def raising_survey(
-        assigned: Mapping[freeform.PortAccessDemand, freeform.PortAccessCorridor],
-    ) -> Collection[freeform.PortAccessDemand]:
-        raise freeform._PreparationDeadline
+        assigned: Mapping[routing_domain.PortAccessDemand, routing_domain.PortAccessCorridor],
+    ) -> Collection[routing_domain.PortAccessDemand]:
+        raise routing_domain._PreparationDeadline
 
-    match = freeform._match_access_corridors(
+    match = routing_domain._match_access_corridors(
         demands,
         options,
         validate=lambda assigned: (demands[0],),
@@ -26577,7 +26705,7 @@ def test_the_mall_block_the_packer_convicted_is_placed_or_names_the_cause() -> N
     try:
         placement = FreeformLayout(
             band_policy=BandPolicy.parse("portable"),
-            belt_vertical_construction=belt_rules_for_url(url).vertical_construction,
+            belt_rules=belt_rules_for_url(url),
             workers=_BLOCK_WORKERS,
         ).lay_out(block_spec, time_budget_s=60.0)
     except NoValidLayout as refusal:
@@ -26595,5 +26723,5 @@ def test_the_mall_block_the_packer_convicted_is_placed_or_names_the_cause() -> N
         )
         assert "That is a PACKER defect" not in reason
     else:
-        report = validate.certify(placement, block_spec, expect_power=True)
+        report = validate.certify(placement, block_spec, belt_rules=_BELT_RULES, expect_power=True)
         assert report.ok, report.errors
