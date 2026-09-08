@@ -14,8 +14,11 @@ answers.
 from __future__ import annotations
 
 import queue
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Final, Protocol, runtime_checkable
+from io import BytesIO
+from multiprocessing.queues import Queue
+from typing import Any, Final, Protocol, cast, runtime_checkable
 
 from flab2bp.layout.observe import SearchEvent
 
@@ -74,27 +77,94 @@ def trace_channel() -> TraceChannel | None:
     return _TRACE_CHANNEL
 
 
-def drain_trace(q: MessageQueue) -> tuple[SearchEvent, ...]:
-    """Parent side: at most ``TRACE_DRAIN_MAX_EVENTS`` events per poll.
+class _TraceReceiver:
+    """Keep native framing, but distinguish boundary EOF from a lost payload.
+
+    Connection.recv_bytes raises EOFError both before a header and after a
+    complete header with no payload. Observe its native read steps instead
+    of copying its framing codec or guessing integrity from producer status.
+    Installed once on the parent connection before its collector starts.
+    Connection's spawn reduction transfers handles, not these parent hooks.
+    """
+
+    def __init__(self, reader: Any) -> None:
+        self._receive = reader.recv_bytes
+        self._message_started = False
+        read_chunk = getattr(reader, "_recv", None)
+        if read_chunk is not None:
+            self._read_chunk = read_chunk
+            reader._recv = self._read
+        else:
+            # Windows named pipes preserve message boundaries. MORE_DATA is
+            # the point at which native receive has consumed a partial message.
+            self._read_tail = reader._get_more_data
+            reader._get_more_data = self._read_more
+
+    def _read(self, size: int) -> BytesIO:
+        data = self._read_chunk(size)
+        self._message_started = True
+        return cast(BytesIO, data)
+
+    def _read_more(self, overlapped: object, maxsize: int | None) -> BytesIO:
+        self._message_started = True
+        return cast(BytesIO, self._read_tail(overlapped, maxsize))
+
+    def receive(self) -> bytes:
+        self._message_started = False
+        try:
+            return cast(bytes, self._receive())
+        except EOFError as exc:
+            if self._message_started:
+                raise OSError("trace producer exited during a message") from exc
+            raise queue.Empty from exc
+
+
+def prepare_trace_queue(q: object) -> None:
+    """Install parent-only receive state before any reader or producer starts."""
+    if isinstance(q, Queue):
+        owned = cast(Any, q)
+        owned._recv_bytes = _TraceReceiver(owned._reader).receive
+
+
+def finish_trace_producers(q: object | None) -> None:
+    """Half-close only the writer after every producer process has exited.
+
+    The parent never publishes on this queue: serial events use the collector
+    deque, so there is no local feeder to flush. Clean boundary EOF drains
+    normally; interrupted framing fails explicitly without closing the reader.
+    """
+    if isinstance(q, Queue):
+        cast(Any, q)._writer.close()
+
+
+def close_trace_queue(q: object) -> None:
+    """Release the parent's queue only after its collector has terminated."""
+    owned = cast(Any, q)
+    owned.cancel_join_thread()
+    owned.close()
+    if isinstance(q, Queue):
+        # Queue.close() only wakes a LOCAL feeder. This read-only parent has
+        # none, so it must release both endpoints itself after the reader exits.
+        owned._reader.close()
+        owned._writer.close()
+
+
+def drain_trace(q: MessageQueue) -> Iterator[SearchEvent]:
+    """Yield at most ``TRACE_DRAIN_MAX_EVENTS`` dequeued events per poll.
 
     The bound is on the GETS and not on what survives the type check, for the
     reason ``RaceChannels.drain`` gives (strategy_race.py:212-218): the cost of a
     poll is the dequeue.
+
+    Only ``queue.Empty`` means exhaustion. A broken queue propagates to its
+    collector owner, which reports trace failure without changing solver state.
+    Yield each valid event immediately so a later read failure cannot discard
+    events already removed from the transport.
     """
-    taken: list[SearchEvent] = []
     for _ in range(TRACE_DRAIN_MAX_EVENTS):
         try:
             item = q.get_nowait()
         except queue.Empty:
             break
-        except OSError, ValueError:
-            # A closed or broken queue (fix round 2, Minor 4): reachable on
-            # the wedged-thread path in `TraceCollector.stop()`, where
-            # `close()` runs while the daemon thread that calls this is still
-            # mid-read. The whole point of this channel is that a debugging
-            # view never disturbs a build -- yield whatever was already
-            # collected and stop, rather than propagate.
-            break
         if isinstance(item, SearchEvent):
-            taken.append(item)
-    return tuple(taken)
+            yield item

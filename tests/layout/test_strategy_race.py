@@ -450,6 +450,196 @@ def test_close_cancels_the_join_thread_on_a_real_spawn_context_queue() -> None:
         consume.close()
 
 
+def _interrupt_result_writer(sent, release) -> None:
+    import struct
+    from multiprocessing.connection import Connection
+
+    def partial_send(self, payload) -> None:
+        self._send(struct.pack("!i", len(payload)))
+        self._send(payload[:1])
+        sent.set()
+        release.wait()
+
+    Connection._send_bytes = partial_send
+
+
+def test_race_deadline_reaps_a_worker_interrupted_during_result_write() -> None:
+    """The executor's own result reader must settle as well as trace readers."""
+    from concurrent.futures import ProcessPoolExecutor
+
+    context = multiprocessing.get_context("spawn")
+    sent, release = context.Event(), context.Event()
+    receiving = threading.Event()
+    pool = ProcessPoolExecutor(
+        max_workers=1,
+        mp_context=context,
+        initializer=_interrupt_result_writer,
+        initargs=(sent, release),
+    )
+    result_queue = pool._result_queue
+    real_recv = result_queue._reader.recv
+    workers, managers = [], []
+
+    def observed_recv():
+        receiving.set()
+        return real_recv()
+
+    result_queue._reader.recv = observed_recv
+
+    def submit(requests, channels, trace_queue=None):
+        blocked = pool.submit(int, 0)
+        workers.extend(pool._processes.values())
+        managers.append(pool._executor_manager_thread)
+        assert sent.wait(10), "worker never wrote the partial result"
+        assert receiving.wait(10), "manager never entered the interrupted receive"
+        print("RESULT PROBE partial payload and active manager reader confirmed", flush=True)
+        peer = Future()
+        peer.set_result(_StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="peer"))
+        return {blocked: "freeform", peer: "sequence-pair"}, pool
+
+    try:
+        ticks = iter((0.0, 1000.0))
+        outcomes = run_strategy_race(
+            two_stage_spec(),
+            time_budget_s=0.1,
+            band_policy=BandPolicy("portable"),
+            belt_vertical_construction=True,
+            share=True,
+            submit=submit,
+            monotonic=lambda: next(ticks),
+        )
+        assert [outcome.status for outcome in outcomes] == ["terminated", "refused"]
+        print("RESULT PROBE deadline returned", flush=True)
+        assert not any(worker.is_alive() for worker in workers)
+        assert not any(manager.is_alive() for manager in managers), (
+            "deadline left the executor manager blocked in its result receive"
+        )
+    finally:
+        print("RESULT PROBE reaping owned producer", flush=True)
+        # A killed writer may have held this Event's condition lock.
+        # Reap it without touching the kill-only gate again.
+        for worker in workers:
+            if worker.is_alive():
+                worker.kill()
+        pool.shutdown(wait=False, cancel_futures=True)
+        for worker in workers:
+            worker.join(10)
+            assert not worker.is_alive(), "probe could not reap its result producer"
+        print("RESULT PROBE producer reaped; half-closing result writer", flush=True)
+        # Only the write endpoint: the manager owns the live reader until EOF.
+        result_queue._writer.close()
+        print("RESULT PROBE result writer closed; joining manager", flush=True)
+        for manager in managers:
+            manager.join(10)
+            assert not manager.is_alive(), "probe could not settle its result reader"
+
+
+_fault_started = None
+_fault_release = None
+
+
+def _install_fault_worker(started, release, initializer, initargs) -> None:
+    global _fault_started, _fault_release
+    _fault_started, _fault_release = started, release
+    if initializer is not None:
+        initializer(*initargs)
+
+
+def _gated_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
+    assert _fault_started is not None and _fault_release is not None
+    _fault_started.set()
+    _fault_release.wait()
+    return _StrategyRaceOutcome(request.strategy, "refused", refusal_reason="released")
+
+
+@pytest.mark.parametrize("fault", ["second-submit", "wait"])
+def test_real_race_fault_reaps_children_before_channels_and_preserves_failure(
+    monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    """A started child must not outlive a failed acquisition or interrupted wait."""
+    from concurrent.futures import ProcessPoolExecutor
+
+    context = multiprocessing.get_context("spawn")
+    started, release = context.Event(), context.Event()
+    failure = (
+        RuntimeError("second submission failed")
+        if fault == "second-submit"
+        else (KeyboardInterrupt("parent collection interrupted"))
+    )
+    pools = []
+    workers = []
+    managers = []
+    live_at_channel_close: list[bool] = []
+    real_close = RaceChannels.close
+
+    class FaultPool(ProcessPoolExecutor):
+        def __init__(self, **kwargs):
+            initializer = kwargs.pop("initializer", None)
+            initargs = kwargs.pop("initargs", ())
+            super().__init__(
+                **kwargs,
+                initializer=_install_fault_worker,
+                initargs=(started, release, initializer, initargs),
+            )
+            self.submissions = 0
+            pools.append(self)
+
+        def submit(self, fn, request):
+            self.submissions += 1
+            if self.submissions == 2 and fault == "second-submit":
+                assert started.wait(10), "first real worker never started"
+                raise failure
+            future = super().submit(_gated_race_leg, request)
+            workers.extend(p for p in self._processes.values() if p not in workers)
+            if self._executor_manager_thread not in managers:
+                managers.append(self._executor_manager_thread)
+            return future
+
+    def interrupt_wait(*args, **kwargs):
+        assert started.wait(10), "real worker never entered the gated leg"
+        raise failure
+
+    def observe_close(self: RaceChannels) -> None:
+        live_at_channel_close.append(any(worker.is_alive() for worker in workers))
+        real_close(self)
+
+    monkeypatch.setattr(strategy_race_module, "ProcessPoolExecutor", FaultPool)
+    monkeypatch.setattr(RaceChannels, "close", observe_close)
+    if fault == "wait":
+        monkeypatch.setattr(strategy_race_module, "wait", interrupt_wait)
+    try:
+        with pytest.raises(type(failure)) as caught:
+            run_strategy_race(
+                two_stage_spec(),
+                time_budget_s=60,
+                band_policy=BandPolicy("portable"),
+                belt_vertical_construction=True,
+                share=True,
+            )
+        assert caught.value is failure
+        assert workers and not any(worker.is_alive() for worker in workers), (
+            f"{fault} left a real owned worker alive"
+        )
+        assert not any(manager.is_alive() for manager in managers)
+        assert live_at_channel_close and not any(live_at_channel_close)
+    finally:
+        # These handles belong only to this probe. Even RED must leave no
+        # blocking initializer, worker, or executor management thread behind.
+        # Never acquire a killed child's Event condition during cleanup.
+        for pool in pools:
+            remaining = tuple((pool._processes or {}).values())
+            for worker in remaining:
+                if worker.is_alive():
+                    worker.kill()
+            pool.shutdown(wait=False, cancel_futures=True)
+        for worker in workers:
+            if worker.is_alive():
+                worker.kill()
+        for manager in managers:
+            manager.join(10)
+            assert not manager.is_alive(), "probe cleanup could not reap its executor"
+
+
 class _NoopExecutor:
     """Stands in for the pool.  Class-level flag so a test can see the kill."""
 
@@ -2318,7 +2508,7 @@ def test_a_raced_build_delivers_events_from_both_arms_to_the_parent() -> None:
         consecutive_empty = 0
         deadline = time.monotonic() + 5.0
         while consecutive_empty < 2 and time.monotonic() < deadline:
-            batch = drain_trace(trace_queue)
+            batch = tuple(drain_trace(trace_queue))
             if batch:
                 events.extend(batch)
                 consecutive_empty = 0

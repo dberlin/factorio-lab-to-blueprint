@@ -2,6 +2,9 @@ import queue
 import threading
 import time
 from fractions import Fraction
+from typing import cast
+
+import pytest
 
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.observe import SearchEvent, SearchPhase
@@ -97,6 +100,51 @@ def test_frame_json_decimates_and_flags_an_oversized_placement() -> None:
     )
     assert frame["truncated"] is True
     assert len(frame["buildings"]) <= TRACE_MAX_BUILDINGS
+
+
+def test_sampled_frame_links_resolve_to_retained_buildings_not_dense_aliases() -> None:
+    # Stride two retains 0, 2, 4, 6... . Old target 2 would alias original 4,
+    # while omitted target 3 would alias original 6 in the dense scene.
+    buildings = [
+        PlacedBuilding(item_id=2001, model_index=35, x=i, y=0)
+        for i in range(TRACE_MAX_BUILDINGS + 1)
+    ]
+    buildings[0] = PlacedBuilding(item_id=2001, model_index=35, x=0, y=0, output_obj=2)
+    buildings[2] = PlacedBuilding(item_id=2001, model_index=35, x=2, y=0, output_obj=3)
+    buildings[4] = PlacedBuilding(item_id=2011, model_index=41, x=4, y=0, input_obj=2, output_obj=6)
+    buildings[6] = PlacedBuilding(
+        item_id=2011,
+        model_index=41,
+        x=6,
+        y=0,
+        input_obj=3,
+        output_obj=len(buildings) + 1,
+    )
+    frame = frame_json(
+        0,
+        0.0,
+        SearchEvent(
+            strategy="freeform",
+            candidate="sampled-links",
+            phase=SearchPhase.INCUMBENT,
+            placement=Placement(buildings=tuple(buildings)),
+        ),
+    )
+    rows = cast(list[list[float]], frame["buildings"])
+
+    def target_x(row: int, field: int) -> float | None:
+        target = int(rows[row][field])
+        return None if target == -1 else rows[target][2]
+
+    assert target_x(0, 8) == 2
+    assert target_x(1, 8) is None
+    assert target_x(2, 9) == 2
+    assert target_x(2, 8) == 6
+    assert target_x(3, 9) is None
+    assert target_x(3, 8) is None
+    assert frame["truncated"] is True
+    assert len(rows) <= TRACE_MAX_BUILDINGS
+    assert all(len(row) == 10 for row in rows)
 
 
 def test_ring_since_is_an_exclusive_cursor_and_reports_the_next_one() -> None:
@@ -363,3 +411,58 @@ def test_collector_counts_a_queue_sourced_overflow_the_same_way_a_deque_overflow
     collector.drain_once()
 
     assert collector.dropped == 8
+
+
+def test_stop_timeout_leaves_publication_open_until_final_drain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    real_drain = TraceCollector.drain_once
+    real_join = threading.Thread.join
+
+    def delayed_drain(self: TraceCollector) -> None:
+        entered.set()
+        assert release.wait(5), "test never released the collector"
+        real_drain(self)
+
+    def immediate_join(self: threading.Thread, timeout: float | None = None) -> None:
+        real_join(self, timeout=0 if self.name == "flab2bp-trace" else timeout)
+
+    monkeypatch.setattr(TraceCollector, "drain_once", delayed_drain)
+    monkeypatch.setattr(threading.Thread, "join", immediate_join)
+    collector = TraceCollector(TraceRing(), started_at=time.monotonic())
+    collector.observer.note(
+        SearchEvent(strategy="freeform", candidate="final", phase=SearchPhase.INCUMBENT)
+    )
+    collector.start()
+    try:
+        assert entered.wait(2)
+        assert collector.stop() is False
+        assert collector.closed is False
+        assert collector.ring.since(-1) == ([], -1)
+    finally:
+        release.set()
+        assert collector._thread is not None
+        real_join(collector._thread, timeout=2)
+    assert collector.stop() is True
+    assert collector.closed is True
+    frames, cursor = collector.ring.since(-1)
+    assert [(frame["seq"], frame["candidate"]) for frame in frames] == [(0, "final")]
+    assert cursor == 0
+
+
+def test_stop_drains_more_than_two_bounded_queue_batches() -> None:
+    from flab2bp.layout.observe_channel import TRACE_DRAIN_MAX_EVENTS
+
+    trace_queue: queue.Queue[object] = queue.Queue()
+    count = TRACE_DRAIN_MAX_EVENTS * 2 + 1
+    for index in range(count):
+        trace_queue.put_nowait(
+            SearchEvent(strategy="freeform", candidate=str(index), phase=SearchPhase.INCUMBENT)
+        )
+    collector = TraceCollector(TraceRing(), started_at=time.monotonic(), queue=trace_queue)
+    collector.stop()
+    frames, _ = collector.ring.since(-1, limit=count)
+    assert [frame["candidate"] for frame in frames] == [str(index) for index in range(count)]
+    assert collector.dropped == 0
