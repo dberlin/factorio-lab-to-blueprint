@@ -358,6 +358,20 @@ def test_belt_run_crosses_splitters_and_pilers_and_terminates_on_cycles() -> Non
             assert index.belt_run(start, forward=forward) == expected
 
 
+def test_belt_run_crosses_machine_hosts_only_when_explicitly_requested() -> None:
+    belt = next(iter(catalog.BELT_IDS))
+    host = catalog.building(catalog.ENERGY_EXCHANGER_ID)
+    index = Buildings((
+        PlacedBuilding(item_id=belt, model_index=0, x=0, y=0, output_obj=1),
+        PlacedBuilding(item_id=catalog.ENERGY_EXCHANGER_ID, model_index=host.model_index, x=1, y=0),
+        PlacedBuilding(item_id=belt, model_index=0, x=2, y=0, input_obj=1),
+    ))
+    assert index.belt_run(0, forward=True) == frozenset({0})
+    assert index.belt_run(2, forward=False) == frozenset({2})
+    assert index.belt_run(0, forward=True, through_any_host=True) == frozenset({0, 2})
+    assert index.belt_run(2, forward=False, through_any_host=True) == frozenset({0, 2})
+
+
 # --- MutableBuildings ---------------------------------------------------------
 
 

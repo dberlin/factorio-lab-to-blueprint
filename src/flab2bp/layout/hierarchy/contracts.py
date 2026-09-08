@@ -71,7 +71,7 @@ def _machines_on_lane(buildings: Buildings, index: int, *, puts_on: bool) -> int
     Drive from the run's belts into their incident sorter buckets rather than
     scanning every building once per boundary lane.
     """
-    run = buildings.belt_run(index, forward=not puts_on)
+    run = buildings.belt_run(index, forward=not puts_on, through_any_host=True)
     records = buildings.all()
     machines: set[int] = set()
     for belt in run:

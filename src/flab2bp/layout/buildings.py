@@ -380,7 +380,9 @@ class _BuildingsQueries:
         """
         return self.by_input_obj(index)
 
-    def belt_run(self, index: int, *, forward: bool) -> frozenset[int]:
+    def belt_run(
+        self, index: int, *, forward: bool, through_any_host: bool = False
+    ) -> frozenset[int]:
         """Every belt of the run through ``index``, in one direction.
 
         Belt chains are forward-linked, so a tail's run is everything that
@@ -390,6 +392,11 @@ class _BuildingsQueries:
         their ``output_obj``/``input_obj`` and the cargo passes through, so
         ``index`` itself need not be a belt to anchor a run -- only the
         neighbours actually walked must be. Cycle-safe via a visited set.
+
+        ``through_any_host`` also crosses other valid non-belt hosts. Hierarchy
+        lane weighting uses this to retain the input/output belt connection
+        through port-driven machines; ordinary run queries keep the narrower
+        Splitter/Piler semantics unless explicitly requested otherwise.
         """
 
         def forward_of(i: int) -> tuple[int, ...]:
@@ -398,7 +405,7 @@ class _BuildingsQueries:
                 return _EMPTY
             if self._kinds[link] is Kind.BELT:
                 return (link,)
-            if self._kinds[link] is Kind.OTHER:
+            if self._kinds[link] is Kind.OTHER or through_any_host:
                 return tuple(
                     j for j in self._by_input_obj.get(link, _EMPTY) if self._kinds[j] is Kind.BELT
                 )
@@ -410,7 +417,10 @@ class _BuildingsQueries:
             if (
                 link is not None
                 and self.by_index(link) is not None
-                and self._kinds[link] is Kind.OTHER
+                and (
+                    self._kinds[link] is Kind.OTHER
+                    or (through_any_host and self._kinds[link] is not Kind.BELT)
+                )
             ):
                 preds = preds + self.belts_into(link)
             return preds
