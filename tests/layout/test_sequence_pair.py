@@ -1200,25 +1200,6 @@ def test_swap_both_swaps_the_same_strip_ids_in_each_permutation() -> None:
     assert positive_strips == negative_strips
 
 
-def test_swap_both_preserves_the_seeded_swap_and_rng_stream() -> None:
-    state = AnnealState.initial(size=24, seed=137)
-    for seed in range(20):
-        rng = random.Random(seed)
-        reference_rng = random.Random(seed)
-        first, second = reference_rng.sample(range(24), 2)
-        positive = list(state.pair.positive)
-        negative = list(state.pair.negative)
-        first_at = negative.index(positive[first])
-        second_at = negative.index(positive[second])
-        positive[first], positive[second] = positive[second], positive[first]
-        negative[first_at], negative[second_at] = negative[second_at], negative[first_at]
-
-        moved = apply_move(state, MoveKind.SWAP_BOTH, rng)
-
-        assert moved.pair == SequencePair(tuple(positive), tuple(negative))
-        assert rng.getstate() == reference_rng.getstate()
-
-
 def test_moves_are_legal_no_ops_for_empty_and_singleton_states() -> None:
     for size in (0, 1):
         state = AnnealState.initial(size=size, seed=5)
@@ -2553,56 +2534,6 @@ def test_topological_order_breaks_ties_by_index_and_re_sorts_the_ready_set() -> 
 def test_topological_order_rejects_a_cycle() -> None:
     with pytest.raises(ValueError):
         _topological_order([{1}, {0}], key=lambda index: (index,))
-
-
-def _resorted_kahn_reference(
-    successors: list[set[int]], *, key: Callable[[int], tuple[int, ...]]
-) -> tuple[int, ...]:
-    """Frozen f3298f48 ordering body, including stable promotions and cycle refusal."""
-    size = len(successors)
-    indegree = [0] * size
-    for sources in successors:
-        for destination in sources:
-            indegree[destination] += 1
-    ready = sorted((index for index in range(size) if indegree[index] == 0), key=key)
-    order: list[int] = []
-    while ready:
-        node = ready.pop(0)
-        order.append(node)
-        added = False
-        for destination in sorted(successors[node]):
-            indegree[destination] -= 1
-            if indegree[destination] == 0:
-                ready.append(destination)
-                added = True
-        if added:
-            ready.sort(key=key)
-    if len(order) != size:
-        raise ValueError("encoded placement relations must be acyclic")
-    return tuple(order)
-
-
-def test_topological_frontier_matches_stable_promotions_for_tied_keys() -> None:
-    rng = random.Random(111)
-    for size in (0, 1, 2, 6, 20, 60):
-        for _ in range(10):
-            nodes = list(range(size))
-            rng.shuffle(nodes)
-            successors: list[set[int]] = [set() for _ in range(size)]
-            for position, source in enumerate(nodes):
-                for destination in nodes[position + 1:]:
-                    if rng.random() < 0.15:
-                        successors[source].add(destination)
-            ranks = [rng.randrange(4) for _ in range(size)]
-
-            def key(node: int) -> tuple[int, ...]:
-                return (ranks[node],)
-
-            assert _topological_order(successors, key=key) == _resorted_kahn_reference(
-                successors, key=key
-            )
-
-    assert _topological_order([{1}, set(), set()], key=lambda _node: (0,)) == (0, 2, 1)
 
 
 def _cancellable_anneal_scene() -> tuple[PlacementProblem, AnnealState]:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import heapq
 import math
 import random
 from bisect import bisect_left
@@ -12,7 +11,6 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from flab2bp.dsp import catalog
-from flab2bp.indexed import StripPositions
 
 if TYPE_CHECKING:
     from flab2bp.layout.route_feedback import LogicalNetId
@@ -1072,19 +1070,19 @@ def _topological_order(
     for sources in successors:
         for destination in sources:
             indegree[destination] += 1
-    ready = [(key(index), index, index) for index in range(size) if indegree[index] == 0]
-    heapq.heapify(ready)
-    arrival = size
+    ready = sorted((index for index in range(size) if indegree[index] == 0), key=key)
     order: list[int] = []
     while ready:
-        _rank, _arrival, node = heapq.heappop(ready)
+        node = ready.pop(0)
         order.append(node)
+        added = False
         for destination in sorted(successors[node]):
             indegree[destination] -= 1
             if indegree[destination] == 0:
-                # Stable list sorting kept already-ready nodes ahead of new ties.
-                heapq.heappush(ready, (key(destination), arrival, destination))
-                arrival += 1
+                ready.append(destination)
+                added = True
+        if added:
+            ready.sort(key=key)
     if len(order) != size:
         raise ValueError("encoded placement relations must be acyclic")
     return tuple(order)
@@ -1476,9 +1474,11 @@ def apply_move(
         first_strip = positive[first]
         second_strip = positive[second]
         positive = _swap_positions(positive, first, second)
-        negative_positions = StripPositions.of(negative)
-        first_at, second_at = negative_positions.positions_of(first_strip, second_strip)
-        negative = _swap_positions(negative, first_at, second_at)
+        negative = _swap_positions(
+            negative,
+            negative.index(first_strip),
+            negative.index(second_strip),
+        )
     elif kind is MoveKind.INSERT_POSITIVE:
         positive = _insert_permutation(positive, rng)
     elif kind is MoveKind.INSERT_NEGATIVE:
@@ -1900,7 +1900,7 @@ def merge_stage_boundary(
     if merged is None:
         return None
     for permutation in (state.pair.positive, state.pair.negative):
-        position = StripPositions.of(permutation).position_of(left_strip)
+        position = permutation.index(left_strip)
         if position + 1 >= len(permutation) or permutation[position + 1] != right_strip:
             return None
     if state.gaps.east[right_strip] or state.gaps.north[right_strip]:
@@ -2078,30 +2078,11 @@ def build_elite_archive(
         return ()
 
     values = tuple(distinct.values())
-    remaining = iter(values)
-    blended = narrowest = lowest_hpwl = lowest_history = next(remaining)
-    blended_key = _blended_archive_key(blended)
-    narrowest_key = quality_archive_key(narrowest)
-    hpwl_key = _lowest_hpwl_archive_key(lowest_hpwl)
-    history_key = _lowest_history_archive_key(lowest_history)
-    for candidate in remaining:
-        candidate_blended = _blended_archive_key(candidate)
-        if candidate_blended < blended_key:
-            blended, blended_key = candidate, candidate_blended
-        candidate_narrowest = quality_archive_key(candidate)
-        if candidate_narrowest < narrowest_key:
-            narrowest, narrowest_key = candidate, candidate_narrowest
-        candidate_hpwl = _lowest_hpwl_archive_key(candidate)
-        if candidate_hpwl < hpwl_key:
-            lowest_hpwl, hpwl_key = candidate, candidate_hpwl
-        candidate_history = _lowest_history_archive_key(candidate)
-        if candidate_history < history_key:
-            lowest_history, history_key = candidate, candidate_history
     mandatory = (
-        (EliteCategory.BLENDED, blended),
-        (EliteCategory.NARROWEST, narrowest),
-        (EliteCategory.LOWEST_HPWL, lowest_hpwl),
-        (EliteCategory.LOWEST_HISTORY, lowest_history),
+        (EliteCategory.BLENDED, min(values, key=_blended_archive_key)),
+        (EliteCategory.NARROWEST, min(values, key=quality_archive_key)),
+        (EliteCategory.LOWEST_HPWL, min(values, key=_lowest_hpwl_archive_key)),
+        (EliteCategory.LOWEST_HISTORY, min(values, key=_lowest_history_archive_key)),
     )
     order: list[PlacementKey] = []
     categories_by_key: dict[PlacementKey, list[EliteCategory]] = {}
