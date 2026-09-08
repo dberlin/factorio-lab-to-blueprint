@@ -193,48 +193,59 @@ wired, which no hierarchical build had ever done.
   `corridor-spike.md` records the verdict and its own caveat: a corridor's
   value cannot be judged while the oracle cannot grade a rung.
 
-Still open, and now with measurements behind them (v3 gate.md §5-§6):
-- **Make `_match_access_corridors` return its partial assignment instead of
-  giving up wholesale** — the headline lever. `layout/freeform.py:11875` /
-  `:11881`, `_ACCESS_CUT_ROUNDS = 8` at `:375`. It is a matcher-scaling
-  problem with a worked counterexample, not a wall: zurl2's gap-16 rung came
-  back complete at 144/144 in 4.17 s. Until it is fixed the ladder cannot
-  rank a rung, `compose_gap` is pinned at 2 on every cell, and Tasks 4-5 are
-  paid for and thrown away on every build.
-- **Power the ground COMPOSITION adds.** `titanium-glass/all-products` at 60 s
-  composes, wires all 26 cut lanes and fails `certify` with
-  `errors_by_check == {power.coverage: 4}` — nothing else wrong with the
-  placement. All four are cut-lane splitters; the canvas has 61 Tesla towers
-  and 80 splitters, 76 covered and 4 not, because each block brought towers
-  sized for its own footprint and the gap `compose` opens carries none. The
-  smallest measured distance between this strategy and a validator-clean
-  blueprint in three gates. v3 gate.md §2.3.
-- **A bus corridor reserved BEFORE block placement** — design §4 E specifies
-  it. Not dead, but not judgeable yet: the spike was killed at Step 0 because
-  the oracle cannot grade a rung, and it should be revisited once the wholesale
-  give-up above is fixed.
-- **An "abstain" answer for `dispatch_arms`** on a feature vector the evidence
-  does not cover: `coaters == 0` with `strips` under `UNCOVERED_STRIPS = 85`
-  is currently indistinguishable from a genuine sequence-pair block
-  (`layout/hierarchy/dispatch.py:110-112`), and that is the 6-versus-31 regression above.
-- The other two adaptive memories, **neither of them planned, each for a
-  stated reason**:
-  - *A cross-build solved-block cache.* Deliberately NOT planned: related work
-    is already planned as the "background compound block cache" (`42c9e0e`)
-    and duplicating it would be two designs for one cache.
-  - *A strip cap that moves with outcomes.* Deliberately NOT attached to the
-    `_ShapeNoGood` memo v2 shipped, because it is not cheap to attach:
-    `_ShapeNoGood` is consulted BEFORE a block solve and keyed on
-    `(shape, arm)`, while the signal the cap should adapt on is the ROUTER's
-    verdict (unrouted lanes per cut), which arrives once per build after every
-    block has already been solved and composed. There is no second composition
-    within a build to feed it, so an outcome-driven cap needs a cross-build
-    memory — which is the previous bullet.
-- **A residual risk carried deliberately**, not a plan: Ruling R7's discard
-  fires only on an assignment of exactly zero (`compose.py:899`), so a small
-  PARTIAL assignment would commit and report `reservation_degraded = 0` — a
-  stats line claiming a trustworthy verdict. No evidence either way; a narrow
-  trigger was preferred to a tuned threshold. v3 gate.md §6.
+### From hierarchical v4
+
+Measured source `706ddb79`, final paired guard `8b6b654a`, baseline `1d2a790c`;
+evidence in `docs/superpowers/evidence/2026-09-07-hierarchical-v4/gate.md`.
+The large-case gate is **FAIL**: clauses (b), (c), (d) fail; (a) passes
+existentially and (e) passes. Original records remain 17 REFUSED / 18, with
+only titanium@60 r4 emitting: **1/4 original titanium reliability**. Eight
+separate serial failed-scenario adjudications yield seven refusals and one
+titanium emission; two separate certify rebuilds have zero errors each.
+These are preintegration measurements, not coverage of the later
+master-into-hierarchy merge `d53e58f3`.
+
+- **DONE as a mechanism** Partial matcher return and honest degraded/partial
+  counters, replacing v3's wholesale give-up and its unreported-partial risk.
+  Final belt3/all reports partial4(3), degraded4; zurl2 partial1, degraded1.
+  Held-corridor-safe local top-up repairs the new missing-corridor regression
+  on titanium (missing3 before top-up,0 in final refused60s rounds).
+  **Not closed:** general routing completion; belt3/all still has missing5
+  and18(23) unrouted cuts, zurl2 missing0 but97(108) unrouted cuts.
+- **DONE on the demonstrated path** Power the ground composition adds:
+  titanium's two final independent rebuilds certify with zero errors,
+  5994 buildings,62 Tesla towers and80 splitters versus v3's four
+  `power.coverage` findings. **Not closed:** titanium15s (power pass never
+  starts before wall expires), and titanium60s reliability (BUDGET routing
+  and DSP finalization failures remain). Successful CLI stats are missing,
+  not inferred from earlier runs.
+- **DONE as a dispatch mechanism** An abstain answer for coater-free shapes
+  below the measured exact floor21.0s (25/25 swept cells refused; funding
+  cap20.0s). **Not closed:** mall composition/funding. Earlier post-fix
+  no-proliferator results were six unplaced in3/4 and70 starved in1/4;
+  final originals starve55/55, serial58. All-products leaves9/9/9 unplaced.
+- **BOUND ONLY, not repaired** The mall's captured steel/titanium-alloy
+  block20 refuses after15 packs at five heights: static-access9,
+  dynamic-access6, no BUDGET and no common logical-net failure; the60s
+  replay takes5.329s. Task8 names the density/search-space limit, not an
+  invariant defect or a successful geometric repair.
+
+Deliberately unplanned residuals, without a new plan:
+- **A cross-build solved-block cache** — related work already has the
+  "background compound block cache" plan (`42c9e0e`).
+- **A strip cap that moves with outcomes** — `_ShapeNoGood` is consulted
+  before a solve and keyed on `(shape, arm)`, while per-cut router verdicts
+  arrive after composition, so this needs cross-build memory.
+- **The pre-placed bus corridor (design §4 E)** — killed by measurement
+  twice; revisit only when a gate measures a rung rejected for a sealed-trunk
+  reason, not merely a router cut labeled `SEALED_POCKET`.
+
+Next measured priorities are titanium routing/finalization reliability,
+mall funding/bounded search, then remaining post-top-up cut routing; v4
+gate §5 pins each to immutable source locations and counts. No speed claim
+or additional experiment is implied. The default guard is72/72 CLEAN on
+both trees, zero losing/invalid/crash/over-allowance rows; the generic
+absolute30s comparator **FAIL** remains recorded.
 
 ### Orchestrator and dispatch
 - Anytime dispatch of strategy, budget and islands from the feature vector:
