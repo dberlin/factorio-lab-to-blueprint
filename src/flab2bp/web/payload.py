@@ -210,10 +210,13 @@ def attempt_failure(attempt: LayoutAttemptFailure) -> Json:
         "candidate": attempt.candidate,
         "strategy": attempt.strategy,
         "reason": attempt.reason,
-        "stats": {
-            key: None if isinstance(value, float) and not math.isfinite(value) else value
-            for key, value in attempt.stats.items()
-        },
+        "stats": cast(
+            Json,
+            {
+                key: None if isinstance(value, float) and not math.isfinite(value) else value
+                for key, value in attempt.stats.items()
+            },
+        ),
         "projection_failures": _array(
             projection_failure(failure) for failure in attempt.projection_failures
         ),
