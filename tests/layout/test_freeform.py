@@ -14502,6 +14502,26 @@ def _shard_balance(spec: BuildSpec, item: str) -> list[tuple[F, F]]:
     return sorted(out)
 
 
+def _shard_delivery(
+    pairs: list[tuple[int, int]],
+    supply: dict[int, F],
+    demand: dict[int, F],
+    external: F = F(0),
+) -> bool:
+    from flab2bp.layout.physical_flow import Arc, Model, solve
+
+    lanes = sorted(set(supply) | set(demand) | {lane for pair in pairs for lane in pair})
+    node = {lane: index + 1 for index, lane in enumerate(lanes)}
+    total = sum(demand.values(), F(0))
+    arcs = [Arc(0, node[lane], rate, "cargo") for lane, rate in supply.items()]
+    arcs.extend(Arc(node[a], node[b], total, "cargo") for a, b in pairs)
+    arcs.extend(Arc(node[lane], 0, rate, "cargo", rate) for lane, rate in demand.items())
+    gate = len(node) + 1
+    arcs.append(Arc(0, gate, external, "cargo"))
+    arcs.extend(Arc(gate, node[lane], rate, "cargo") for lane, rate in demand.items())
+    return solve(Model(gate + 1, tuple(arcs), ()), frozenset()).feasible is True
+
+
 class TestAShardThatCannotFeedItself:
     """The cut ACROSS a producer's shards, which the pairing cannot see.
 
@@ -14527,33 +14547,16 @@ class TestAShardThatCannotFeedItself:
         plenty = {10: F(100), 20: F(100)}
         assert _join_shard_islands(self.PAIRS, plenty, self.DEMAND, F(0)) == []
 
-    def test_the_starving_shard_is_joined_to_the_one_with_slack(self) -> None:
+    def test_repair_delivers_every_shard_demand_simultaneously(self) -> None:
         extra = _join_shard_islands(self.PAIRS, self.SUPPLY, self.DEMAND, F(0))
-        assert extra == [(20, 30)], (
-            "the surplus shard must be the SOURCE and the starving shard's lane "
-            f"the sink; got {extra}"
-        )
+        assert _shard_delivery(self.PAIRS + extra, self.SUPPLY, self.DEMAND)
 
-    def test_joining_them_makes_the_whole_edge_one_island(self) -> None:
-        extra = _join_shard_islands(self.PAIRS, self.SUPPLY, self.DEMAND, F(0))
-        merged = self.PAIRS + extra
-        seen = {b for pair in merged for b in pair}
-        parent = dict.fromkeys(seen)
-        root = {b: b for b in seen}
-
-        def find(k: int) -> int:
-            while root[k] != k:
-                root[k] = root[root[k]]
-                k = root[k]
-            return k
-
-        for a, b in merged:
-            root[find(a)] = find(b)
-        assert len({find(b) for b in parent}) == 1, f"{merged} still cut"
-        assert sum(self.SUPPLY.values()) == sum(self.DEMAND.values()), (
-            "the joined island balances EXACTLY -- the deficit was never "
-            "anything but the other shard's surplus"
-        )
+    def test_one_weak_component_can_have_a_directed_shortfall(self) -> None:
+        pairs = [(10, 30), (20, 30), (20, 40)]
+        supply, demand = {10: F(5), 20: F(5)}, {30: F(1), 40: F(9)}
+        assert not _shard_delivery(pairs, supply, demand)
+        extra = _join_shard_islands(pairs, supply, demand, F(0))
+        assert _shard_delivery(pairs + extra, supply, demand)
 
     def test_two_lanes_of_one_shard_are_one_island(self) -> None:
         """One strip's machines drain into every one of its own output lanes.
@@ -14569,7 +14572,20 @@ class TestAShardThatCannotFeedItself:
             "without the sibling edge the surplus is invisible -- if this is "
             "empty the test below proves nothing"
         )
-        assert _join_shard_islands([*cut, (10, 11)], supply, demand, F(0)) == []
+        assert _join_shard_islands(cut, supply, demand, F(0), shared_sources=((10, 11),)) == []
+
+    def test_large_denominator_supplies_need_no_spurious_repair(self) -> None:
+        supply = {
+            1: F(422216704, 1121426125),
+            2: F(72496, 88125),
+            3: F(13418496, 224285225),
+            4: F(768, 5875),
+            5: F(80510976, 224285225),
+            6: F(4608, 5875),
+        }
+        demand = {7: F(2048, 625)}
+        pairs = [(source, 7) for source in supply]
+        assert _join_shard_islands(pairs, supply, demand, F(12138504192, 6426130625)) == []
 
     def test_the_repair_goes_to_the_lane_that_can_absorb_it(self) -> None:
         """An extra net delivers at most what its RECEIVING lane draws.
@@ -14584,23 +14600,13 @@ class TestAShardThatCannotFeedItself:
         ``flow.conservation`` convicts the placement, which is what refused this
         item. The hungriest lane is the one that can take the whole transfer.
         """
-        pairs = [(213, 199), (216, 815), (224, 906), (227, 917), (213, 216), (224, 227)]
+        pairs = [(213, 199), (216, 815), (224, 906), (227, 917)]
+        siblings = ((213, 216), (224, 227))
         supply = {213: F(1), 216: F(0), 224: F(1), 227: F(0)}
         demand = {199: F(2, 15), 815: F(16, 15), 906: F(4, 15), 917: F(8, 15)}
 
-        extra = _join_shard_islands(pairs, supply, demand, F(0))
-
-        # The SINK is what this test is about. Which of the surplus island's two
-        # sibling lanes sources it is the `(taps, belt)` tie-break, and both
-        # physically carry the item, so pinning it here would fail a future
-        # change to a rule this test says nothing about.
-        assert [sink for _source, sink in extra] == [815], (
-            "the repair must land on the 16/15 lane, which can absorb the whole "
-            f"3/15 deficit; got {extra}"
-        )
-        assert all(source in (224, 227) for source, _sink in extra), (
-            f"the source must be the surplus island's lane; got {extra}"
-        )
+        extra = _join_shard_islands(pairs, supply, demand, F(0), shared_sources=siblings)
+        assert _shard_delivery(pairs + list(siblings) + extra, supply, demand)
 
     def test_a_deficit_wider_than_one_lane_buys_a_second_net(self) -> None:
         """Capping the transfer at the lane is only honest if the loop goes on.
@@ -14609,11 +14615,12 @@ class TestAShardThatCannotFeedItself:
         no single lane can take more than 2 of it. Crediting the whole 3 to the
         first net would leave the island 1 short and the validator would say so.
         """
-        pairs = [(10, 30), (11, 31), (10, 11), (20, 32)]
+        pairs = [(10, 30), (11, 31), (20, 32)]
         supply = {10: F(1), 11: F(0), 20: F(5)}
         demand = {30: F(2), 31: F(2), 32: F(1)}
 
-        assert _join_shard_islands(pairs, supply, demand, F(0)) == [(20, 30), (20, 31)]
+        extra = _join_shard_islands(pairs, supply, demand, F(0), shared_sources=((10, 11),))
+        assert _shard_delivery(pairs + [(10, 11)] + extra, supply, demand)
 
     def test_one_starving_lane_may_be_belted_by_two_surplus_islands(self) -> None:
         """A lane's shortfall can be owed by more than one island.
@@ -14627,8 +14634,8 @@ class TestAShardThatCannotFeedItself:
         supply = {10: F(2), 20: F(10), 40: F(10)}
         demand = {30: F(12), 31: F(6), 32: F(4)}
 
-        # Largest surplus first, so the 6 comes before the 4.
-        assert _join_shard_islands(pairs, supply, demand, F(0)) == [(40, 30), (20, 30)]
+        extra = _join_shard_islands(pairs, supply, demand, F(0))
+        assert _shard_delivery(pairs + extra, supply, demand)
 
     def test_a_lane_already_fed_from_inside_is_not_the_one_aimed_at(self) -> None:
         """The hungriest lane is not always the one that can take a delivery.
@@ -14643,7 +14650,8 @@ class TestAShardThatCannotFeedItself:
         supply = {1: F(10), 2: F(3), 3: F(5)}
         demand = {101: F(10), 102: F(8), 103: F(0)}
 
-        assert _join_shard_islands(pairs, supply, demand, F(0)) == [(3, 102)]
+        extra = _join_shard_islands(pairs, supply, demand, F(0))
+        assert _shard_delivery(pairs + extra, supply, demand)
 
     def test_a_lane_that_draws_nothing_is_never_belted(self) -> None:
         """A zero-draw lane would take a zero transfer, and the loop would spin.
@@ -14656,13 +14664,15 @@ class TestAShardThatCannotFeedItself:
         supply = {10: F(1), 20: F(5)}
         demand = {30: F(0), 31: F(3), 32: F(1)}
 
-        assert _join_shard_islands(pairs, supply, demand, F(0)) == [(20, 31)]
+        extra = _join_shard_islands(pairs, supply, demand, F(0))
+        assert all(sink != 30 for _, sink in extra)
+        assert _shard_delivery(pairs + extra, supply, demand)
 
     def test_what_the_player_belts_in_is_one_global_allocation(self) -> None:
         """The one external rate can cover either island's shortfall."""
         supply, demand = {10: F(3), 20: F(1)}, {30: F(1), 31: F(3)}
         cut = [(10, 30), (20, 31)]
-        assert _join_shard_islands(cut, supply, demand, F(0)) == [(10, 31)]
+        assert _shard_delivery(cut + _join_shard_islands(cut, supply, demand, F(0)), supply, demand)
         assert _join_shard_islands(cut, supply, demand, F(2)) == []
 
     def test_external_supply_is_not_credited_to_each_deficit_island(self) -> None:
@@ -14670,7 +14680,8 @@ class TestAShardThatCannotFeedItself:
         supply = {10: F(5, 2), 20: F(0), 40: F(0)}
         demand = {30: F(1), 31: F(3, 2), 32: F(3, 2)}
 
-        assert _join_shard_islands(pairs, supply, demand, F(3, 2)) == [(10, 31)]
+        extra = _join_shard_islands(pairs, supply, demand, F(3, 2))
+        assert _shard_delivery(pairs + extra, supply, demand, F(3, 2))
 
     def test_the_plan_really_does_starve_a_shard(self) -> None:
         """Verify the instrument: the fixture must contain the defect.

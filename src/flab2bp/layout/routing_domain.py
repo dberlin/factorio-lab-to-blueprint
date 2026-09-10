@@ -35,12 +35,13 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, NamedTuple, cast
 
 import numpy as np
+from ortools.linear_solver import pywraplp
 from ortools.sat.python import cp_model
 
 from flab2bp.dsp import catalog, codec, colliders, params, planet, rules, splitter_ports
 from flab2bp.indexed import Nets, PortReservations, StakedPaths, UnionFind
 from flab2bp.indexed.staked_paths import StakedPathSnapshot
-from flab2bp.layout import finalize, junction, last_mile, route_kernel, slots
+from flab2bp.layout import finalize, junction, last_mile, physical_flow, route_kernel, slots
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import Facing, NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.buildings import Buildings, MutableBuildings, bounds_of
@@ -13931,170 +13932,151 @@ def _connect_short_cuts(
     return extra
 
 
+def _exact_shard_flows(
+    arcs: Sequence[physical_flow.Arc],
+    variables: Sequence[pywraplp.Variable],
+    nodes: int,
+) -> tuple[Fraction, ...] | None:
+    """Reconstruct the native network basis without rounding cargo rates.
+
+    A basic incidence matrix is a forest. Nonbasic arcs sit at an original
+    rational bound; leaf conservation determines each basic arc exactly.
+    This certifies the native allocation, not its floating-point status.
+    """
+    flows = [Fraction(0)] * len(arcs)
+    balance = [Fraction(0)] * nodes
+    basic: list[set[int]] = [set() for _ in range(nodes)]
+    for index, (arc, variable) in enumerate(zip(arcs, variables, strict=True)):
+        status = variable.basis_status()
+        if status == pywraplp.Solver.BASIC and arc.source != arc.sink:
+            basic[arc.source].add(index)
+            basic[arc.sink].add(index)
+            continue
+        value = arc.capacity if status == pywraplp.Solver.AT_UPPER_BOUND else arc.lower
+        flows[index] = value
+        balance[arc.source] += value
+        balance[arc.sink] -= value
+    leaves = [node for node, edges in enumerate(basic) if len(edges) == 1]
+    while leaves:
+        node = leaves.pop()
+        if len(basic[node]) != 1:
+            continue
+        index = basic[node].pop()
+        arc = arcs[index]
+        value = -balance[node] if node == arc.source else balance[node]
+        if not arc.lower <= value <= arc.capacity:
+            return None
+        flows[index] = value
+        balance[arc.source] += value
+        balance[arc.sink] -= value
+        other = arc.sink if node == arc.source else arc.source
+        basic[other].remove(index)
+        if len(basic[other]) == 1:
+            leaves.append(other)
+    if any(basic) or any(balance):
+        return None
+    return tuple(flows)
+
+
 def _join_shard_islands(
     pairs: Sequence[tuple[int, int]],
     supply: Mapping[int, Fraction],
     demand: Mapping[int, Fraction],
     external: Fraction,
+    *,
+    shared_sources: Sequence[tuple[int, int]] = (),
 ) -> list[tuple[int, int]]:
-    """Extra nets joining an item's islands ACROSS a producer's shards.
+    """Buy directed producer-to-consumer links only for unmet allocation.
 
-    :func:`_connect_short_cuts` makes the same argument one level down and
-    cannot see this case.  It is handed the ports of ONE
-    ``(producer group, item, destination)`` edge, so the only islands it can
-    join are the ones its own cyclic pairing created.  The islands here are
-    made by :func:`_shard_sinks`, which divides a producer's destinations
-    between STRIPS, and by :func:`_allocate_machines`, which then divides the
-    producer's machines between those shards.  Two shards of one group never
-    appear in the same call, so nothing downstream of the pairing could ever
-    notice that one of them is starving.
-
-    **An integer split of machines cannot serve a fractional split of demand,
-    and a rate solver that balances exactly leaves no slack to absorb the
-    rounding.**  ``universe-matrix/no-proliferator`` is the clean example and
-    the arithmetic is forced, not unlucky: ``energetic-graphite`` makes 41/42
-    per machine on 21 machines, exactly 41/2 items/s against exactly 41/2 of
-    demand.  Its four consumers do not fit one sorter reach so they shard two
-    and two; the shard carrying ``graphene`` and ``plastic`` owes 31/2 items/s,
-    which is 15.878 machines, and the other owes 5, which is 5.122.  There is
-    no way to write 21 as two integers that cover 15.878 and 5.122, so ONE of
-    the two shards starves whatever :func:`_allocate_machines` decides.  It
-    chose 15 and 6, and ``flow.conservation`` reported 14 machines reaching
-    205/14 items/s of the 31/2 they consume -- short by 6/7, which is exactly
-    the surplus sitting on the other shard.  ``iron-ingot`` in the same build
-    is the same shape: 7 machines making 14 against 15 of demand, with 6
-    against 5 next door.
-
-    Joining the two islands makes the spec's own arithmetic decide it, which is
-    the only claim backpressure cannot rescue -- and it is exactly balanced,
-    because the deficit was never anything but the other shard's surplus.
-
-    Bought only where it is needed, for the reason recorded in
-    :func:`_connect_short_cuts`: joining every sharded edge in full was measured
-    corpus-wide and cost four clean cells, because the extra belts crowd both
-    the router and the power lattice.  If every island can feed itself this adds
-    nothing at all.  Measured over the twelve-URL corpus at three candidates
-    each, thirty-six specs: it fires on ``universe-matrix`` alone, on all three
-    of its candidates, and adds ONE net per item on two items.
-
-    Joins always run from an island with remaining internal surplus to one
-    with remaining deficit.  Largest balances are paired first, with root order
-    as the deterministic tie-breaker, so the repair buys no avoidable edge.
-
-    **Which LANE of the deficit island receives it is not free either.**  One
-    belt arrives at one lane, and a lane can take no more than its own
-    consumers draw, so each lane carries a residual credit and a transfer is
-    only ever credited up to it.  Sending the whole island deficit down
-    whichever lane happened to be least tapped is how
-    ``df-strange-annihilation-fuel-rod`` refused: copper-ingot's deficit island
-    drew 2/15 on one lane and 16/15 on the other against 1 item/s of its own,
-    the repair went to the 2/15 lane, and ``flow.conservation`` reported the
-    placement 1/15 short -- precisely the part of the 3/15 that lane could
-    never have accepted.  A deficit wider than any single lane buys a second
-    net rather than being declared repaired by the first, and a lane whose
-    shortfall is owed by two different surplus islands may be belted twice.
-
-    The least-tapped lane stays the target whenever it can hold the whole
-    transfer, and the hungriest is reached for only when spreading would
-    under-deliver.  The hungriest lane is by construction the most crowded --
-    :func:`_merge_lanes` packs the most destinations onto the lane with the most
-    draw, and each tap at a lane end is a side of a four-sided junction -- so
-    preferring it unconditionally would aim every repair at the junctions least
-    able to take one.
-
-    ``pairs`` are belt indices ``(producer lane, consumer lane)`` already
-    linked, ``supply``/``demand`` are items/second per lane, and ``external``
-    is the one global rate the player belts in.  It may be allocated among all
-    entry lanes, but it is not independently available to every island.
+    Sibling output lanes share one producer budget, but are not transport
+    edges. In particular A->X, B->X, B->Y cannot send A's surplus backwards
+    through X to Y. A native minimum-cost allocation proposes the additional
+    links; exact rational certification checks their simultaneous delivery.
+    Physical belt/sorter capacities remain the final validator's obligation.
     """
-    components = UnionFind()
-
-    # How many nets already meet each lane. A producer lane end becomes a
-    # junction under `_tap_source` and a junction has four sides, so the extra
-    # net goes on the least-used lane of the island rather than piling onto
-    # whichever one sorts first.
+    total = sum(demand.values(), Fraction(0))
+    if total == 0:
+        return []
+    lanes = sorted(set(supply) | set(demand) | {lane for pair in pairs for lane in pair})
+    nodes = {lane: index + 1 for index, lane in enumerate(lanes)}
+    groups = UnionFind()
+    for a, b in shared_sources:
+        groups.union(a, b)
+    sources: dict[int, list[int]] = defaultdict(list)
+    for lane in sorted(supply):
+        sources[cast(int, groups.find(lane))].append(lane)
+    arcs: list[physical_flow.Arc] = []
+    next_node = len(nodes) + 1
+    for members in sources.values():
+        amount = sum((supply[lane] for lane in members), Fraction(0))
+        if amount <= 0:
+            continue
+        gate = next_node
+        next_node += 1
+        arcs.append(physical_flow.Arc(0, gate, amount, "cargo"))
+        arcs.extend(physical_flow.Arc(gate, nodes[lane], amount, "cargo") for lane in members)
+    if external > 0:
+        gate = next_node
+        next_node += 1
+        arcs.append(physical_flow.Arc(0, gate, external, "cargo"))
+        arcs.extend(
+            physical_flow.Arc(gate, nodes[lane], rate, "cargo")
+            for lane, rate in demand.items()
+            if rate > 0
+        )
+    linked = set(pairs)
+    arcs.extend(
+        physical_flow.Arc(nodes[a], nodes[b], total, "cargo") for a, b in sorted(linked)
+    )
+    arcs.extend(
+        physical_flow.Arc(nodes[lane], 0, rate, "cargo", rate)
+        for lane, rate in demand.items()
+    )
+    fixed_count = len(arcs)
     taps: dict[int, int] = defaultdict(int)
     for a, b in pairs:
-        components.union(a, b, keep_right=True)
         taps[a] += 1
         taps[b] += 1
-
-    srcs: dict[int, list[int]] = defaultdict(list)
-    sinks: dict[int, list[int]] = defaultdict(list)
-    for belt in sorted(supply):
-        srcs[cast(int, components.find(belt))].append(belt)
-    for belt in sorted(demand):
-        sinks[cast(int, components.find(belt))].append(belt)
-    roots = sorted(set(srcs) | set(sinks))
-    if len(roots) < 2:
-        return []
-
-    balance = {
-        r: sum((supply[b] for b in srcs[r]), Fraction(0))
-        - sum((demand[b] for b in sinks[r]), Fraction(0))
-        for r in roots
-    }
-    deficits = {r: -value for r, value in balance.items() if value < 0}
-    remaining_deficit = sum(deficits.values(), Fraction(0))
-    if remaining_deficit <= external:
-        return []
-    surpluses = {r: value for r, value in balance.items() if value > 0}
-
-    extra: list[tuple[int, int]] = []
-    # How much more each lane could still receive.  A belt delivers into the
-    # island through ONE lane, and that lane can never take more than its own
-    # consumers draw, so this is the bound on what any repair aimed there can
-    # carry.  It is a RESIDUAL rather than a one-shot flag: two surplus islands
-    # may each owe part of one lane's shortfall, and refusing the second belt
-    # would leave that deficit standing.
-    credit = dict(demand)
-    while remaining_deficit > external and surpluses and deficits:
-        source_root = min(surpluses, key=lambda r: (-surpluses[r], r))
-        sink_root = min(deficits, key=lambda r: (-deficits[r], r))
-        takers = [belt for belt in sinks[sink_root] if credit[belt] > 0]
-        if not takers:
-            # Unreachable while any lane of a deficit island still draws --
-            # a deficit means demand exceeds supply, so some lane has credit.
-            # Kept as the loop's termination backstop, because a lane whose
-            # credit is spent must never be chosen again: the transfer would be
-            # zero and this would spin.
-            remaining_deficit -= deficits.pop(sink_root)
-            continue
-        want = min(surpluses[source_root], deficits[sink_root])
-        # The least-tapped lane is still the right target WHENEVER it can hold
-        # the whole transfer.  A producer lane end becomes a junction under
-        # `_tap_source` and a junction has four sides, and the hungriest lane is
-        # by construction the most crowded one -- `_merge_lanes` packs the most
-        # destinations onto the lane with the most draw -- so aiming every
-        # repair at it would crowd exactly the junctions least able to take it.
-        #
-        # Reach for the hungriest lane only when spreading would UNDER-DELIVER.
-        # That is what `df-strange-annihilation-fuel-rod` needed: copper-ingot's
-        # deficit island drew 2/15 on one lane and 16/15 on the other against
-        # 1 item/s of its own, the least-tapped rule sent the whole 3/15 down
-        # the 2/15 lane, and `flow.conservation` convicted the placement 1/15
-        # short -- precisely the part that lane could never have accepted.
-        able = [belt for belt in takers if credit[belt] >= want]
-        sink_belt = (
-            min(able, key=lambda belt: (taps[belt], belt))
-            if able
-            else min(takers, key=lambda belt: (-credit[belt], taps[belt], belt))
+    candidates = [
+        (a, b)
+        for a in sorted(supply)
+        for b in sorted(demand)
+        if demand[b] > 0 and a != b and (a, b) not in linked
+    ]
+    arcs.extend(
+        physical_flow.Arc(nodes[a], nodes[b], min(total, demand[b]), "cargo")
+        for a, b in candidates
+    )
+    solver = pywraplp.Solver.CreateSolver("GLOP")
+    if solver is None:
+        raise RuntimeError("OR-Tools GLOP backend is unavailable")
+    rows = [solver.Constraint(0, 0) for _ in range(next_node)]
+    objective = solver.Objective()
+    variables = []
+    for index, arc in enumerate(arcs):
+        variable = solver.NumVar(float(arc.lower), float(arc.capacity), "")
+        variables.append(variable)
+        if arc.source != arc.sink:
+            rows[arc.source].SetCoefficient(variable, -1)
+            rows[arc.sink].SetCoefficient(variable, 1)
+        if index >= fixed_count:
+            a, b = candidates[index - fixed_count]
+            objective.SetCoefficient(variable, 1 + (taps[a] + taps[b]) / (1 + 4 * len(pairs)))
+    objective.SetMinimization()
+    if solver.Solve() != pywraplp.Solver.OPTIMAL:
+        raise NoValidLayout(
+            "native directed shard allocation did not produce a certifiable solution",
+            stats={"termination_cause": "allocation-unproved"},
         )
-        source_belt = min(srcs[source_root], key=lambda belt: (taps[belt], belt))
-        extra.append((source_belt, sink_belt))
-        taps[source_belt] += 1
-        taps[sink_belt] += 1
-
-        transferred = min(want, credit[sink_belt])
-        credit[sink_belt] -= transferred
-        surpluses[source_root] -= transferred
-        deficits[sink_root] -= transferred
-        remaining_deficit -= transferred
-        if surpluses[source_root] == 0:
-            del surpluses[source_root]
-        if deficits[sink_root] == 0:
-            del deficits[sink_root]
-    return extra
+    flows = _exact_shard_flows(arcs, variables, next_node)
+    if flows is None:
+        raise NoValidLayout(
+            "directed shard allocation has no exact delivery certificate",
+            stats={"termination_cause": "allocation-unproved"},
+        )
+    return [
+        pair for index, pair in enumerate(candidates, fixed_count) if flows[index] > 0
+    ]
 
 
 def _plan_shared_external_inputs(
@@ -14690,10 +14672,11 @@ def _prepare_routing_problem(
             external * domain_demand / total_demand if total_demand > 0 else Fraction(0)
         )
         for a, b in _join_shard_islands(
-            joined[cargo] + sibling_lanes[cargo],
+            joined[cargo],
             lane_supply[cargo],
             lane_demand[cargo],
             domain_external,
+            shared_sources=sibling_lanes[cargo],
         ):
             nets.append(
                 _Net(
