@@ -506,6 +506,13 @@ class PlacementStats(TypedDict, total=False):
     topology_beam_height: float
     topology_beam_wall_time_s: float
     total_time_s: float
+    transport_stage: str
+    transport_work_arcs: int
+    transport_work_augmentations: int
+    transport_work_candidates: int
+    transport_work_audit_cells: int
+    transport_work_predicates: int
+    transport_work_assignments: int
     towers: float
     #: This arm's own `TraceChannel`-side drops (Task 8 fix round 1): a
     #: transiently full queue OR an unpicklable event, folded in from

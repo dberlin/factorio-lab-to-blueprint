@@ -52,6 +52,7 @@ from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.hierarchy import HierarchicalLayout
 from flab2bp.layout.observe import SearchObserver
 from flab2bp.layout.sequence_solver import SequencePairLayout, _validate_sequence_islands
+from flab2bp.layout.transport_routing.strategy import TransportRoutingLayout
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.rates.candidates import (
     DEFAULT_CANDIDATE_POLICIES,
@@ -62,14 +63,15 @@ from flab2bp.rates.machine_choice import MachineRank
 from flab2bp.rates.solve import InfeasibleError, UnsupportedObjectiveError, supplied_rates
 from flab2bp.spec import BuildSpec, BuildSpecSet
 
-ExplicitStrategyName = Literal["freeform", "sequence-pair", "hierarchical"]
-StrategyName = Literal["best", "freeform", "sequence-pair", "hierarchical"]
+ExplicitStrategyName = Literal["freeform", "sequence-pair", "hierarchical", "transport-routing"]
+StrategyName = Literal["best", "freeform", "sequence-pair", "hierarchical", "transport-routing"]
 
 STRATEGY_CHOICES: tuple[StrategyName, ...] = (
     "best",
     "freeform",
     "sequence-pair",
     "hierarchical",
+    "transport-routing",
 )
 #: Explicit strategies included when callers request ``best``.  ``hierarchical``
 #: is deliberately absent: it decomposes a spec and runs the other two backends
@@ -78,6 +80,7 @@ STRATEGY_CHOICES: tuple[StrategyName, ...] = (
 PRODUCTION_STRATEGIES: tuple[ExplicitStrategyName, ...] = (
     "freeform",
     "sequence-pair",
+    "transport-routing",
 )
 PRODUCTION_STRATEGY_COUNT = len(PRODUCTION_STRATEGIES)
 POWER_TOWER_CHOICES = catalog.POWER_TOWER_CHOICES
@@ -230,12 +233,14 @@ def _new_layout(
     #: of a split is headroom for its process rather than a solver setting.
     workers: int | None = None,
     observer: SearchObserver | None = None,
-) -> FreeformLayout | SequencePairLayout | HierarchicalLayout:
+) -> FreeformLayout | SequencePairLayout | HierarchicalLayout | TransportRoutingLayout:
     """Construct one explicitly selected layout backend.
 
     The hierarchical backend takes no observer: its block solves run in child
     processes and the search-visualization branch deferred that view (G6).
     """
+    if strategy == "transport-routing":
+        return TransportRoutingLayout(belt_rules=belt_rules, band_policy=band_policy)
     if strategy == "hierarchical":
         # No island argument: islands live inside the sequence-pair backend, and
         # the hierarchical one runs its own children with one each.
@@ -271,57 +276,6 @@ _Resolved = tuple[
     Placement | NoValidLayout,
 ]
 _CandidateRace = tuple[float, float, tuple[strategy_race._StrategyRaceOutcome, ...]]
-
-
-def _raced_result(
-    outcome: strategy_race._StrategyRaceOutcome,
-    spec_label: str,
-    budget_s: float,
-) -> Placement | NoValidLayout:
-    """Reduce one arm's outcome to the two shapes a serial solve returns.
-
-    Only ``completed`` carries geometry.  ``refused``, ``terminated`` and
-    ``crashed`` all become a refusal, so the reason reaches ``Build.refused``
-    instead of being lost: a terminated arm has no placement at all, and
-    admitting it as an ``Attempt`` would put a hole into the selection below.
-    """
-    if outcome.status == "completed" and outcome.placement is not None:
-        outcome.placement.stats.update(
-            {
-                "process_wall_time_s": outcome.process_wall_time_s,
-                "process_user_cpu_s": outcome.process_user_cpu_s,
-                "process_system_cpu_s": outcome.process_system_cpu_s,
-                "process_peak_rss_kib": outcome.process_peak_rss_kib,
-            }
-        )
-        # Stamped only when non-zero (fix round 2, Important 1): `total=False`
-        # makes the key's ABSENCE, not a `0`, what "no drop" looked like before
-        # tracing existed, and `web/payload.py`/`scripts/audit.py` both
-        # serialize this whole dict verbatim. An unconditional `0` would make
-        # a trace-OFF raced build's stats byte-different from today's, which
-        # is exactly the guarantee this branch's constraints forbid breaking.
-        # `_sum_trace_dropped`'s own `.get("trace_dropped", 0)` already treats
-        # omission as zero, so leaving it out here is safe by construction.
-        if outcome.trace_dropped:
-            outcome.placement.stats["trace_dropped"] = outcome.trace_dropped
-        return outcome.placement
-    stats: dict[str, float | str] = {
-        **outcome.refusal_stats,
-        "process_wall_time_s": outcome.process_wall_time_s,
-        "process_user_cpu_s": outcome.process_user_cpu_s,
-        "process_system_cpu_s": outcome.process_system_cpu_s,
-        "process_peak_rss_kib": outcome.process_peak_rss_kib,
-    }
-    if outcome.trace_dropped:
-        stats["trace_dropped"] = outcome.trace_dropped
-    return NoValidLayout(
-        outcome.refusal_reason or f"{outcome.strategy} produced nothing",
-        spec_label=spec_label,
-        budget_s=budget_s,
-        projection_failures=outcome.refusal_projection_failures,
-        attempt_failures=outcome.refusal_attempt_failures,
-        stats=stats,
-    )
 
 
 def _postprocess_failure_stats(
@@ -1122,7 +1076,7 @@ def build(
                     race_started,
                     race_finished,
                     strategy_race.RACE_COMPLETION_GRACE_S,
-                    _raced_result(by_strategy[sname], spec.label, time_budget_s),
+                    strategy_race._raced_result(by_strategy[sname], spec.label, time_budget_s),
                 )
                 for offset, sname in enumerate(wanted)
             ]

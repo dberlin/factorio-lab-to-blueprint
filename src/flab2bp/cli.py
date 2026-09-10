@@ -373,8 +373,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--strategy",
         choices=pipeline.STRATEGY_CHOICES,
         default="best",
-        help="layout backend; best runs freeform and sequence-pair and keeps the "
-        "smallest valid result (default). hierarchical decomposes the spec into "
+        help="layout backend; best runs freeform, sequence-pair and transport-routing "
+        "and keeps the smallest valid result (default). transport-routing constructs "
+        "unsprayed interfaces with bounded native SAT routing. "
+        "hierarchical decomposes the spec into "
         "blocks, solves them apart and composes them; it is explicit-only and "
         "never part of best, and it may overshoot --budget by its settlement "
         "phase, which composes, routes every cut lane and certifies after the "

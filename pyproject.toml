@@ -20,6 +20,7 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2.13.4",
     "sympy>=1.14.0",
+    "python-sat==1.9.dev5",
     "nodriver==0.47.0",
     # Indexed domain types (`flab2bp.indexed`). Both are PURE PYTHON with no
     # transitive dependencies, so neither can conflict with the ortools/HiGHS

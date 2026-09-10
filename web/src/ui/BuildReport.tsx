@@ -40,25 +40,25 @@ function AttemptFailures({ attempts }: { attempts: AttemptFailure[] }) {
       {attempts.map((attempt) => {
         const stats = Object.entries(attempt.stats);
         return (
-        <li key={`${attempt.candidate}/${attempt.strategy ?? 'direct'}`}>
-          {attempt.strategy ? `${attempt.strategy} / ` : ''}
-          {attempt.candidate}: {attempt.reason}
-          <ProjectionFailures failures={attempt.projection_failures} />
-          {stats.length > 0 && (
-            <details>
-              <summary>Solver statistics</summary>
-              <dl>
-                {stats.map(([name, value]) => (
-                  <Fragment key={name}>
-                    <dt>{name}</dt>
-                    <dd>{value === null ? 'unobserved' : value}</dd>
-                  </Fragment>
-                ))}
-              </dl>
-            </details>
-          )}
-          <AttemptFailures attempts={attempt.children} />
-        </li>
+          <li key={`${attempt.candidate}/${attempt.strategy ?? 'direct'}`}>
+            {attempt.strategy ? `${attempt.strategy} / ` : ''}
+            {attempt.candidate}: {attempt.reason}
+            <ProjectionFailures failures={attempt.projection_failures} />
+            {stats.length > 0 && (
+              <details>
+                <summary>Solver statistics</summary>
+                <dl>
+                  {stats.map(([name, value]) => (
+                    <Fragment key={name}>
+                      <dt>{name}</dt>
+                      <dd>{value === null ? 'unobserved' : value}</dd>
+                    </Fragment>
+                  ))}
+                </dl>
+              </details>
+            )}
+            <AttemptFailures attempts={attempt.children} />
+          </li>
         );
       })}
     </ul>
@@ -73,10 +73,10 @@ export function RefusalReport({ refusal }: { refusal: Refusal }) {
       <p>{refusal.message}</p>
       <AttemptFailures attempts={refusal.attempts} />
       <p className="note">
-        A refusal is a result, not a crash: each top-level line is one strategy trying one candidate;
-        nested lines preserve the solver attempts that explain its refusal. Raising the budget or
-        the candidate count sometimes helps; a spec that never lays out is more likely a defect in
-        the layout model than a hard instance.
+        A refusal is a result, not a crash: each top-level line is one strategy trying one
+        candidate; nested lines preserve the solver attempts that explain its refusal. Raising the
+        budget or the candidate count sometimes helps; a spec that never lays out is more likely a
+        defect in the layout model than a hard instance.
       </p>
     </section>
   );

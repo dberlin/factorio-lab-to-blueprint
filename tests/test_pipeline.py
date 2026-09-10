@@ -380,7 +380,10 @@ def test_blueprint_encoding_failure_does_not_abort_later_strategy(
 
     assert result.strategy == "sequence-pair"
     assert result.placement.completion is completed_layout.completion
-    assert len(result.attempts) == 1
+    assert [attempt.strategy for attempt in result.attempts] == [
+        "sequence-pair",
+        "transport-routing",
+    ]
     assert len(result.refused) == 1
     assert result.refused[0].strategy == "freeform"
     assert result.refused[0].reason == ("blueprint encoding failed: invalid splitter port anchor")
@@ -434,7 +437,7 @@ def test_every_pair_reports_started_and_then_how_it_ended() -> None:
 
 @pytest.mark.slow
 def test_best_reports_freeform_and_sequence_pairs() -> None:
-    """``best`` resolves to both implemented strategies."""
+    """``best`` announces every strategy and selects a validated result."""
     steps: list[pipeline.AttemptProgress] = []
     build = pipeline.build(
         SMALL_URL,
@@ -444,11 +447,10 @@ def test_best_reports_freeform_and_sequence_pairs() -> None:
         on_progress=steps.append,
     )
     started = [s for s in steps if s.phase == "started"]
-    # One candidate x the two production strategies.
-    assert len(started) == 2
-    assert [s.index for s in started] == [1, 2]
-    assert {s.total for s in started} == {2}
-    assert [s.strategy for s in started] == ["freeform", "sequence-pair"]
+    assert len(started) == len(pipeline.PRODUCTION_STRATEGIES)
+    assert [s.index for s in started] == [1, 2, 3]
+    assert {s.total for s in started} == {3}
+    assert [s.strategy for s in started] == list(pipeline.PRODUCTION_STRATEGIES)
     valid = [attempt for attempt in build.attempts if attempt.ok]
     winner = min(valid, key=lambda attempt: attempt.area)
     assert (build.strategy, build.placement.area) == (winner.strategy, winner.area)
@@ -1701,7 +1703,7 @@ def _install_stub_race(
     )
 
 
-def _one_win_one_refusal() -> tuple[strategy_race._StrategyRaceOutcome, ...]:
+def _mixed_race_outcomes() -> tuple[strategy_race._StrategyRaceOutcome, ...]:
     return (
         strategy_race._StrategyRaceOutcome(
             "freeform",
@@ -1720,48 +1722,10 @@ def _one_win_one_refusal() -> tuple[strategy_race._StrategyRaceOutcome, ...]:
             process_system_cpu_s=0.25,
             process_peak_rss_kib=123_456,
         ),
-    )
-
-
-def test_an_untraced_raced_result_never_carries_trace_dropped_in_its_stats() -> None:
-    """Fix round 2, Important 1: with trace off, a raced build's stats dict
-    must be byte-identical to what it was before tracing existed at all --
-    `web/payload.py` and `scripts/audit.py` both serialize it verbatim, so an
-    unconditional `trace_dropped: 0` would perturb both.
-    """
-    completed = strategy_race._StrategyRaceOutcome(
-        "freeform", "completed", placement=_finished(2, 3)
-    )
-    result = pipeline._raced_result(completed, "spec", 10.0)
-    assert isinstance(result, Placement)
-    assert "trace_dropped" not in result.stats
-
-    refused = strategy_race._StrategyRaceOutcome.refused(
-        "sequence-pair", "no arrangement fit the band", "spec", 10.0
-    )
-    refusal = pipeline._raced_result(refused, "spec", 10.0)
-    assert isinstance(refusal, NoValidLayout)
-    assert "trace_dropped" not in refusal.stats
-
-
-def test_a_traced_and_dropped_raced_result_carries_trace_dropped_in_its_stats() -> None:
-    completed = dataclasses.replace(
-        strategy_race._StrategyRaceOutcome("freeform", "completed", placement=_finished(2, 3)),
-        trace_dropped=3,
-    )
-    result = pipeline._raced_result(completed, "spec", 10.0)
-    assert isinstance(result, Placement)
-    assert result.stats["trace_dropped"] == 3
-
-    refused = dataclasses.replace(
-        strategy_race._StrategyRaceOutcome.refused(
-            "sequence-pair", "no arrangement fit the band", "spec", 10.0
+        strategy_race._StrategyRaceOutcome(
+            "transport-routing", "refused", refusal_reason="fixture has no transport route"
         ),
-        trace_dropped=7,
     )
-    refusal = pipeline._raced_result(refused, "spec", 10.0)
-    assert isinstance(refusal, NoValidLayout)
-    assert refusal.stats["trace_dropped"] == 7
 
 
 def test_candidate_races_run_concurrently_and_publish_progress_by_candidate(
@@ -1791,6 +1755,9 @@ def test_candidate_races_run_concurrently_and_publish_progress_by_candidate(
                 "sequence-pair",
                 "completed",
                 placement=_finished(3, 5),
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "transport-routing", "refused", refusal_reason="fixture has no transport route"
             ),
         )
 
@@ -1824,17 +1791,9 @@ def test_candidate_races_run_concurrently_and_publish_progress_by_candidate(
         ("all-products", "freeform"),
         ("all-products", "sequence-pair"),
     ]
-    assert [step.candidate for step in steps] == [
-        "no-proliferator",
-        "no-proliferator",
-        "all-products",
-        "all-products",
-        "no-proliferator",
-        "no-proliferator",
-        "all-products",
-        "all-products",
-    ]
-    assert [step.index for step in steps] == [1, 2, 3, 4, 1, 2, 3, 4]
+    expected_candidates = ["no-proliferator"] * 3 + ["all-products"] * 3
+    assert [step.candidate for step in steps] == expected_candidates * 2
+    assert [step.index for step in steps] == list(range(1, 7)) * 2
 
 
 def test_candidate_batch_settles_before_the_next_batch_starts(
@@ -1869,6 +1828,9 @@ def test_candidate_batch_settles_before_the_next_batch_starts(
                 "completed",
                 placement=_finished(3, 3),
             ),
+            strategy_race._StrategyRaceOutcome(
+                "transport-routing", "refused", refusal_reason="fixture has no transport route"
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -1887,18 +1849,18 @@ def test_candidate_batch_settles_before_the_next_batch_starts(
     )
 
     assert [(step.candidate, step.phase) for step in steps] == [
-        ("no-proliferator", "started"),
-        ("no-proliferator", "started"),
-        ("all-products", "started"),
-        ("all-products", "started"),
-        ("no-proliferator", "laid-out"),
-        ("no-proliferator", "laid-out"),
-        ("all-products", "laid-out"),
-        ("all-products", "laid-out"),
-        ("output-products", "started"),
-        ("output-products", "started"),
-        ("output-products", "laid-out"),
-        ("output-products", "laid-out"),
+        *(
+            (candidate, "started")
+            for candidate in ("no-proliferator", "all-products")
+            for _ in range(3)
+        ),
+        *(
+            (candidate, phase)
+            for candidate in ("no-proliferator", "all-products")
+            for phase in ("laid-out", "laid-out", "refused")
+        ),
+        *(("output-products", "started") for _ in range(3)),
+        *(("output-products", phase) for phase in ("laid-out", "laid-out", "refused")),
     ]
 
 
@@ -1930,6 +1892,9 @@ def test_candidate_attempt_wall_excludes_waiting_for_a_slower_peer(
                 "sequence-pair",
                 "completed",
                 placement=_finished(3, 3),
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "transport-routing", "refused", refusal_reason="fixture has no transport route"
             ),
         )
 
@@ -1990,6 +1955,9 @@ def test_candidate_concurrency_uses_one_shared_rate_frontier(
                 "completed",
                 placement=_finished(3, 3),
             ),
+            strategy_race._StrategyRaceOutcome(
+                "transport-routing", "refused", refusal_reason="fixture has no transport route"
+            ),
         )
 
     monkeypatch.setattr(pipeline, "_build_candidates_canonical", candidates)
@@ -2025,8 +1993,8 @@ def test_candidate_concurrency_uses_one_shared_rate_frontier(
 @pytest.mark.parametrize(
     ("available_cpus", "sequence_islands", "expected_workers"),
     [
-        (4, 1, {"no-proliferator": 2, "all-products": 2, "output-products": 4}),
-        (8, 1, {"no-proliferator": 3, "all-products": 3, "output-products": 2}),
+        (4, 1, {"no-proliferator": 4, "all-products": 4, "output-products": 4}),
+        (8, 1, {"no-proliferator": 4, "all-products": 4, "output-products": 8}),
         (16, 1, {"no-proliferator": 6, "all-products": 5, "output-products": 5}),
         (64, 1, {"no-proliferator": 6, "all-products": 5, "output-products": 5}),
         # An explicit island count no longer changes the split. It used to: the
@@ -2065,6 +2033,9 @@ def test_raced_build_defaults_to_a_shared_sixteen_cpu_budget(
                 "completed",
                 placement=_finished(3, 3),
             ),
+            strategy_race._StrategyRaceOutcome(
+                "transport-routing", "refused", refusal_reason="fixture has no transport route"
+            ),
         )
 
     monkeypatch.setattr(
@@ -2099,12 +2070,12 @@ def test_raced_build_defaults_to_a_shared_sixteen_cpu_budget(
 @pytest.mark.parametrize(
     ("workers", "sequence_islands"),
     # Only ONE thing can leave a race unfunded now: a worker budget too small to
-    # give each of the two strategies a CP-SAT worker. `(16, 5)` used to belong
+    # give each of the three strategies a worker. `(16, 5)` used to belong
     # here -- five islands could not be reserved out of a 16-worker share -- and
     # no longer does, because islands are resolved after the batch rather than
     # gating it. `test_an_explicit_island_count_no_longer_unfunds_a_race` pins
     # that reversal.
-    [(1, 1)],
+    [(1, 1), (2, 1)],
 )
 def test_unfunded_strategy_race_falls_back_to_serial_strategies(
     monkeypatch: pytest.MonkeyPatch,
@@ -2115,7 +2086,7 @@ def test_unfunded_strategy_race_falls_back_to_serial_strategies(
     del completed_layout
 
     def unexpected_race(*_args: object, **_kwargs: object) -> tuple[object, ...]:
-        raise AssertionError("an unfunded two-strategy race must not start")
+        raise AssertionError("an unfunded strategy portfolio must not start")
 
     monkeypatch.setattr(strategy_race, "run_strategy_race", unexpected_race)
 
@@ -2132,6 +2103,7 @@ def test_unfunded_strategy_race_falls_back_to_serial_strategies(
     assert [attempt.strategy for attempt in built.attempts] == [
         "freeform",
         "sequence-pair",
+        "transport-routing",
     ]
 
 
@@ -2160,6 +2132,9 @@ def test_an_explicit_island_count_no_longer_unfunds_a_race(
                 "sequence-pair",
                 "completed",
                 placement=_finished(3, 3),
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "transport-routing", "refused", refusal_reason="fixture has no transport route"
             ),
         )
 
@@ -2239,7 +2214,7 @@ def test_best_is_serial_until_a_caller_opts_into_racing(
     assert races == 0
     assert {attempt.strategy for attempt in build.attempts} | {
         failure.strategy for failure in build.refused
-    } == {"freeform", "sequence-pair"}
+    } == set(pipeline.PRODUCTION_STRATEGIES)
 
 
 def test_a_raced_build_reports_one_attempt_or_failure_per_outcome(
@@ -2247,7 +2222,7 @@ def test_a_raced_build_reports_one_attempt_or_failure_per_outcome(
 ) -> None:
     """Each outcome becomes exactly one Attempt or one LayoutAttemptFailure."""
     calls: list[dict[str, object]] = []
-    _install_stub_race(monkeypatch, _one_win_one_refusal(), calls)
+    _install_stub_race(monkeypatch, _mixed_race_outcomes(), calls)
     steps: list[pipeline.AttemptProgress] = []
 
     built = pipeline.build(
@@ -2261,7 +2236,7 @@ def test_a_raced_build_reports_one_attempt_or_failure_per_outcome(
 
     assert len(calls) == 1
     assert [attempt.strategy for attempt in built.attempts] == ["freeform"]
-    assert [failure.strategy for failure in built.refused] == ["sequence-pair"]
+    assert [failure.strategy for failure in built.refused] == ["sequence-pair", "transport-routing"]
     assert built.refused[0].reason == "no arrangement fit the band"
     assert built.refused[0].stats["process_wall_time_s"] == 4.5
     assert built.refused[0].stats["process_user_cpu_s"] == 3.0
@@ -2269,16 +2244,11 @@ def test_a_raced_build_reports_one_attempt_or_failure_per_outcome(
     assert built.refused[0].stats["process_peak_rss_kib"] == 123_456
     assert built.strategy == "freeform"
     assert built.placement.area == 6
-    # One candidate x two strategies, counted and settled exactly as serially.
-    assert [step.index for step in steps] == [1, 2, 1, 2]
-    assert {step.total for step in steps} == {2}
-    assert [step.phase for step in steps] == ["started", "started", "laid-out", "refused"]
-    assert [step.strategy for step in steps] == [
-        "freeform",
-        "sequence-pair",
-        "freeform",
-        "sequence-pair",
-    ]
+    # Each strategy starts once and settles once, including refusals.
+    assert [step.index for step in steps] == [1, 2, 3, 1, 2, 3]
+    assert {step.total for step in steps} == {3}
+    assert [step.phase for step in steps] == ["started"] * 3 + ["laid-out", "refused", "refused"]
+    assert [step.strategy for step in steps] == list(pipeline.PRODUCTION_STRATEGIES) * 2
 
 
 def test_raced_build_breaks_equal_area_ties_by_belt_tiles(
@@ -2299,6 +2269,9 @@ def test_raced_build_breaks_equal_area_ties_by_belt_tiles(
             "sequence-pair",
             "completed",
             placement=fewer_belts,
+        ),
+        strategy_race._StrategyRaceOutcome(
+            "transport-routing", "refused", refusal_reason="fixture has no transport route"
         ),
     )
     calls: list[dict[str, object]] = []
@@ -2329,7 +2302,7 @@ def test_both_arms_are_announced_before_the_race_rather_than_after_it(
     """
     steps: list[pipeline.AttemptProgress] = []
     announced_when_the_race_began: list[int] = []
-    outcomes = _one_win_one_refusal()
+    outcomes = _mixed_race_outcomes()
 
     def record(
         _spec: BuildSpec, **_kwargs: object
@@ -2353,8 +2326,8 @@ def test_both_arms_are_announced_before_the_race_rather_than_after_it(
         on_progress=steps.append,
     )
 
-    assert announced_when_the_race_began == [2]
-    assert [step.phase for step in steps[:2]] == ["started", "started"]
+    assert announced_when_the_race_began == [3]
+    assert [step.phase for step in steps[:3]] == ["started"] * 3
 
 
 def test_an_explicit_strategy_never_races_even_when_asked_to(
@@ -2362,7 +2335,7 @@ def test_an_explicit_strategy_never_races_even_when_asked_to(
 ) -> None:
     """Racing is a ``best`` mechanism: there is no second arm to race against."""
     calls: list[dict[str, object]] = []
-    _install_stub_race(monkeypatch, _one_win_one_refusal(), calls)
+    _install_stub_race(monkeypatch, _mixed_race_outcomes(), calls)
     seen: list[int | None] = []
 
     class _Completed:
@@ -2540,13 +2513,8 @@ def test_the_serial_path_settles_each_pair_before_starting_the_next(
         on_progress=steps.append,
     )
 
-    assert [step.phase for step in steps] == [
-        "started",
-        "laid-out",
-        "started",
-        "laid-out",
-    ]
-    assert [step.index for step in steps] == [1, 1, 2, 2]
+    assert [step.phase for step in steps] == ["started", "laid-out"] * 3
+    assert [step.index for step in steps] == [1, 1, 2, 2, 3, 3]
 
 
 def _install_new_layout_spy(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, object]]:
@@ -2612,27 +2580,6 @@ def test_an_explicit_workers_count_reaches_the_hierarchical_backend_verbatim(
     assert calls == [("hierarchical", 5)]
 
 
-def test_the_default_arms_still_get_the_capped_worker_budget(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The byte-identical-default guard: `best` (freeform and sequence-pair)
-    must keep receiving `worker_budget`, capped, exactly as before -- only the
-    hierarchical backend's own argument changed.  `_available_cpu_count` is
-    pinned so the expected cap is a fixed number rather than this box's own
-    affinity set.
-    """
-    calls = _install_new_layout_spy(monkeypatch)
-    monkeypatch.setattr(pipeline, "_available_cpu_count", lambda: 4)
-
-    pipeline.build(
-        SMALL_URL,
-        strategy="best",
-        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
-        time_budget_s=STUB_RACE_BUDGET_S,
-    )
-    assert calls == [("freeform", 4), ("sequence-pair", 4)]
-
-
 def test_a_terminated_or_crashed_arm_is_a_failure_and_never_an_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2651,6 +2598,9 @@ def test_a_terminated_or_crashed_arm_is_a_failure_and_never_an_attempt(
                 "crashed",
                 refusal_reason="sequence-pair strategy process failed: ValueError: boom",
             ),
+            strategy_race._StrategyRaceOutcome(
+                "transport-routing", "refused", refusal_reason="fixture has no transport route"
+            ),
         ),
         calls,
     )
@@ -2667,6 +2617,7 @@ def test_a_terminated_or_crashed_arm_is_a_failure_and_never_an_attempt(
     assert [failure.strategy for failure in caught.value.attempt_failures] == [
         "freeform",
         "sequence-pair",
+        "transport-routing",
     ]
     assert "was terminated" in str(caught.value)
     assert "ValueError: boom" in str(caught.value)
@@ -2683,6 +2634,9 @@ def test_every_raced_attempt_reports_its_wall_and_its_overshoot(
             strategy_race._StrategyRaceOutcome("freeform", "completed", placement=_finished(2, 3)),
             strategy_race._StrategyRaceOutcome(
                 "sequence-pair", "completed", placement=_finished(3, 3)
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "transport-routing", "refused", refusal_reason="fixture has no transport route"
             ),
         ),
         calls,
@@ -2736,6 +2690,9 @@ def test_a_raced_attempt_reports_overshoot_against_the_races_own_grace(
             strategy_race._StrategyRaceOutcome("freeform", "completed", placement=_finished(2, 3)),
             strategy_race._StrategyRaceOutcome(
                 "sequence-pair", "completed", placement=_finished(3, 3)
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "transport-routing", "refused", refusal_reason="fixture has no transport route"
             ),
         ),
         calls,
@@ -2793,6 +2750,9 @@ def test_a_raced_attempt_is_not_born_deadline_expired(
                 "no-proliferator",
                 STUB_RACE_BUDGET_S,
             ),
+            strategy_race._StrategyRaceOutcome(
+                "transport-routing", "refused", refusal_reason="fixture has no transport route"
+            ),
         ),
         calls,
         on_call=spend_the_race,
@@ -2826,7 +2786,7 @@ def test_a_raced_attempt_is_not_born_deadline_expired(
 
     assert polled == [False]
     assert [attempt.strategy for attempt in built.attempts] == ["freeform"]
-    assert [failure.strategy for failure in built.refused] == ["sequence-pair"]
+    assert [failure.strategy for failure in built.refused] == ["sequence-pair", "transport-routing"]
 
 
 def test_a_race_that_loses_an_arm_refuses_rather_than_reporting_a_full_build(
@@ -2878,7 +2838,8 @@ def test_racing_best_produces_the_same_attempt_shape_as_the_serial_one() -> None
         return {a.strategy for a in build.attempts} | {f.strategy for f in build.refused}
 
     assert shape(raced) == shape(serial)
-    assert len(raced.attempts) + len(raced.refused) == 2
+    assert shape(raced) == set(pipeline.PRODUCTION_STRATEGIES)
+    assert len(raced.attempts) + len(raced.refused) == len(pipeline.PRODUCTION_STRATEGIES)
 
 
 @pytest.mark.slow

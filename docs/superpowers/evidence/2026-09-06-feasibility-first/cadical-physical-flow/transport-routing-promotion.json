@@ -1,0 +1,322 @@
+{
+  "portfolio": [
+    "freeform",
+    "sequence-pair",
+    "transport-routing"
+  ],
+  "selection": "Existing validated smallest-result selection, not first-finisher-wins",
+  "url_acceptance": {
+    "cases": [
+      {
+        "request": "original",
+        "surface": "literal-cli",
+        "budget_s": 15,
+        "status": "success",
+        "exit": 0,
+        "elapsed_s": 108.78108626510948,
+        "decoded_buildings": 13269,
+        "workers": 16,
+        "strategies": [
+          "freeform",
+          "sequence-pair",
+          "transport-routing"
+        ],
+        "cli_summary": "transport-routing / no-proliferator: 68 machines, 33082 tiles, 13269 buildings",
+        "certified_bands_line": "certified_bands: 200",
+        "artifact": "evidence/original/literal-cli-15s"
+      },
+      {
+        "request": "original",
+        "surface": "literal-cli",
+        "budget_s": 30,
+        "status": "success",
+        "exit": 0,
+        "elapsed_s": 196.84867754625157,
+        "decoded_buildings": 13269,
+        "workers": 16,
+        "strategies": [
+          "freeform",
+          "sequence-pair",
+          "transport-routing"
+        ],
+        "cli_summary": "transport-routing / no-proliferator: 68 machines, 33082 tiles, 13269 buildings",
+        "certified_bands_line": "certified_bands: 200",
+        "artifact": "evidence/original/literal-cli-30s"
+      },
+      {
+        "request": "original",
+        "surface": "literal-cli",
+        "budget_s": 60,
+        "status": "success",
+        "exit": 0,
+        "elapsed_s": 355.2430968838744,
+        "decoded_buildings": 5275,
+        "workers": 16,
+        "strategies": [
+          "freeform",
+          "sequence-pair",
+          "transport-routing"
+        ],
+        "cli_summary": "sequence-pair / output-products: 61 machines, 6039 tiles, 5275 buildings",
+        "certified_bands_line": "certified_bands: 200",
+        "artifact": "evidence/original/literal-cli-60s"
+      },
+      {
+        "request": "original",
+        "surface": "web",
+        "budget_s": 15,
+        "status": "success",
+        "exit": 0,
+        "elapsed_s": 21.19476382015273,
+        "decoded_buildings": 13269,
+        "workers": 16,
+        "strategies": [
+          "freeform",
+          "sequence-pair",
+          "transport-routing"
+        ],
+        "strategy": "transport-routing",
+        "candidate": "no-proliferator",
+        "certified_bands": [
+          200
+        ],
+        "checks": 67,
+        "errors": [],
+        "skipped": [],
+        "warnings": 11,
+        "artifact": "evidence/original/web-15s"
+      },
+      {
+        "request": "original",
+        "surface": "web",
+        "budget_s": 30,
+        "status": "success",
+        "exit": 0,
+        "elapsed_s": 36.86956636235118,
+        "decoded_buildings": 13269,
+        "workers": 16,
+        "strategies": [
+          "freeform",
+          "sequence-pair",
+          "transport-routing"
+        ],
+        "strategy": "transport-routing",
+        "candidate": "no-proliferator",
+        "certified_bands": [
+          200
+        ],
+        "checks": 67,
+        "errors": [],
+        "skipped": [],
+        "warnings": 11,
+        "artifact": "evidence/original/web-30s"
+      },
+      {
+        "request": "original",
+        "surface": "web",
+        "budget_s": 60,
+        "status": "success",
+        "exit": 0,
+        "elapsed_s": 68.0449193730019,
+        "decoded_buildings": 5922,
+        "workers": 16,
+        "strategies": [
+          "freeform",
+          "sequence-pair",
+          "transport-routing"
+        ],
+        "strategy": "freeform",
+        "candidate": "no-proliferator",
+        "certified_bands": [
+          200
+        ],
+        "checks": 67,
+        "errors": [],
+        "skipped": [],
+        "warnings": 11,
+        "artifact": "evidence/original/web-60s"
+      },
+      {
+        "request": "simpler-variant",
+        "surface": "literal-cli",
+        "budget_s": 15,
+        "status": "success",
+        "exit": 0,
+        "elapsed_s": 98.16156796505675,
+        "decoded_buildings": 4946,
+        "workers": 16,
+        "strategies": [
+          "freeform",
+          "sequence-pair",
+          "transport-routing"
+        ],
+        "cli_summary": "transport-routing / no-proliferator: 24 machines, 15015 tiles, 4946 buildings",
+        "certified_bands_line": "certified_bands: 200",
+        "artifact": "evidence/simpler-variant/literal-cli-15s"
+      },
+      {
+        "request": "simpler-variant",
+        "surface": "literal-cli",
+        "budget_s": 30,
+        "status": "success",
+        "exit": 0,
+        "elapsed_s": 181.71842113230377,
+        "decoded_buildings": 1478,
+        "workers": 16,
+        "strategies": [
+          "freeform",
+          "sequence-pair",
+          "transport-routing"
+        ],
+        "cli_summary": "sequence-pair / no-proliferator: 24 machines, 2352 tiles, 1478 buildings",
+        "certified_bands_line": "certified_bands: 160, 200",
+        "artifact": "evidence/simpler-variant/literal-cli-30s"
+      },
+      {
+        "request": "simpler-variant",
+        "surface": "literal-cli",
+        "budget_s": 60,
+        "status": "success",
+        "exit": 0,
+        "elapsed_s": 302.31599772069603,
+        "decoded_buildings": 1399,
+        "workers": 16,
+        "strategies": [
+          "freeform",
+          "sequence-pair",
+          "transport-routing"
+        ],
+        "cli_summary": "sequence-pair / no-proliferator: 24 machines, 2205 tiles, 1399 buildings",
+        "certified_bands_line": "certified_bands: 160, 200",
+        "artifact": "evidence/simpler-variant/literal-cli-60s"
+      },
+      {
+        "request": "simpler-variant",
+        "surface": "web",
+        "budget_s": 15,
+        "status": "success",
+        "exit": 0,
+        "elapsed_s": 20.836752276401967,
+        "decoded_buildings": 1478,
+        "workers": 16,
+        "strategies": [
+          "freeform",
+          "sequence-pair",
+          "transport-routing"
+        ],
+        "strategy": "sequence-pair",
+        "candidate": "no-proliferator",
+        "certified_bands": [
+          160,
+          200
+        ],
+        "checks": 67,
+        "errors": [],
+        "skipped": [],
+        "warnings": 6,
+        "artifact": "evidence/simpler-variant/web-15s"
+      },
+      {
+        "request": "simpler-variant",
+        "surface": "web",
+        "budget_s": 30,
+        "status": "success",
+        "exit": 0,
+        "elapsed_s": 36.94922929443419,
+        "decoded_buildings": 1478,
+        "workers": 16,
+        "strategies": [
+          "freeform",
+          "sequence-pair",
+          "transport-routing"
+        ],
+        "strategy": "sequence-pair",
+        "candidate": "no-proliferator",
+        "certified_bands": [
+          160,
+          200
+        ],
+        "checks": 67,
+        "errors": [],
+        "skipped": [],
+        "warnings": 6,
+        "artifact": "evidence/simpler-variant/web-30s"
+      },
+      {
+        "request": "simpler-variant",
+        "surface": "web",
+        "budget_s": 60,
+        "status": "success",
+        "exit": 0,
+        "elapsed_s": 67.12598914792761,
+        "decoded_buildings": 1478,
+        "workers": 16,
+        "strategies": [
+          "freeform",
+          "sequence-pair",
+          "transport-routing"
+        ],
+        "strategy": "sequence-pair",
+        "candidate": "no-proliferator",
+        "certified_bands": [
+          160,
+          200
+        ],
+        "checks": 67,
+        "errors": [],
+        "skipped": [],
+        "warnings": 6,
+        "artifact": "evidence/simpler-variant/web-60s"
+      }
+    ],
+    "all_12_source_snapshots_equal": true,
+    "source_files": 129,
+    "current_source_changes_since_runs": []
+  },
+  "factories": [
+    {
+      "case": "three-output",
+      "budget_s": 30,
+      "layout_s": 7.97165643889457,
+      "total_s": 9.540338682942092,
+      "buildings": 7850,
+      "area": 34846,
+      "checks": 67,
+      "errors": [],
+      "skipped": [],
+      "children_remaining": 0
+    },
+    {
+      "case": "unsprayed-mall",
+      "budget_s": 60,
+      "layout_s": 37.366512364242226,
+      "total_s": 48.041268897242844,
+      "buildings": 60433,
+      "area": 124683,
+      "checks": 67,
+      "errors": [],
+      "skipped": [],
+      "children_remaining": 0
+    }
+  ],
+  "browser": {
+    "url": "http://127.0.0.1:13003",
+    "request": "original",
+    "strategy": "transport-routing",
+    "budget_s": 15,
+    "buildings": 13269,
+    "area": 33082,
+    "rendered": true,
+    "server_wall_s": 10.9,
+    "observed": [
+      "one run raised from conveyor-belt-2 to conveyor-belt-3",
+      "hydrogen prime-once instruction",
+      "3D blueprint rendered"
+    ]
+  },
+  "limits": [
+    "Transport-routing explicitly refuses sprayed interfaces",
+    "No in-game throughput claim",
+    "Budgets are per layout, not whole request"
+  ]
+}

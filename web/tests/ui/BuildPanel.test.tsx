@@ -584,7 +584,9 @@ test('a refusal preserves nested attempts and distinguishes unobserved statistic
   );
   expect(refusal).toHaveTextContent('freeform / max-proliferation: unroutable');
   expect(refusal).toHaveTextContent('direct-spec: request has no legal layout');
-  expect(refusal).toHaveTextContent('sequence-pair/island-3 / no-proliferator: routing clock expired');
+  expect(refusal).toHaveTextContent(
+    'sequence-pair/island-3 / no-proliferator: routing clock expired',
+  );
   fireEvent.click(within(refusal).getByText('Solver statistics'));
   expect(within(refusal).getByText('unobserved')).toBeVisible();
   expect(within(refusal).getByText('0')).toBeVisible();

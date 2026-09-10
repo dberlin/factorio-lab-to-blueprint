@@ -14028,12 +14028,9 @@ def _join_shard_islands(
             if rate > 0
         )
     linked = set(pairs)
+    arcs.extend(physical_flow.Arc(nodes[a], nodes[b], total, "cargo") for a, b in sorted(linked))
     arcs.extend(
-        physical_flow.Arc(nodes[a], nodes[b], total, "cargo") for a, b in sorted(linked)
-    )
-    arcs.extend(
-        physical_flow.Arc(nodes[lane], 0, rate, "cargo", rate)
-        for lane, rate in demand.items()
+        physical_flow.Arc(nodes[lane], 0, rate, "cargo", rate) for lane, rate in demand.items()
     )
     fixed_count = len(arcs)
     taps: dict[int, int] = defaultdict(int)
@@ -14044,12 +14041,13 @@ def _join_shard_islands(
         (a, b)
         for a in sorted(supply)
         for b in sorted(demand)
-        if demand[b] > 0 and a != b and (a, b) not in linked
+        if demand[b] > 0
+        and a != b
+        and (a, b) not in linked
         and (lane_domains is None or lane_domains[a] is lane_domains[b])
     ]
     arcs.extend(
-        physical_flow.Arc(nodes[a], nodes[b], min(total, demand[b]), "cargo")
-        for a, b in candidates
+        physical_flow.Arc(nodes[a], nodes[b], min(total, demand[b]), "cargo") for a, b in candidates
     )
     solver = pywraplp.Solver.CreateSolver("GLOP")
     if solver is None:
@@ -14078,9 +14076,7 @@ def _join_shard_islands(
             "directed shard allocation has no exact delivery certificate",
             stats={"termination_cause": "allocation-unproved"},
         )
-    return [
-        pair for index, pair in enumerate(candidates, fixed_count) if flows[index] > 0
-    ]
+    return [pair for index, pair in enumerate(candidates, fixed_count) if flows[index] > 0]
 
 
 def _plan_shared_external_inputs(
@@ -14288,20 +14284,35 @@ def _place_shared_external_input_trunks(
     return tuple(nets), tuple(roots)
 
 
-def _prepare_routing_problem(
+@dataclass(frozen=True, slots=True)
+class _RoutingInventory:
+    """Fixed geometry and exact material obligations before access admission."""
+
+    belt_id: int
+    belt_model: int
+    canvas: _Canvas
+    sorters: int
+    strip_in_ports: list[dict[str, _Port]]
+    strip_of_belt: dict[int, int]
+    nets: list[_Net]
+    piler_nets: list[_Net]
+    wanted: dict[int, tuple[_Port, int]]
+    carried: dict[int, str]
+    shared_external_groups: tuple[tuple[str, CargoDomain, tuple[_Port, ...]], ...]
+    wanted_outputs: dict[int, tuple[str, _Port]]
+    promised_direct: frozenset[DirectInsertId]
+    realized_direct: set[DirectInsertId]
+
+
+def _prepare_transport_inventory(
     spec: BuildSpec,
     strips: list[Strip],
     pack: _Pack,
     *,
-    power: bool,
-    policy: BandPolicy,
     belt_rules: catalog.BeltAltitudeRules = _DEFAULT_BELT_RULES,
-    _reserve_ports: bool = True,
-    staged_static_cache: _StagedStaticCache | None = None,
     cancelled: Callable[[], bool] | None = None,
-    deadline: float | None = None,
-) -> _PreparedRoutingProblem:
-    """Build immutable exact geometry shared by both routing engines."""
+) -> _RoutingInventory:
+    """Share physical emission and directed producer allocation across routers."""
     belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
     belt_model = catalog.building(belt_id).model_index
     power_building = catalog.power_tower_building(spec.power_tower_item_id)
@@ -14312,8 +14323,6 @@ def _prepare_routing_problem(
         lane_stacks=_lane_stacks_for(spec),
         power_building=power_building,
     )
-    if staged_static_cache is None:
-        staged_static_cache = _StagedStaticCache()
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
@@ -14692,6 +14701,57 @@ def _prepare_routing_problem(
             )
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
+    return _RoutingInventory(
+        belt_id=belt_id,
+        belt_model=belt_model,
+        canvas=canvas,
+        sorters=sorters,
+        strip_in_ports=strip_in_ports,
+        strip_of_belt=strip_of_belt,
+        nets=nets,
+        piler_nets=piler_nets,
+        wanted=wanted,
+        carried=carried,
+        shared_external_groups=shared_external_groups,
+        wanted_outputs=wanted_outputs,
+        promised_direct=promised_direct,
+        realized_direct=realized_direct,
+    )
+
+
+def _prepare_routing_problem(
+    spec: BuildSpec,
+    strips: list[Strip],
+    pack: _Pack,
+    *,
+    power: bool,
+    policy: BandPolicy,
+    belt_rules: catalog.BeltAltitudeRules = _DEFAULT_BELT_RULES,
+    _reserve_ports: bool = True,
+    staged_static_cache: _StagedStaticCache | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    deadline: float | None = None,
+) -> _PreparedRoutingProblem:
+    """Build immutable exact geometry shared by both routing engines."""
+    if staged_static_cache is None:
+        staged_static_cache = _StagedStaticCache()
+    inventory = _prepare_transport_inventory(
+        spec, strips, pack, belt_rules=belt_rules, cancelled=cancelled
+    )
+    belt_id = inventory.belt_id
+    belt_model = inventory.belt_model
+    canvas = inventory.canvas
+    sorters = inventory.sorters
+    strip_in_ports = inventory.strip_in_ports
+    strip_of_belt = inventory.strip_of_belt
+    nets = inventory.nets
+    piler_nets = inventory.piler_nets
+    wanted = inventory.wanted
+    carried = inventory.carried
+    shared_external_groups = inventory.shared_external_groups
+    wanted_outputs = inventory.wanted_outputs
+    promised_direct = inventory.promised_direct
+    realized_direct = inventory.realized_direct
 
     # Hold one cell beside every port BEFORE anything else can take it.
     #

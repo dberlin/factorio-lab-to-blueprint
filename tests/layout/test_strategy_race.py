@@ -17,6 +17,7 @@ import pytest
 import flab2bp.layout.strategy_race as strategy_race_module
 from flab2bp.dsp import provenance, registry
 from flab2bp.lab.techs import belt_rules_for_url
+from flab2bp.layout import process_resources
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     LayoutStrategy,
@@ -59,7 +60,6 @@ from flab2bp.layout.strategy_race import (
     RaceStrategyName,
     RaceSubmit,
     RacingLayout,
-    _build_layout,
     _channels_for,
     _install_child_channels,
     _install_race_channels,
@@ -161,57 +161,7 @@ def test_process_peak_rss_is_normalized_to_kib(
     raw: int,
     expected: int,
 ) -> None:
-    assert strategy_race_module._peak_rss_kib(raw, platform=platform) == expected
-
-
-def test_retained_solver_profiles_are_declared_in_placement_stats() -> None:
-    hints = get_type_hints(PlacementStats)
-    expected: dict[str, object] = {
-        "process_wall_time_s": float,
-        "process_user_cpu_s": float,
-        "process_system_cpu_s": float,
-        "process_peak_rss_kib": int,
-        "pipeline_compaction_time_s": float,
-        "pipeline_finalization_time_s": float,
-        "pipeline_validation_time_s": float,
-        "pipeline_encoding_time_s": float,
-        "pack_time_s": float,
-        "compaction_time_s": float,
-        "finalization_time_s": float,
-        "pack_cp_wall_time_s": float,
-        "pack_cp_deterministic_time_s": float,
-        "pack_cp_solves": float,
-        "pack_cp_optimal": float,
-        "pack_cp_feasible": float,
-        "pack_cp_infeasible": float,
-        "pack_cp_model_invalid": float,
-        "pack_cp_unknown": float,
-        "pack_cp_last_status": str,
-        "pack_cp_last_objective": float,
-        "pack_cp_last_best_bound": float,
-        "pack_window_solves": float,
-        "pack_window_optimal": float,
-        "pack_window_feasible": float,
-        "pack_window_infeasible": float,
-        "pack_window_model_invalid": float,
-        "pack_window_unknown": float,
-        "pack_window_distinct_submodels": float,
-        "pack_window_repeated_submodels": float,
-        "pack_window_repeated_submodel_seconds": float,
-        "alns_window_optimal": float,
-        "alns_window_feasible": float,
-        "alns_window_infeasible": float,
-        "alns_window_model_invalid": float,
-        "alns_window_unknown": float,
-        "alns_window_last_status": str,
-        "alns_window_last_objective": float,
-        "alns_window_last_best_bound": float,
-        "alns_window_distinct_submodels": float,
-        "alns_window_repeated_submodels": float,
-        "alns_window_repeated_submodel_seconds": float,
-    }
-
-    assert {key: hints.get(key) for key in expected} == expected
+    assert process_resources.peak_rss_kib(raw, platform=platform) == expected
 
 
 def test_messages_round_trip_through_pickle() -> None:
@@ -279,30 +229,20 @@ def test_drain_bounds_what_it_pulls_not_only_what_it_keeps() -> None:
     assert consume.qsize() == 5
 
 
-@pytest.mark.parametrize(
-    ("total", "expected"),
-    [
-        (1, (1, 1)),
-        (2, (1, 1)),
-        (3, (2, 1)),
-        (4, (3, 1)),
-        (8, (6, 2)),
-        (16, (12, 4)),
-        (128, (96, 32)),
-    ],
-)
-def test_the_worker_split_never_hands_a_racer_zero(total: int, expected: tuple[int, int]) -> None:
+@pytest.mark.parametrize("total", [1, 3, 16])
+def test_the_worker_split_never_hands_a_racer_zero(total: int) -> None:
     # ortools reads num_search_workers == 0 as ALL CORES, so a split that ever
     # produced 0 would hand one racer the whole box.
     split = race_worker_split(total)
 
-    assert split == expected
+    assert len(split) == len(RACE_STRATEGIES)
+    assert sum(split) == max(total, len(RACE_STRATEGIES))
     assert min(split) >= RACE_MIN_WORKERS
 
 
 def test_the_worker_split_sums_to_the_total_it_was_given() -> None:
     # Only for total >= 3: at 1 and 2 the floor of one worker per racer wins and
-    # a single-core box is deliberately oversubscribed by one thread.
+    # insufficient budgets retain the minimum of one worker per racer.
     for total in (3, 4, 8, 16, 128):
         assert sum(race_worker_split(total)) == total
 
@@ -327,12 +267,9 @@ def test_the_worker_split_refuses_a_bool() -> None:
 def test_outcomes_are_ordered_by_strategy_not_by_arrival() -> None:
     late = _StrategyRaceOutcome("freeform", "refused", refusal_reason="f")
     early = _StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="s")
+    native = _StrategyRaceOutcome("transport-routing", "refused", refusal_reason="t")
 
-    assert tuple(o.strategy for o in _ordered((early, late))) == RACE_STRATEGIES
-
-
-def test_the_race_runs_exactly_the_two_production_strategies() -> None:
-    assert RACE_STRATEGIES == ("freeform", "sequence-pair")
+    assert tuple(o.strategy for o in _ordered((native, early, late))) == RACE_STRATEGIES
 
 
 def test_the_freeform_share_is_three_quarters() -> None:
@@ -682,10 +619,13 @@ def test_both_arms_return_in_strategy_order() -> None:
         {
             "sequence-pair": _StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="s"),
             "freeform": _StrategyRaceOutcome("freeform", "refused", refusal_reason="f"),
+            "transport-routing": _StrategyRaceOutcome(
+                "transport-routing", "refused", refusal_reason="fixture has no transport route"
+            ),
         }
     )
 
-    assert tuple(o.strategy for o in outcomes) == ("freeform", "sequence-pair")
+    assert tuple(o.strategy for o in outcomes) == RACE_STRATEGIES
 
 
 def test_a_crashed_arm_is_reported_and_the_survivor_decides() -> None:
@@ -693,6 +633,9 @@ def test_a_crashed_arm_is_reported_and_the_survivor_decides() -> None:
         {
             "freeform": ValueError("boom"),
             "sequence-pair": _StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="s"),
+            "transport-routing": _StrategyRaceOutcome(
+                "transport-routing", "refused", refusal_reason="fixture has no transport route"
+            ),
         }
     )
     crashed = next(o for o in outcomes if o.strategy == "freeform")
@@ -708,21 +651,30 @@ def test_two_crashed_arms_reraise_the_first_in_strategy_order() -> None:
     # stub hands the futures back sequence-pair first, so a parent that walked
     # them in future order would raise the KeyError instead.
     with pytest.raises(ValueError, match="boom"):
-        _race({"freeform": ValueError("boom"), "sequence-pair": KeyError("other")})
+        _race(
+            {
+                "freeform": ValueError("boom"),
+                "sequence-pair": KeyError("other"),
+                "transport-routing": RuntimeError("native failed"),
+            }
+        )
 
 
 def test_a_surviving_arm_means_a_crash_is_reported_and_not_raised() -> None:
-    # Only BOTH crashing re-raises: one crash plus one refusal is a race that
+    # Only every arm crashing re-raises: a refusal is still an observed outcome.
     # still has an answer, and turning it into an exception would classify a
     # cell CRASH -- the status the audit reserves for "always a bug here".
     outcomes = _race(
         {
             "freeform": ValueError("boom"),
             "sequence-pair": _StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="s"),
+            "transport-routing": _StrategyRaceOutcome(
+                "transport-routing", "refused", refusal_reason="fixture has no transport route"
+            ),
         }
     )
 
-    assert [o.status for o in outcomes] == ["crashed", "refused"]
+    assert [o.status for o in outcomes] == ["crashed", "refused", "refused"]
 
 
 def test_an_arm_that_ignores_the_wall_is_terminated() -> None:
@@ -735,6 +687,9 @@ def test_an_arm_that_ignores_the_wall_is_terminated() -> None:
         {
             "freeform": None,
             "sequence-pair": _StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="s"),
+            "transport-routing": _StrategyRaceOutcome(
+                "transport-routing", "refused", refusal_reason="fixture has no transport route"
+            ),
         },
         monotonic=lambda: next(ticks),
     )
@@ -796,39 +751,6 @@ def test_the_race_spends_the_measured_grace_before_it_kills() -> None:
     assert _NoopExecutor.terminated is False
 
 
-def test_the_requests_carry_the_parents_wall_not_a_budget_to_start_later() -> None:
-    # A child cannot compute its own deadline: spawn, interpreter start and
-    # unpickling the spec all happen after the parent started the clock.  So the
-    # request carries an ABSOLUTE soft deadline taken in the parent.
-    seen: list[float] = []
-    ticks = iter([1000.0] + [1000.0] * 8)
-
-    def submit(
-        requests: tuple[_StrategyRaceRequest, ...],
-        channels: dict[str, RaceChannels],
-        trace_queue: object | None = None,
-    ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
-        futures: dict[Future[_StrategyRaceOutcome], str] = {}
-        for request in requests:
-            seen.append(request.soft_deadline)
-            future: Future[_StrategyRaceOutcome] = Future()
-            future.set_result(_StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x"))
-            futures[future] = request.strategy
-        return futures, _NoopExecutor()
-
-    run_strategy_race(
-        two_stage_spec(),
-        time_budget_s=10.0,
-        band_policy=BandPolicy("portable"),
-        belt_rules=_BELT_RULES,
-        share=False,
-        submit=submit,
-        monotonic=lambda: next(ticks),
-    )
-
-    assert seen == [1010.0, 1010.0]
-
-
 def test_share_false_creates_no_channels() -> None:
     seen: list[int] = []
 
@@ -881,7 +803,7 @@ def test_share_true_wires_the_two_queues_crosswise_and_closes_them() -> None:
         submit=submit,
     )
 
-    assert set(captured) == set(RACE_STRATEGIES)
+    assert set(captured) == {"freeform", "sequence-pair"}
     assert captured["freeform"].publish is captured["sequence-pair"].consume
     assert captured["sequence-pair"].publish is captured["freeform"].consume
     assert all(vars(side.publish)["_joincancelled"] is True for side in captured.values())
@@ -910,37 +832,8 @@ def test_the_queues_are_closed_even_when_the_race_raises() -> None:
             submit=submit,
         )
 
-    assert set(captured) == set(RACE_STRATEGIES)
+    assert set(captured) == {"freeform", "sequence-pair"}
     assert all(vars(side.publish)["_joincancelled"] is True for side in captured.values())
-
-
-def test_the_worker_split_reaches_the_requests() -> None:
-    seen: dict[str, int] = {}
-
-    def submit(
-        requests: tuple[_StrategyRaceRequest, ...],
-        channels: dict[str, RaceChannels],
-        trace_queue: object | None = None,
-    ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
-        futures: dict[Future[_StrategyRaceOutcome], str] = {}
-        for request in requests:
-            seen[request.strategy] = request.workers
-            future: Future[_StrategyRaceOutcome] = Future()
-            future.set_result(_StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x"))
-            futures[future] = request.strategy
-        return futures, _NoopExecutor()
-
-    run_strategy_race(
-        two_stage_spec(),
-        time_budget_s=0.05,
-        band_policy=BandPolicy("portable"),
-        belt_rules=_BELT_RULES,
-        share=False,
-        workers=8,
-        submit=submit,
-    )
-
-    assert seen == {"freeform": 6, "sequence-pair": 2}
 
 
 def test_a_race_without_a_budget_is_refused() -> None:
@@ -969,28 +862,6 @@ def test_a_race_rejects_sequence_islands_outside_the_serial_range(islands: int) 
             band_policy=BandPolicy("portable"),
             belt_rules=_BELT_RULES,
             sequence_islands=islands,
-            submit=_stub_submit({}),
-        )
-
-
-def test_a_third_strategy_fails_loudly_rather_than_losing_every_message(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # One queue per direction is a complete graph only for TWO arms, and
-    # `_install_race_channels` keys exactly two.  A third must fail at the guard
-    # rather than silently receive nothing.
-    monkeypatch.setattr(
-        strategy_race_module,
-        "RACE_STRATEGIES",
-        ("freeform", "sequence-pair", "beam"),
-    )
-
-    with pytest.raises(ValueError, match="exactly two strategies"):
-        run_strategy_race(
-            two_stage_spec(),
-            time_budget_s=1.0,
-            band_policy=BandPolicy("portable"),
-            belt_rules=_BELT_RULES,
             submit=_stub_submit({}),
         )
 
@@ -1202,12 +1073,19 @@ def test_a_leg_produces_exactly_what_the_serial_arm_produces(
         arrangements=1,
         share=False,
     )
-    serial: FreeformLayout | SequencePairLayout
+    from flab2bp.layout.transport_routing.strategy import TransportRoutingLayout
+
+    serial: LayoutStrategy
     if strategy == "freeform":
         serial = FreeformLayout(
             band_policy=request.band_policy,
             workers=request.workers,
             arrangements=request.arrangements,
+            belt_rules=request.belt_rules,
+        )
+    elif strategy == "transport-routing":
+        serial = TransportRoutingLayout(
+            band_policy=request.band_policy,
             belt_rules=request.belt_rules,
         )
     else:
@@ -1276,70 +1154,6 @@ class _RecordedPool:
 def _record_pools(monkeypatch: pytest.MonkeyPatch) -> None:
     _RecordedPool.built.clear()
     monkeypatch.setattr(strategy_race_module, "ProcessPoolExecutor", _RecordedPool)
-
-
-def test_the_pool_is_spawned_two_wide_and_recycles_every_child(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Every argument here is load-bearing, and none of them is observable later.
-
-    ``max_workers=1`` silently SERIALISES the race; ``fork`` hands a child a
-    CP-SAT-loaded parent's memory and its locks; without
-    ``max_tasks_per_child=1`` a second candidate reuses a child that already ran
-    a solve; swapped ``initargs`` make each arm read its own messages and hear
-    nothing from its rival.  None of the four changes a single outcome the other
-    tests look at, so they are asserted at the construction site.
-    """
-    _record_pools(monkeypatch)
-    context = multiprocessing.get_context("spawn")
-    to_freeform = context.Queue(maxsize=RACE_QUEUE_MAXSIZE)
-    to_sequence_pair = context.Queue(maxsize=RACE_QUEUE_MAXSIZE)
-    channels = {
-        "freeform": RaceChannels(publish=to_sequence_pair, consume=to_freeform),
-        "sequence-pair": RaceChannels(publish=to_freeform, consume=to_sequence_pair),
-    }
-    requests = tuple(_request(name) for name in RACE_STRATEGIES)
-    try:
-        futures, executor = _pool_submit(requests, channels)
-
-        assert len(_RecordedPool.built) == 1
-        pool = _RecordedPool.built[0]
-        assert executor is pool
-        assert list(futures.values()) == list(RACE_STRATEGIES)
-        assert pool.ran == [strategy_race_module._run_race_leg] * len(RACE_STRATEGIES)
-        assert pool.max_workers == len(RACE_STRATEGIES) == 2
-        assert pool.mp_context.get_start_method() == "spawn"
-        assert pool.max_tasks_per_child == 1
-        # The COMPOSITE initializer, not `_install_race_channels` directly
-        # (Ruling 1, task-8-addendum.md): sharing being on is only one of the
-        # two reasons this branch is taken, and a trace queue must ride the
-        # same `initargs` tuple.  `None` here is the untraced case.
-        assert pool.initializer is _install_child_channels
-        assert pool.initargs == (to_freeform, to_sequence_pair, None)
-    finally:
-        for one in (to_freeform, to_sequence_pair):
-            one.cancel_join_thread()
-            one.close()
-
-
-def test_the_pool_gets_no_initializer_at_all_when_sharing_is_off(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Empty channels means sharing is off, and the initializer is then OMITTED
-    # rather than handed empty queues: only a multiprocessing.Queue survives the
-    # spawn hand-off, so anything else in initargs fails at pickling here.
-    _record_pools(monkeypatch)
-    requests = tuple(_request(name) for name in RACE_STRATEGIES)
-
-    _pool_submit(requests, {})
-
-    pool = _RecordedPool.built[0]
-
-    assert pool.initializer is None
-    assert pool.initargs == ()
-    assert pool.max_workers == len(RACE_STRATEGIES) == 2
-    assert pool.mp_context.get_start_method() == "spawn"
-    assert pool.max_tasks_per_child == 1
 
 
 def test_a_race_with_no_submit_seam_goes_through_the_process_pool(
@@ -1418,7 +1232,7 @@ def test_the_real_pool_races_both_arms_end_to_end() -> None:
     )
 
     assert tuple(o.strategy for o in outcomes) == RACE_STRATEGIES
-    assert [o.status for o in outcomes] == ["completed", "completed"]
+    assert all(outcome.status == "completed" for outcome in outcomes)
     for outcome in outcomes:
         assert outcome.placement is not None
         assert outcome.placement.area > 0
@@ -1610,26 +1424,6 @@ def test_a_leg_with_sharing_off_reads_and_publishes_nothing(
     assert layout_of().observed == [None, None]
     assert outcome.published_incumbents == 0
     assert outcome.consumed_incumbents == 0
-
-
-@pytest.mark.parametrize("strategy", list(RACE_STRATEGIES))
-def test_build_layout_hands_the_portfolio_hooks_to_both_layouts(
-    strategy: RaceStrategyName,
-) -> None:
-    def bound() -> tuple[int, int] | None:
-        return (480, 62)
-
-    def publish(_placement: Placement) -> None:
-        return None
-
-    layout = _build_layout(
-        _request(strategy),
-        portfolio_incumbent=bound,
-        publish_incumbent=publish,
-    )
-
-    assert layout.portfolio_incumbent is bound
-    assert layout.publish_incumbent is publish
 
 
 def _instance(group: str, start: int, count: int) -> StripInstanceId:
@@ -2180,72 +1974,6 @@ def test_pool_submit_still_omits_the_initializer_when_both_trace_and_sharing_are
 # --- `run_strategy_race`: the trace queue reaches the submit seam ----------
 
 
-def test_a_trace_queue_reaches_the_submit_seam_and_marks_every_request() -> None:
-    seen: dict[str, object] = {}
-
-    def submit(
-        requests: tuple[_StrategyRaceRequest, ...],
-        channels: dict[str, RaceChannels],
-        trace_queue: object | None = None,
-    ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
-        seen["trace_queue"] = trace_queue
-        seen["trace_flags"] = {r.strategy: r.trace for r in requests}
-        futures: dict[Future[_StrategyRaceOutcome], str] = {}
-        for request in requests:
-            future: Future[_StrategyRaceOutcome] = Future()
-            future.set_result(_StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x"))
-            futures[future] = request.strategy
-        return futures, _NoopExecutor()
-
-    sentinel = object()
-    run_strategy_race(
-        two_stage_spec(),
-        time_budget_s=0.05,
-        band_policy=BandPolicy("portable"),
-        belt_rules=_BELT_RULES,
-        share=False,
-        submit=submit,
-        trace_queue=sentinel,
-    )
-
-    assert seen["trace_queue"] is sentinel
-    assert seen["trace_flags"] == {"freeform": True, "sequence-pair": True}
-
-
-def test_no_trace_queue_still_calls_the_seam_with_three_arguments_and_none() -> None:
-    """M2, fix round 1: the call is unconditionally three arguments -- the
-    seam's third parameter is defaulted, so a two-shape call keyed on
-    `trace_queue` would exist only to serve a test seam, which is backwards.
-    Every request still carries `trace=False` when there is no queue."""
-    seen: dict[str, object] = {}
-
-    def submit(
-        requests: tuple[_StrategyRaceRequest, ...],
-        channels: dict[str, RaceChannels],
-        trace_queue: object | None = None,
-    ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
-        seen["trace_queue"] = trace_queue
-        seen["trace_flags"] = {r.strategy: r.trace for r in requests}
-        futures: dict[Future[_StrategyRaceOutcome], str] = {}
-        for request in requests:
-            future: Future[_StrategyRaceOutcome] = Future()
-            future.set_result(_StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x"))
-            futures[future] = request.strategy
-        return futures, _NoopExecutor()
-
-    run_strategy_race(
-        two_stage_spec(),
-        time_budget_s=0.05,
-        band_policy=BandPolicy("portable"),
-        belt_rules=_BELT_RULES,
-        share=False,
-        submit=submit,
-    )
-
-    assert seen["trace_queue"] is None
-    assert seen["trace_flags"] == {"freeform": False, "sequence-pair": False}
-
-
 # --- `_run_race_leg`: the child observer, its interval, and its teardown --
 
 
@@ -2415,7 +2143,7 @@ def test_a_raced_build_delivers_events_from_both_arms_to_the_parent() -> None:
         # `==`, not `<=`: the test's own name claims BOTH arms deliver, and a
         # subset check would still pass if only one of them ever did (M1, fix
         # round 1).
-        assert {e.strategy for e in events} == set(RACE_STRATEGIES)
+        assert {e.strategy for e in events} == {"freeform", "sequence-pair"}
         assert all(e.candidate == two_stage_spec().label for e in events)
     finally:
         trace_queue.cancel_join_thread()

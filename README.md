@@ -34,10 +34,13 @@ press **Build**. The page exposes the resulting blueprint for copying and render
 second tool.
 
 **A build is a job, not a request.** `--budget` is per layout and `best` lays out every
-candidate with both strategies, so a build can run for seconds to minutes. `POST /api/build`
-returns an id immediately and the page polls `GET /api/build/<id>`. `pipeline.build` reports
-each candidate/strategy pair as it starts and settles. A submitted job may request at most 300
-seconds of solving; larger requests are refused rather than silently clamped.
+candidate with freeform, sequence-pair and CaDiCaL-based transport-routing, so a build can run
+for seconds to minutes. `best` selects the smallest validator-clean result, not the first to
+finish. Transport-routing currently supports unsprayed factories and explicitly refuses
+sprayed interfaces; the other strategies remain available for those candidates.
+`POST /api/build` returns an id immediately and the page polls `GET /api/build/<id>`. `pipeline.build` reports
+each candidate/strategy pair as it starts and settles. A projected total over 300 seconds
+warns that the job may take a while; it does not refuse or silently clamp the request.
 
 **A refusal is a result.** A spec that cannot be laid out reports why each strategy and
 candidate gave up. An invalid build withholds the blueprint and lists the validation errors,

@@ -53,7 +53,7 @@ from flab2bp.web.payload import Json, JsonValue, describe, projection_failure, r
 from flab2bp.web.trace import TraceCollector, TraceRing
 
 State = Literal["queued", "running", "done", "refused", "error"]
-WebStrategyName = Literal["best", "freeform", "sequence-pair", "hierarchical"]
+WebStrategyName = Literal["best", "freeform", "sequence-pair", "hierarchical", "transport-routing"]
 
 #: The projected total, in seconds, past which a submitted job says out loud
 #: that it will take a while.  This is a WARNING and not a bound: how long to
@@ -234,11 +234,11 @@ def parse_options(raw: JsonValue) -> Options:
 
     strategy = raw.get("strategy", "best")
     match strategy:
-        case "best" | "freeform" | "sequence-pair" | "hierarchical":
+        case "best" | "freeform" | "sequence-pair" | "hierarchical" | "transport-routing":
             web_strategy: WebStrategyName = strategy
         case _:
             raise InvalidOptions(
-                "'strategy' must be one of best, freeform, sequence-pair, hierarchical"
+                "'strategy' must be one of " + ", ".join(pipeline.STRATEGY_CHOICES)
             )
 
     raw_band = raw.get("band", "portable")

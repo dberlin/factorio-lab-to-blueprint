@@ -75,9 +75,6 @@ export const ProjectionFailure = z.object({
   detail: z.string(),
 });
 
-const PlacementStat = z.union([z.number(), z.string(), z.array(z.string())]);
-const PlacementStats = z.record(z.string(), PlacementStat);
-
 export const AttemptFailure = z.object({
   candidate: z.string(),
   /** Nested attempts carry identities such as `sequence-pair/island-3`. */

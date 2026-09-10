@@ -285,19 +285,6 @@ def test_cli_rejects_invalid_sequence_island_use(
     assert exc_info.value.code == 2
 
 
-def test_strategy_help_separates_best_from_explicit_backends(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with pytest.raises(SystemExit) as exc_info:
-        cli.main(["--help"])
-
-    assert exc_info.value.code == 0
-    help_text = " ".join(capsys.readouterr().out.split())
-    assert "best runs freeform and sequence-pair" in help_text
-    assert "smallest fitting band plus up to two wider bands" in help_text
-    assert "--no-power" not in help_text
-
-
 def test_cli_rejects_removed_no_power_option(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

@@ -29,19 +29,20 @@ in plain text rather than 404ing.
 
 ## Strategy choices
 
-The web request contract is `best`, `freeform`, or the exact wire spelling
-`sequence-pair`. `best` runs both Freeform and SequencePair and returns the
-smallest validator-clean result.
+The strategy choices are `best`, `freeform`, `sequence-pair`, `transport-routing`,
+and the explicit `hierarchical` backend. `best` runs Freeform, SequencePair and
+CaDiCaL-based transport-routing, then selects the smallest validator-clean result.
+It is a portfolio, not first-finisher-wins; hierarchical remains explicit-only.
 
 The solver-work ceiling is `candidates × active production strategies × budget` for `best`,
-using the pipeline's canonical active-strategy tuple. The promoted portfolio has two strategies.
-One build defaults to an aggregate budget of at most 16 CPUs from its process affinity set.
-For an unpinned request, the widest candidate batch runs whose shares can fund Freeform plus
-every requested SequencePair island; the aggregate budget is divided exactly across that
-batch. If even one two-strategy race cannot fit, the strategies run serially instead.
-Uploaded or fetched flows remain a single pinned candidate. An explicit Freeform or
-SequencePair request remains serial across candidates and gives the current layout the whole
-worker budget.
+using the pipeline's canonical three-strategy tuple. One build defaults to an aggregate
+budget of at most 16 CPUs from its process affinity set. The widest candidate batch runs
+whose shares can fund all three strategies. Each candidate reserves one worker for
+transport-routing and divides the remaining share between Freeform and SequencePair.
+If even one three-strategy portfolio cannot fit, the strategies run serially instead.
+Uploaded or fetched flows remain a single pinned candidate. Explicit strategies run
+serially across candidates. Transport-routing owns a supervised single worker and
+currently refuses sprayed interfaces explicitly; other portfolio strategies still try them.
 
 ## Latitude bands
 
@@ -168,9 +169,9 @@ It is the one item on this list that is unfinished rather than decided.
 **Jobs queue; one job's candidate portfolio may run in bounded parallel.** The default
 one-job queue prevents two users from each claiming a solver budget. Inside that job, the
 pipeline uses at most 16 available CPUs by default and divides them across concurrent
-candidate races. Each race divides its share between Freeform and SequencePair, and requested
-SequencePair islands must fit the latter share. Otherwise candidate concurrency narrows or
-the two strategies run serially. `--workers` above 1 still permits concurrent jobs and can
+candidate portfolios. Each reserves one worker for transport-routing and splits the
+remaining share between Freeform and SequencePair. Candidate concurrency narrows when
+necessary; underfunded portfolios run serially. `--workers` above 1 still permits concurrent jobs and can
 make every build slower because
 `time_budget_s` is wall-clock. There is no admission control at all beyond the queue: the
 budget has no upper bound, and a projected total over 300s is warned about rather than
@@ -214,7 +215,7 @@ GET  /api/fetch?url=...  the viewer's own blueprint-page proxy
 GET  /*                  the built front end, with an SPA fallback
 ```
 
-The submit body takes `url`, `strategy` (`best`/`freeform`/`sequence-pair`), `candidates`
+The submit body takes `url`, `strategy` (`best`/`freeform`/`sequence-pair`/`transport-routing`/`hierarchical`), `candidates`
 (1–8), positive finite `budget_s`, `band`
 (`portable`/`4`/`8`/`16`/`20`/`32`/`40`/`60`/`80`/`100`/`120`/`160`/`200`),
 `name`, `allow_invalid`, `flow`, and `fetch_flow`. `band` defaults to `portable`.

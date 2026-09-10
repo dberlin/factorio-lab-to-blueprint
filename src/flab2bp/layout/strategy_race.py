@@ -33,16 +33,14 @@ from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from typing import TYPE_CHECKING, Literal, Protocol, cast, runtime_checkable
 
-try:
-    import resource
-except ImportError:  # pragma: no cover - exercised on non-POSIX platforms
-    resource = None  # type: ignore[assignment]
+from flab2bp.layout import process_resources
 
 if TYPE_CHECKING:
     from multiprocessing.connection import _ConnectionBase
 
     from flab2bp.layout.freeform import FreeformLayout
     from flab2bp.layout.sequence_solver import SequencePairLayout
+    from flab2bp.layout.transport_routing.runtime import TransportRoutingKernel
 
     class _OwnedQueueEndpoints(Protocol):
         """Native pipe endpoints omitted from the public Queue stubs."""
@@ -53,7 +51,12 @@ if TYPE_CHECKING:
 
 from flab2bp.dsp import catalog
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.base import LayoutAttemptFailure, Placement, ProjectionFailureRecord
+from flab2bp.layout.base import (
+    LayoutAttemptFailure,
+    NoValidLayout,
+    Placement,
+    ProjectionFailureRecord,
+)
 from flab2bp.layout.compact_seed import CompactSeedConfig
 from flab2bp.layout.observe import (
     TRACE_CHILD_SAMPLE_INTERVAL_S,
@@ -65,12 +68,12 @@ from flab2bp.layout.sequence_solver import SequenceSolverConfig, _validate_seque
 from flab2bp.layout.strip_variants import StripInstanceId
 from flab2bp.spec import BuildSpec
 
-type RaceStrategyName = Literal["freeform", "sequence-pair"]
+type RaceStrategyName = Literal["freeform", "sequence-pair", "transport-routing"]
 
 #: The portfolio, in the order outcomes are returned.  Same membership and same
 #: order as ``pipeline.PRODUCTION_STRATEGIES``; named here so this module does
 #: not import ``pipeline``, which imports it.
-RACE_STRATEGIES: tuple[RaceStrategyName, ...] = ("freeform", "sequence-pair")
+RACE_STRATEGIES: tuple[RaceStrategyName, ...] = ("freeform", "sequence-pair", "transport-routing")
 
 #: Seconds past the soft deadline the parent waits before killing a racer.
 #:
@@ -121,17 +124,17 @@ RACE_FREEFORM_WORKER_SHARE = Fraction(3, 4)
 RACE_MIN_WORKERS = 1
 
 
-def race_worker_split(total: int) -> tuple[int, int]:
-    """Split ``total`` CP-SAT search workers into (freeform, sequence-pair)."""
+def race_worker_split(total: int) -> tuple[int, int, int]:
+    """Split workers into freeform, sequence-pair and one native transport child."""
     if type(total) is not int or total < 1:
         raise ValueError("racing worker total must be a positive integer")
-    if total <= 2:
-        return (RACE_MIN_WORKERS, RACE_MIN_WORKERS)
+    if total <= 3:
+        return (RACE_MIN_WORKERS, RACE_MIN_WORKERS, RACE_MIN_WORKERS)
     freeform = max(
         RACE_MIN_WORKERS,
-        total * RACE_FREEFORM_WORKER_SHARE.numerator // RACE_FREEFORM_WORKER_SHARE.denominator,
+        total * RACE_FREEFORM_WORKER_SHARE.numerator // RACE_FREEFORM_WORKER_SHARE.denominator - 1,
     )
-    return (freeform, max(RACE_MIN_WORKERS, total - freeform))
+    return (freeform, max(RACE_MIN_WORKERS, total - freeform - 1), RACE_MIN_WORKERS)
 
 
 class _MessageQueue(Protocol):
@@ -320,8 +323,7 @@ class _StrategyRaceRequest:
     """Plain pickleable inputs for one racer.  No queue: see ``run_strategy_race``."""
 
     spec: BuildSpec
-    #: The same alias ``RACE_STRATEGIES`` is typed with, so a third name is a
-    #: type error rather than a message nobody reads.
+    #: Only a registered production strategy may cross the process boundary.
     strategy: RaceStrategyName
     time_budget_s: float
     #: An ABSOLUTE ``time.monotonic()`` value taken in the parent.  Valid because
@@ -411,6 +413,57 @@ class _StrategyRaceOutcome:
         )
 
 
+def _raced_result(
+    outcome: _StrategyRaceOutcome,
+    spec_label: str,
+    budget_s: float,
+) -> Placement | NoValidLayout:
+    """Reduce one arm's outcome to the two shapes a serial solve returns.
+
+    Only ``completed`` carries geometry.  ``refused``, ``terminated`` and
+    ``crashed`` all become a refusal, so the reason reaches ``Build.refused``
+    instead of being lost: a terminated arm has no placement at all, and
+    admitting it as an ``Attempt`` would put a hole into the selection below.
+    """
+    if outcome.status == "completed" and outcome.placement is not None:
+        outcome.placement.stats.update(
+            {
+                "process_wall_time_s": outcome.process_wall_time_s,
+                "process_user_cpu_s": outcome.process_user_cpu_s,
+                "process_system_cpu_s": outcome.process_system_cpu_s,
+                "process_peak_rss_kib": outcome.process_peak_rss_kib,
+            }
+        )
+        # Stamped only when non-zero (fix round 2, Important 1): `total=False`
+        # makes the key's ABSENCE, not a `0`, what "no drop" looked like before
+        # tracing existed, and `web/payload.py`/`scripts/audit.py` both
+        # serialize this whole dict verbatim. An unconditional `0` would make
+        # a trace-OFF raced build's stats byte-different from today's, which
+        # is exactly the guarantee this branch's constraints forbid breaking.
+        # `_sum_trace_dropped`'s own `.get("trace_dropped", 0)` already treats
+        # omission as zero, so leaving it out here is safe by construction.
+        if outcome.trace_dropped:
+            outcome.placement.stats["trace_dropped"] = outcome.trace_dropped
+        return outcome.placement
+    stats: dict[str, float | str] = {
+        **outcome.refusal_stats,
+        "process_wall_time_s": outcome.process_wall_time_s,
+        "process_user_cpu_s": outcome.process_user_cpu_s,
+        "process_system_cpu_s": outcome.process_system_cpu_s,
+        "process_peak_rss_kib": outcome.process_peak_rss_kib,
+    }
+    if outcome.trace_dropped:
+        stats["trace_dropped"] = outcome.trace_dropped
+    return NoValidLayout(
+        outcome.refusal_reason or f"{outcome.strategy} produced nothing",
+        spec_label=spec_label,
+        budget_s=budget_s,
+        projection_failures=outcome.refusal_projection_failures,
+        attempt_failures=outcome.refusal_attempt_failures,
+        stats=stats,
+    )
+
+
 def _ordered(outcomes: Sequence[_StrategyRaceOutcome]) -> tuple[_StrategyRaceOutcome, ...]:
     """Return outcomes in ``RACE_STRATEGIES`` order, never in completion order."""
     by_strategy = {outcome.strategy: outcome for outcome in outcomes}
@@ -469,7 +522,7 @@ def _build_layout(
     portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
     publish_incumbent: Callable[[Placement], None] | None = None,
     observer: SearchObserver | None = None,
-) -> FreeformLayout | SequencePairLayout:
+) -> FreeformLayout | SequencePairLayout | TransportRoutingKernel:
     """Reconstruct one strategy from the pickled request, in the child.
 
     ``observer`` is a SEPARATE parameter from ``publish_incumbent`` (Ruling 3,
@@ -479,6 +532,13 @@ def _build_layout(
     """
     from flab2bp.layout.freeform import FreeformLayout
     from flab2bp.layout.sequence_solver import SequencePairLayout
+    from flab2bp.layout.transport_routing.runtime import TransportRoutingKernel
+
+    if request.strategy == "transport-routing":
+        return TransportRoutingKernel(
+            band_policy=request.band_policy,
+            belt_rules=request.belt_rules,
+        )
 
     if request.strategy == "freeform":
         return FreeformLayout(
@@ -500,21 +560,6 @@ def _build_layout(
         publish_incumbent=publish_incumbent,
         observer=observer,
     )
-
-
-def _peak_rss_kib(raw: int, *, platform: str = sys.platform) -> int:
-    """Normalize ``ru_maxrss`` to KiB on the platforms that expose it."""
-    if platform == "darwin":
-        return (raw + 1023) // 1024
-    return raw
-
-
-def _process_usage() -> tuple[float, float, int]:
-    """Return user CPU, system CPU, and normalized peak RSS when supported."""
-    if resource is None:
-        return 0.0, 0.0, 0
-    usage = resource.getrusage(resource.RUSAGE_SELF)
-    return usage.ru_utime, usage.ru_stime, _peak_rss_kib(usage.ru_maxrss)
 
 
 def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
@@ -608,7 +653,7 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
     # code today.  When the wiring task lands, they are rebuilt in this frame,
     # because the channel, the inbox and the counter they would close over all
     # live in it.
-    usage_started = _process_usage()
+    usage_started = process_resources.usage()
     process_started = time.monotonic()
     layout = _build_layout(
         request,
@@ -661,7 +706,7 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
             channels.close()
         if trace is not None:
             trace.close()
-    usage_finished = _process_usage()
+    usage_finished = process_resources.usage()
     return replace(
         outcome,
         process_wall_time_s=time.monotonic() - process_started,
@@ -772,7 +817,7 @@ def _pool_submit(
     context = multiprocessing.get_context("spawn")
     if channels or trace_queue is not None:
         executor = ProcessPoolExecutor(
-            max_workers=len(RACE_STRATEGIES),
+            max_workers=len(requests),
             mp_context=context,
             max_tasks_per_child=1,
             initializer=_install_child_channels,
@@ -784,7 +829,7 @@ def _pool_submit(
         )
     else:
         executor = ProcessPoolExecutor(
-            max_workers=len(RACE_STRATEGIES),
+            max_workers=len(requests),
             mp_context=context,
             max_tasks_per_child=1,
         )
@@ -836,20 +881,18 @@ def run_strategy_race(
     # crashed outcomes instead of raising -- refuse before anything is
     # submitted, exactly like the serial path.
     _validate_sequence_islands(sequence_islands)
-    # One queue per direction is a complete graph only for TWO arms, and
-    # `_install_race_channels` keys exactly two.  A third strategy must fail
-    # loudly here rather than silently receive nothing.
-    if len(RACE_STRATEGIES) != 2:
-        raise ValueError("the race queue topology is defined for exactly two strategies")
+    # Incumbent sharing joins the two density-searching arms. The constructive
+    # transport arm uses no incumbent pruning and needs no sharing channel.
     started = monotonic()
     soft_deadline = started + time_budget_s
     hard_deadline = soft_deadline + RACE_COMPLETION_GRACE_S
-    freeform_workers, sequence_workers = race_worker_split(
+    freeform_workers, sequence_workers, transport_workers = race_worker_split(
         _available_cores() if workers is None else workers
     )
     workers_by_strategy = {
         "freeform": freeform_workers,
         "sequence-pair": sequence_workers,
+        "transport-routing": transport_workers,
     }
     requests = tuple(
         _StrategyRaceRequest(
@@ -864,7 +907,7 @@ def run_strategy_race(
             sequence_islands=sequence_islands,
             config=config or SequenceSolverConfig(),
             compact_seed_config=compact_seed_config or CompactSeedConfig(),
-            share=share,
+            share=share and name != "transport-routing",
             trace=trace_queue is not None,
         )
         for name in RACE_STRATEGIES
