@@ -1,0 +1,52 @@
+{
+  "source_commit": "4b61dd30",
+  "checks": [
+    {
+      "command": [
+        "uv",
+        "sync",
+        "--frozen"
+      ],
+      "exit": 0,
+      "seconds": 19.82896930910647,
+      "stdout": "",
+      "stderr": "   Building flab2bp @ file:///home/dannyb/sources/factorio-lab-to-blueprint\n      Built flab2bp @ file:///home/dannyb/sources/factorio-lab-to-blueprint\nPrepared 1 package in 19.53s\nUninstalled 3 packages in 96ms\nInstalled 2 packages in 62ms\n - cython==3.1.3\n ~ flab2bp==0.1.0 (from file:///home/dannyb/sources/factorio-lab-to-blueprint)\n + python-sat==1.9.dev5\n - setuptools==80.9.0\n"
+    },
+    {
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "tests/layout/test_transport_routing.py",
+        "tests/test_pipeline_cli_strategy.py",
+        "--tb=short"
+      ],
+      "exit": 0,
+      "seconds": 8.580930219963193,
+      "stdout": ".........................................                                [100%]\n41 passed in 3.98s\n",
+      "stderr": ""
+    }
+  ],
+  "cli": {
+    "command": [
+      "uv",
+      "run",
+      "flab2bp",
+      "https://factoriolab.github.io/dsp/list?z=eJzLt3UyUMu3LdUyNDAw0NIyVMu3TdIyVcu3dYqCUJVwmcykVFsntaLUCtt4tdzcItuCuuK6zLpAtTJbQ0MAnqAUGg__&v=11",
+      "--strategy",
+      "transport-routing",
+      "--budget",
+      "15",
+      "--out",
+      "/tmp/transport-routing-merged.blueprint.txt"
+    ],
+    "exit": 0,
+    "seconds": 14.396533492021263,
+    "stdout": "",
+    "stderr": "transport-routing / no-proliferator: 68 machines, 33082 tiles, 13269 buildings\nprimary_band: 200\ncertified_bands: 200\ninputs to belt in: copper-ore, crude-oil, deuterium, fire-ice, hydrogen, iron-ore, kimberlite-ore, optical-grating-crystal, silicon-ore, stone, sulfuric-acid, titanium-ingot, unipolar-magnet, water  (32 marked with icons)\nprime once (self-loop): hydrogen 2 items onto the marked belt at (102,138) -- x-ray-cracking consumes what it produces, so the block will not start until the loop has items in it\n  recipe selection DERIVED, not pinned -- pass --flow or --fetch-flow to build FactorioLab's own selection\n  WARNING: this URL carried no technology set, so a FULLY-RESEARCHED save is ASSUMED: belt ceiling 26.55 (lab level 9), vertical belt construction YES. A URL exported from FactorioLab normally does carry one; if yours did, the belts here may climb higher than your save allows.\n  belts: conveyor-belt-2 (12.0/s) floor, conveyor-belt-3 (30.0/s) ceiling; 1 run(s) raised to conveyor-belt-3; stack 1; 0 piler(s)\n  entry lanes: copper-ore 2 (needs 1 at 30/s)\n  entry lanes: fire-ice 3 (needs 1 at 30/s)\n  entry lanes: hydrogen 2 (needs 1 at 30/s)\n  entry lanes: iron-ore 3 (needs 1 at 30/s)\n  entry lanes: optical-grating-crystal 2 (needs 1 at 30/s)\n  entry lanes: titanium-ingot 3 (needs 1 at 30/s)\n  2 strategy/candidate pair(s) produced no layout:\n    transport-routing/all-products: UNSUPPORTED_INTERFACE: transport-routing does not construct sprayed interfaces\n    transport-routing/output-products: UNSUPPORTED_INTERFACE: transport-routing does not construct sprayed interfaces\nwritten to /tmp/transport-routing-merged.blueprint.txt\n",
+    "decode_exit": 0,
+    "decoded_buildings": 13269
+  }
+}
