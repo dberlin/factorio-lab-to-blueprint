@@ -14587,6 +14587,22 @@ class TestAShardThatCannotFeedItself:
         pairs = [(source, 7) for source in supply]
         assert _join_shard_islands(pairs, supply, demand, F(12138504192, 6426130625)) == []
 
+    def test_shared_production_allocates_across_domains_without_crossing_cargo(self) -> None:
+        clean = CargoDomain.UNSPRAYED
+        sprayed = CargoDomain.REQUIRES_SPRAY
+        domains = {10: clean, 11: sprayed, 20: sprayed, 30: clean, 40: sprayed}
+        supply, demand = {10: F(5), 11: F(0), 20: F(1)}, {30: F(1), 40: F(5)}
+        pairs = [(10, 30), (11, 40), (20, 40)]
+        assert _join_shard_islands(
+            pairs, supply, demand, F(0),
+            shared_sources=((10, 11),), lane_domains=domains,
+        ) == []
+        with pytest.raises(NoValidLayout):
+            _join_shard_islands(
+                [(10, 30), (20, 40)], {10: F(5), 20: F(1)}, demand, F(0),
+                lane_domains=domains,
+            )
+
     def test_the_repair_goes_to_the_lane_that_can_absorb_it(self) -> None:
         """An extra net delivers at most what its RECEIVING lane draws.
 

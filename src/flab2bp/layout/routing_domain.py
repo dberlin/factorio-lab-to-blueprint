@@ -13985,6 +13985,7 @@ def _join_shard_islands(
     external: Fraction,
     *,
     shared_sources: Sequence[tuple[int, int]] = (),
+    lane_domains: Mapping[int, CargoDomain] | None = None,
 ) -> list[tuple[int, int]]:
     """Buy directed producer-to-consumer links only for unmet allocation.
 
@@ -13993,6 +13994,8 @@ def _join_shard_islands(
     through X to Y. A native minimum-cost allocation proposes the additional
     links; exact rational certification checks their simultaneous delivery.
     Physical belt/sorter capacities remain the final validator's obligation.
+    Shared production and external input are allocated across treatment domains;
+    only physical links, never those shared budgets, are domain-restricted.
     """
     total = sum(demand.values(), Fraction(0))
     if total == 0:
@@ -14042,6 +14045,7 @@ def _join_shard_islands(
         for a in sorted(supply)
         for b in sorted(demand)
         if demand[b] > 0 and a != b and (a, b) not in linked
+        and (lane_domains is None or lane_domains[a] is lane_domains[b])
     ]
     arcs.extend(
         physical_flow.Arc(nodes[a], nodes[b], min(total, demand[b]), "cargo")
@@ -14363,19 +14367,14 @@ def _prepare_routing_problem(
     # and destination.
     out_ports: dict[tuple[str, str, str, CargoDomain], list[_Port]] = defaultdict(list)
     strip_in_ports: list[dict[str, _Port]] = []
-    # Flow-graph bookkeeping for `_join_shard_islands`, keyed by BELT index.
-    #
-    # `lane_supply` is credited PER STRIP, not per lane, and the strip's other
-    # lanes for the same item are unioned onto the first through `sibling_lanes`
-    # -- because one strip's machines drain into every one of its own output
-    # lanes, so those lanes are one island however the destinations divide, and
-    # crediting each of them the strip's full output would count a two-lane
-    # shard's production twice. That mistake makes a starving shard read as
-    # healthy, which is the exact failure this bookkeeping exists to find.
+    # One physical producer budget per item, shared by all its output lanes.
+    # Cargo domains constrain transport links, not how that producer's output
+    # is allocated. Splitting its rate by downstream demand before allocation
+    # can strand surplus in one domain while another domain starves.
     lane_of: dict[int, _Port] = {}
-    lane_supply: dict[CargoKey, dict[int, Fraction]] = defaultdict(dict)
-    lane_demand: dict[CargoKey, dict[int, Fraction]] = defaultdict(dict)
-    sibling_lanes: dict[CargoKey, list[tuple[int, int]]] = defaultdict(list)
+    lane_supply: dict[str, dict[int, Fraction]] = defaultdict(dict)
+    lane_demand: dict[str, dict[int, Fraction]] = defaultdict(dict)
+    sibling_lanes: dict[str, list[tuple[int, int]]] = defaultdict(list)
     strip_of_belt: dict[int, int] = {}
     output_lane_id_by_belt: dict[int, str] = {}
     piler_nets: list[_Net] = []
@@ -14410,33 +14409,17 @@ def _prepare_routing_problem(
             port = outs[item, destination, cargo_domain]
             output_lane_id_by_belt[port.belt] = f"{i}:{_strip_output_lane_id(s, lane_index)}"
         made = per_item.get(s.group_key, ({}, {}))[1]
-        by_cargo: dict[CargoKey, list[int]] = defaultdict(list)
-        cargo_weight: dict[CargoKey, Fraction] = defaultdict(Fraction)
+        by_item: dict[str, list[int]] = defaultdict(list)
         for (item, dest, cargo_domain), port in outs.items():
-            cargo = (item, cargo_domain)
             out_ports[s.group_key, item, dest, cargo_domain].append(port)
             lane_of[port.belt] = port
-            by_cargo[cargo].append(port.belt)
-            cargo_weight[cargo] += _sink_demand(groups, spec, item, dest)
-        by_item: dict[str, list[CargoKey]] = defaultdict(list)
-        for cargo in by_cargo:
-            by_item[cargo[0]].append(cargo)
-        for item, item_cargo_keys in by_item.items():
-            total_weight = sum(
-                (cargo_weight[cargo] for cargo in item_cargo_keys),
-                Fraction(0),
-            )
-            for cargo in item_cargo_keys:
-                belts = sorted(by_cargo[cargo])
-                share = (
-                    cargo_weight[cargo] / total_weight
-                    if total_weight > 0
-                    else Fraction(1, len(item_cargo_keys))
-                )
-                lane_supply[cargo][belts[0]] = s.machines * made.get(item, Fraction(0)) * share
-                for belt in belts[1:]:
-                    lane_supply[cargo][belt] = Fraction(0)
-                    sibling_lanes[cargo].append((belts[0], belt))
+            by_item[item].append(port.belt)
+        for item, item_belts in by_item.items():
+            belts = sorted(item_belts)
+            lane_supply[item][belts[0]] = s.machines * made.get(item, Fraction(0))
+            for belt in belts[1:]:
+                lane_supply[item][belt] = Fraction(0)
+                sibling_lanes[item].append((belts[0], belt))
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
@@ -14514,7 +14497,7 @@ def _prepare_routing_problem(
     # the flow graph the whole build makes rather than one edge of it. Keyed by
     # BELT index, which is what makes a lane serving several destinations one
     # node instead of several.
-    joined: dict[CargoKey, list[tuple[int, int]]] = defaultdict(list)
+    joined: dict[str, list[tuple[int, int]]] = defaultdict(list)
     # Every sorter already standing, as the PASTE will test it.  Built once and
     # extended by each bridge that lands: `_bridge` is asked once per lane pair
     # and rebuilding this inside it is quadratic in the sorter count, which on a
@@ -14529,11 +14512,10 @@ def _prepare_routing_problem(
         in_rate: Fraction,
     ) -> None:
         """Record one physical producer-to-consumer connection."""
-        cargo = (item, cargo_domain)
-        joined[cargo].append((port.belt, sink.belt))
+        joined[item].append((port.belt, sink.belt))
         lane_of[sink.belt] = sink
         required_rate = sink.machines * in_rate
-        lane_demand[cargo][sink.belt] = required_rate
+        lane_demand[item][sink.belt] = required_rate
         direct_id = DirectInsertId(
             source_strip=strip_of_belt[port.belt],
             destination_strip=strip_of_belt[sink.belt],
@@ -14612,12 +14594,11 @@ def _prepare_routing_problem(
             for lane_ids in merge_plan.groups
         )
         if not dest:
-            cargo = (item, cargo_domain)
             for source_group in source_groups:
                 root = source_group[0]
                 boundary_output_belts.add(root.belt)
                 for tributary in source_group[1:]:
-                    joined[cargo].append((tributary.belt, root.belt))
+                    joined[item].append((tributary.belt, root.belt))
                     nets.append(
                         _Net(
                             src=tributary,
@@ -14649,41 +14630,24 @@ def _prepare_routing_problem(
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
-    active_cargo = set(joined) | set(sibling_lanes)
-    demand_by_item = {
-        item: sum(
-            (
-                sum(lane_demand[cargo].values(), Fraction(0))
-                for cargo in active_cargo
-                if cargo[0] == item
-            ),
-            Fraction(0),
-        )
-        for item, _cargo_domain in active_cargo
-    }
-    for cargo in sorted(active_cargo, key=lambda key: (key[0], key[1].value)):
+    lane_domains = {belt: port.cargo_domain for belt, port in lane_of.items()}
+    for item in sorted(set(joined) | set(sibling_lanes)):
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
-        item, cargo_domain = cargo
-        total_demand = demand_by_item[item]
-        domain_demand = sum(lane_demand[cargo].values(), Fraction(0))
-        external = spec.external_inputs.get(item, Fraction(0))
-        domain_external = (
-            external * domain_demand / total_demand if total_demand > 0 else Fraction(0)
-        )
         for a, b in _join_shard_islands(
-            joined[cargo],
-            lane_supply[cargo],
-            lane_demand[cargo],
-            domain_external,
-            shared_sources=sibling_lanes[cargo],
+            joined[item],
+            lane_supply[item],
+            lane_demand[item],
+            spec.external_inputs.get(item, Fraction(0)),
+            shared_sources=sibling_lanes[item],
+            lane_domains=lane_domains,
         ):
             nets.append(
                 _Net(
                     src=lane_of[a],
                     dst=lane_of[b],
                     item=item,
-                    cargo_domain=cargo_domain,
+                    cargo_domain=lane_domains[a],
                 )
             )
     # EXPERIMENT: the node's own out-net.  Appended AFTER `_join_shard_islands`
