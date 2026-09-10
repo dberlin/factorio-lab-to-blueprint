@@ -1,0 +1,44 @@
+[
+  {
+    "case": "unsprayed-mall",
+    "exit": 2,
+    "outcome": "PREREQUISITE_NOT_MET",
+    "reason": "three-output",
+    "stderr": ""
+  },
+  {
+    "case": "coated-mall",
+    "exit": 0,
+    "outcome": "UNSUPPORTED_INTERFACE",
+    "reason": "sprayed/prelinked interfaces are not compiled",
+    "stderr": ""
+  },
+  {
+    "case": "universe-matrix",
+    "exit": 0,
+    "outcome": "UNSUPPORTED_INTERFACE",
+    "reason": "sprayed/prelinked interfaces are not compiled",
+    "stderr": ""
+  },
+  {
+    "case": "unsprayed-mall-075",
+    "exit": 2,
+    "outcome": "PREREQUISITE_NOT_MET",
+    "reason": "unsprayed-mall",
+    "stderr": ""
+  },
+  {
+    "case": "unsprayed-mall-125",
+    "exit": 2,
+    "outcome": "PREREQUISITE_NOT_MET",
+    "reason": "unsprayed-mall",
+    "stderr": ""
+  },
+  {
+    "case": "unsprayed-universe",
+    "exit": 2,
+    "outcome": "PREREQUISITE_NOT_MET",
+    "reason": "unsprayed-mall",
+    "stderr": ""
+  }
+]

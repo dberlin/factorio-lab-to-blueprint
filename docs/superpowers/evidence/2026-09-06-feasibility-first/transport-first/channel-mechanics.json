@@ -1,0 +1,251 @@
+[
+  {
+    "kind": "orthogonal-channel-pairs-unlocked",
+    "original_factory_gate": false,
+    "checks": [
+      "geom.footprint",
+      "geom.overlap",
+      "geom.collide",
+      "geom.belt_single_occupancy",
+      "geom.altitude_range",
+      "geom.altitude_step",
+      "geom.bounds",
+      "game.addon_supply",
+      "game.addon_facing",
+      "game.addon_corner",
+      "game.belt_crossing",
+      "game.belt_collide",
+      "belt.continuity",
+      "junction.stack_support",
+      "junction.ports",
+      "junction.colocated",
+      "junction.port_pose",
+      "junction.records_no_links",
+      "belt.link_adjacent",
+      "belt.acyclic"
+    ],
+    "skipped": [],
+    "errors": 0,
+    "findings": [],
+    "buildings": 94
+  },
+  {
+    "kind": "orthogonal-channel-pairs-locked",
+    "original_factory_gate": false,
+    "checks": [
+      "geom.footprint",
+      "geom.overlap",
+      "geom.collide",
+      "geom.belt_single_occupancy",
+      "geom.altitude_range",
+      "geom.altitude_step",
+      "geom.bounds",
+      "game.addon_supply",
+      "game.addon_facing",
+      "game.addon_corner",
+      "game.belt_crossing",
+      "game.belt_collide",
+      "belt.continuity",
+      "junction.stack_support",
+      "junction.ports",
+      "junction.colocated",
+      "junction.port_pose",
+      "junction.records_no_links",
+      "belt.link_adjacent",
+      "belt.acyclic"
+    ],
+    "skipped": [],
+    "errors": 12,
+    "findings": [
+      {
+        "check": "geom.altitude_step",
+        "severity": "error",
+        "message": "belt 0 rises 26 to belt 1 without moving, which is an infinite slope; only the beltVerticalConstruction unlock permits that (pass --belt-vertical-construction if this save has it)",
+        "buildings": [
+          0,
+          1
+        ],
+        "detail": {
+          "dz": "26",
+          "dxy": 0
+        }
+      },
+      {
+        "check": "geom.altitude_step",
+        "severity": "error",
+        "message": "belt 3 rises -23 to belt 4 without moving, which is an infinite slope; only the beltVerticalConstruction unlock permits that (pass --belt-vertical-construction if this save has it)",
+        "buildings": [
+          3,
+          4
+        ],
+        "detail": {
+          "dz": "-23",
+          "dxy": 0
+        }
+      },
+      {
+        "check": "geom.altitude_step",
+        "severity": "error",
+        "message": "belt 14 rises -1 to belt 15 without moving, which is an infinite slope; only the beltVerticalConstruction unlock permits that (pass --belt-vertical-construction if this save has it)",
+        "buildings": [
+          14,
+          15
+        ],
+        "detail": {
+          "dz": "-1",
+          "dxy": 0
+        }
+      },
+      {
+        "check": "geom.altitude_step",
+        "severity": "error",
+        "message": "belt 29 rises 1 to belt 30 without moving, which is an infinite slope; only the beltVerticalConstruction unlock permits that (pass --belt-vertical-construction if this save has it)",
+        "buildings": [
+          29,
+          30
+        ],
+        "detail": {
+          "dz": "1",
+          "dxy": 0
+        }
+      },
+      {
+        "check": "geom.altitude_step",
+        "severity": "error",
+        "message": "belt 40 rises 23 to belt 41 without moving, which is an infinite slope; only the beltVerticalConstruction unlock permits that (pass --belt-vertical-construction if this save has it)",
+        "buildings": [
+          40,
+          41
+        ],
+        "detail": {
+          "dz": "23",
+          "dxy": 0
+        }
+      },
+      {
+        "check": "geom.altitude_step",
+        "severity": "error",
+        "message": "belt 42 rises -26 to belt 43 without moving, which is an infinite slope; only the beltVerticalConstruction unlock permits that (pass --belt-vertical-construction if this save has it)",
+        "buildings": [
+          42,
+          43
+        ],
+        "detail": {
+          "dz": "-26",
+          "dxy": 0
+        }
+      },
+      {
+        "check": "geom.altitude_step",
+        "severity": "error",
+        "message": "belt 44 rises 26 to belt 45 without moving, which is an infinite slope; only the beltVerticalConstruction unlock permits that (pass --belt-vertical-construction if this save has it)",
+        "buildings": [
+          44,
+          45
+        ],
+        "detail": {
+          "dz": "26",
+          "dxy": 0
+        }
+      },
+      {
+        "check": "geom.altitude_step",
+        "severity": "error",
+        "message": "belt 47 rises -21 to belt 48 without moving, which is an infinite slope; only the beltVerticalConstruction unlock permits that (pass --belt-vertical-construction if this save has it)",
+        "buildings": [
+          47,
+          48
+        ],
+        "detail": {
+          "dz": "-21",
+          "dxy": 0
+        }
+      },
+      {
+        "check": "geom.altitude_step",
+        "severity": "error",
+        "message": "belt 63 rises -1 to belt 64 without moving, which is an infinite slope; only the beltVerticalConstruction unlock permits that (pass --belt-vertical-construction if this save has it)",
+        "buildings": [
+          63,
+          64
+        ],
+        "detail": {
+          "dz": "-1",
+          "dxy": 0
+        }
+      },
+      {
+        "check": "geom.altitude_step",
+        "severity": "error",
+        "message": "belt 74 rises 1 to belt 75 without moving, which is an infinite slope; only the beltVerticalConstruction unlock permits that (pass --belt-vertical-construction if this save has it)",
+        "buildings": [
+          74,
+          75
+        ],
+        "detail": {
+          "dz": "1",
+          "dxy": 0
+        }
+      },
+      {
+        "check": "geom.altitude_step",
+        "severity": "error",
+        "message": "belt 90 rises 21 to belt 91 without moving, which is an infinite slope; only the beltVerticalConstruction unlock permits that (pass --belt-vertical-construction if this save has it)",
+        "buildings": [
+          90,
+          91
+        ],
+        "detail": {
+          "dz": "21",
+          "dxy": 0
+        }
+      },
+      {
+        "check": "geom.altitude_step",
+        "severity": "error",
+        "message": "belt 92 rises -26 to belt 93 without moving, which is an infinite slope; only the beltVerticalConstruction unlock permits that (pass --belt-vertical-construction if this save has it)",
+        "buildings": [
+          92,
+          93
+        ],
+        "detail": {
+          "dz": "-26",
+          "dxy": 0
+        }
+      }
+    ],
+    "buildings": 94
+  },
+  {
+    "kind": "shared-source-physical-fanout",
+    "original_factory_gate": false,
+    "checks": [
+      "geom.footprint",
+      "geom.overlap",
+      "geom.collide",
+      "geom.belt_single_occupancy",
+      "geom.altitude_range",
+      "geom.altitude_step",
+      "geom.bounds",
+      "game.addon_supply",
+      "game.addon_facing",
+      "game.addon_corner",
+      "game.belt_crossing",
+      "game.belt_collide",
+      "belt.continuity",
+      "junction.stack_support",
+      "junction.ports",
+      "junction.colocated",
+      "junction.port_pose",
+      "junction.records_no_links",
+      "belt.link_adjacent",
+      "belt.acyclic"
+    ],
+    "skipped": [],
+    "errors": 0,
+    "findings": [],
+    "buildings": 39,
+    "routed": 2,
+    "route_failures": 0
+  }
+]

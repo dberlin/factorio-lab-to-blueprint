@@ -1,0 +1,3672 @@
+{
+  "decision": "joint fixed-path reuse passes original control; mall topology fails exact capacity cut before height allocation",
+  "production_promotion": false,
+  "cases": [
+    {
+      "case": "three-output",
+      "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+      "budget_s": 30.0,
+      "original_factory_gate": true,
+      "global_router_calls": 0,
+      "obligations": 27,
+      "flights_required": 24,
+      "flights_available": 24,
+      "held_out": false,
+      "assigned_rates": {
+        "0": "5/3",
+        "1": "5/3",
+        "2": "20/3",
+        "3": "15",
+        "4": "10/3",
+        "5": "10/3",
+        "6": "0",
+        "7": "10/3",
+        "8": "15/2",
+        "9": "20/3",
+        "10": "20/3",
+        "11": "20",
+        "12": "40/3",
+        "13": "50/3",
+        "14": "40/3",
+        "15": "10/3",
+        "16": "20/3",
+        "17": "30",
+        "18": "20/3",
+        "19": "15",
+        "20": "20/3",
+        "21": "35/6",
+        "22": "15",
+        "23": "15",
+        "24": "10/3",
+        "25": "10/3",
+        "26": "25/3"
+      },
+      "checks_run": 67,
+      "errors": 0,
+      "skipped": [],
+      "area": 37926,
+      "bounds": [
+        0,
+        0,
+        300,
+        125
+      ],
+      "outcome": "original-clean",
+      "buildings": 8363,
+      "flight_allocation": [
+        {
+          "id": 0,
+          "item": "graphene",
+          "role": "local-source",
+          "level": 1,
+          "exclusive_level": 1,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 1,
+          "item": "hydrogen",
+          "role": "local-source",
+          "level": 2,
+          "exclusive_level": 2,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 2,
+          "item": "casimir-crystal",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 3,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 3,
+          "item": "casimir-crystal",
+          "role": "internal",
+          "level": 4,
+          "exclusive_level": 4,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "item": "circuit-board",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 5,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 5,
+          "item": "glass",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 6,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 6,
+          "item": "graphene",
+          "role": "internal",
+          "level": 5,
+          "exclusive_level": 7,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "item": "graphene",
+          "role": "internal",
+          "level": 6,
+          "exclusive_level": 8,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "item": "hydrogen",
+          "role": "internal",
+          "level": 7,
+          "exclusive_level": 9,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "item": "hydrogen",
+          "role": "internal",
+          "level": 8,
+          "exclusive_level": 10,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "item": "high-purity-silicon",
+          "role": "internal",
+          "level": 4,
+          "exclusive_level": 11,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "item": "microcrystalline-component",
+          "role": "internal",
+          "level": 9,
+          "exclusive_level": 12,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "item": "titanium-glass",
+          "role": "internal",
+          "level": 10,
+          "exclusive_level": 13,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 14,
+          "item": "optical-grating-crystal",
+          "role": "external",
+          "level": 3,
+          "exclusive_level": 15,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 16,
+          "item": "optical-grating-crystal",
+          "role": "external",
+          "level": 9,
+          "exclusive_level": 17,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 17,
+          "item": "copper-ingot",
+          "role": "external",
+          "level": 11,
+          "exclusive_level": 18,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 18,
+          "item": "iron-ingot",
+          "role": "external",
+          "level": 12,
+          "exclusive_level": 19,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 19,
+          "item": "stone",
+          "role": "external",
+          "level": 13,
+          "exclusive_level": 20,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 20,
+          "item": "fire-ice",
+          "role": "external",
+          "level": 14,
+          "exclusive_level": 21,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 21,
+          "item": "silicon-ore",
+          "role": "external",
+          "level": 4,
+          "exclusive_level": 22,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 22,
+          "item": "copper-ingot",
+          "role": "external",
+          "level": 6,
+          "exclusive_level": 23,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 23,
+          "item": "high-purity-silicon",
+          "role": "external",
+          "level": 8,
+          "exclusive_level": 24,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 24,
+          "item": "titanium-ingot",
+          "role": "external",
+          "level": 15,
+          "exclusive_level": 25,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 14,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 25,
+          "item": "water",
+          "role": "external",
+          "level": 16,
+          "exclusive_level": 26,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 14,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 15,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "item": "hydrogen",
+          "role": "external",
+          "level": 10,
+          "exclusive_level": 14,
+          "predecessors": [
+            14
+          ],
+          "rejected": [
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 15,
+          "item": "hydrogen",
+          "role": "external",
+          "level": 17,
+          "exclusive_level": 16,
+          "predecessors": [
+            16
+          ],
+          "rejected": [
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 14,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 15,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 16,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        }
+      ],
+      "elapsed_s": 3.5051211430691183,
+      "constructed_links": 33,
+      "junctions": [
+        2924,
+        2928,
+        2932,
+        2941,
+        2950,
+        2959
+      ]
+    },
+    {
+      "case": "unsprayed-mall",
+      "spec_sha256": "3995a1266312d463293bae0a8e01b6f95f254550df54c56e5888e6d846e00ff3",
+      "budget_s": 60.0,
+      "original_factory_gate": false,
+      "global_router_calls": 0,
+      "obligations": 149,
+      "flights_required": 140,
+      "flights_available": 24,
+      "held_out": false,
+      "outcome": "constructive-control-refused",
+      "reason": "captured adjacency cannot carry exact original rates: 129157/36/36289/10; unserved={\"('consumer', 12, 'electric-motor')\": '18913/1410', \"('consumer', 12, 'magnetic-coil')\": '10589/705', \"('consumer', 35, 'copper-ingot')\": '2299/180'}; unused={\"('producer', 7, 'copper-ingot')\": '2299/180', \"('producer', 10, 'electric-motor')\": '18913/1410', \"('producer', 35, 'magnetic-coil')\": '10589/705'}",
+      "flight_allocation": [],
+      "elapsed_s": 1.0821928149089217,
+      "constructed_links": 0,
+      "junctions": []
+    },
+    {
+      "case": "unsprayed-mall-075",
+      "spec_sha256": "d6aade99fcafb5bdb4603a3cdde32115632305d3cf0bbec5a74f6fd53588e54c",
+      "budget_s": 60.0,
+      "original_factory_gate": false,
+      "global_router_calls": 0,
+      "obligations": 123,
+      "flights_required": 116,
+      "flights_available": 24,
+      "held_out": true,
+      "assigned_rates": {
+        "0": "15",
+        "1": "67/30",
+        "2": "183/25",
+        "3": "549/50",
+        "4": "9",
+        "5": "27/2",
+        "6": "27/2",
+        "7": "154/15",
+        "8": "77/15",
+        "9": "8993/180",
+        "10": "8993/180",
+        "11": "529/90",
+        "12": "43387/8460",
+        "13": "111431/8460",
+        "14": "2821/136",
+        "15": "13457/284",
+        "16": "315013/9656",
+        "17": "0",
+        "18": "9/2",
+        "19": "9/2",
+        "20": "9/2",
+        "21": "31151/1904",
+        "22": "331/14",
+        "23": "993/112",
+        "24": "331/28",
+        "25": "15/4",
+        "26": "9/2",
+        "27": "3789/71",
+        "28": "14735/284",
+        "29": "147/10",
+        "30": "513/40",
+        "31": "9/2",
+        "32": "15/8",
+        "33": "15/4",
+        "34": "183/5",
+        "35": "7",
+        "36": "81607/4170",
+        "37": "74599/8340",
+        "38": "0",
+        "39": "9",
+        "40": "0",
+        "41": "0",
+        "42": "5142321/197380",
+        "43": "623189/8340",
+        "44": "224289/2780",
+        "45": "17198531/592140",
+        "46": "171769/2780",
+        "47": "33334/695",
+        "48": "0",
+        "49": "14/5",
+        "50": "0",
+        "51": "9",
+        "52": "87/2",
+        "53": "4176269/86310",
+        "54": "2164363/38360",
+        "55": "529/45",
+        "56": "2224009/43155",
+        "57": "15017881/345240",
+        "58": "0",
+        "59": "993/28",
+        "60": "2979/112",
+        "61": "3789/71",
+        "62": "159551/6120",
+        "63": "2821/136",
+        "64": "451973/6120",
+        "65": "28/5",
+        "66": "183/25",
+        "67": "549/50",
+        "68": "7/2",
+        "69": "7/5",
+        "70": "7",
+        "71": "14/5",
+        "72": "7/5",
+        "73": "3/2",
+        "74": "99/100",
+        "75": "9/2",
+        "76": "9",
+        "77": "9",
+        "78": "9",
+        "79": "7",
+        "80": "15/2",
+        "81": "117/28",
+        "82": "75/16",
+        "83": "7",
+        "84": "9/2",
+        "85": "15/4",
+        "86": "15/4",
+        "87": "15/2",
+        "88": "15/2",
+        "89": "19/15",
+        "90": "373/272",
+        "91": "387/40",
+        "92": "735/556",
+        "93": "1339/1390",
+        "94": "11216429/434520",
+        "95": "277/45",
+        "96": "19/25",
+        "97": "9/28",
+        "98": "331/8",
+        "99": "3348/47",
+        "100": "6417/94",
+        "101": "693/40",
+        "102": "231/20",
+        "103": "58149/695",
+        "104": "58149/695",
+        "105": "224289/2780",
+        "106": "174447/2780",
+        "107": "503539/5480",
+        "108": "503539/5480",
+        "109": "197037/2192",
+        "110": "947/10",
+        "111": "147/5",
+        "112": "15",
+        "113": "30",
+        "114": "8307/139",
+        "115": "24921/556",
+        "116": "27/2",
+        "117": "693/80",
+        "118": "231/40",
+        "119": "7/20",
+        "120": "3/16",
+        "121": "7/20",
+        "122": "9/2"
+      },
+      "outcome": "constructive-control-refused",
+      "reason": "constructed path meets fixed geometry: conveyor-belt-3 at (343, 19, 0)",
+      "flight_allocation": [],
+      "elapsed_s": 2.0634956820867956,
+      "constructed_links": 21,
+      "junctions": [
+        12290,
+        12294,
+        12298,
+        12302,
+        12306,
+        12310,
+        12314,
+        12318,
+        12322,
+        12326,
+        12330,
+        12334,
+        12338,
+        12342,
+        12346,
+        12350,
+        12354,
+        12358,
+        12362,
+        12366,
+        12375,
+        12384,
+        12393,
+        12402,
+        12411,
+        12420,
+        12430,
+        12439,
+        12449,
+        12458,
+        12467,
+        12476,
+        12485,
+        12494,
+        12503,
+        12512,
+        12521,
+        12530,
+        12539,
+        12548
+      ]
+    },
+    {
+      "case": "unsprayed-mall-125",
+      "spec_sha256": "8b767432f5260328ab80cbf2d8528ec8c02475d81a52074e8b242fa3db2a89e9",
+      "budget_s": 60.0,
+      "original_factory_gate": false,
+      "global_router_calls": 0,
+      "obligations": 161,
+      "flights_required": 152,
+      "flights_available": 24,
+      "held_out": true,
+      "outcome": "constructive-control-refused",
+      "reason": "captured adjacency cannot carry exact original rates: 19220849/4248/36289/8; unserved={\"('consumer', 38, 'copper-ingot')\": '24305/2124'}; unused={\"('producer', 7, 'copper-ingot')\": '24305/2124'}",
+      "flight_allocation": [],
+      "elapsed_s": 1.2003881810232997,
+      "constructed_links": 0,
+      "junctions": []
+    },
+    {
+      "case": "unsprayed-universe",
+      "spec_sha256": "8337dfe1999a9f82d1bc8c92649db1fcaf1621dd3ef112bf9540ad9978d35033",
+      "budget_s": 60.0,
+      "original_factory_gate": false,
+      "global_router_calls": 0,
+      "obligations": 186,
+      "flights_required": 171,
+      "flights_available": 24,
+      "held_out": true,
+      "assigned_rates": {
+        "0": "2",
+        "1": "1",
+        "2": "1",
+        "3": "6",
+        "4": "7/2",
+        "5": "3",
+        "6": "3/2",
+        "7": "6",
+        "8": "2",
+        "9": "1",
+        "10": "2",
+        "11": "5",
+        "12": "2",
+        "13": "1",
+        "14": "4",
+        "15": "1/15",
+        "16": "1/15",
+        "17": "1/15",
+        "18": "1/15",
+        "19": "1/15",
+        "20": "1/15",
+        "21": "1/15",
+        "22": "1/15",
+        "23": "1/15",
+        "24": "1/15",
+        "25": "1/15",
+        "26": "1/15",
+        "27": "1/15",
+        "28": "1/15",
+        "29": "1/15",
+        "30": "2",
+        "31": "3",
+        "32": "2",
+        "33": "329/34",
+        "34": "1",
+        "35": "1/15",
+        "36": "1/15",
+        "37": "1/15",
+        "38": "1/15",
+        "39": "1/15",
+        "40": "1/15",
+        "41": "1/15",
+        "42": "1/15",
+        "43": "1/15",
+        "44": "1/15",
+        "45": "1/15",
+        "46": "1/15",
+        "47": "1/15",
+        "48": "1/15",
+        "49": "1/15",
+        "50": "4",
+        "51": "2",
+        "52": "3",
+        "53": "2",
+        "54": "2",
+        "55": "1/2",
+        "56": "1/15",
+        "57": "1/15",
+        "58": "1/15",
+        "59": "1/15",
+        "60": "1/15",
+        "61": "1/15",
+        "62": "1/15",
+        "63": "1/15",
+        "64": "1/15",
+        "65": "1/15",
+        "66": "1/15",
+        "67": "1/15",
+        "68": "1/15",
+        "69": "1/15",
+        "70": "1/15",
+        "71": "2",
+        "72": "12",
+        "73": "1/15",
+        "74": "1/15",
+        "75": "1/15",
+        "76": "1/15",
+        "77": "1/15",
+        "78": "1/15",
+        "79": "1/15",
+        "80": "1/15",
+        "81": "1/15",
+        "82": "1/15",
+        "83": "1/15",
+        "84": "1/15",
+        "85": "1/15",
+        "86": "1/15",
+        "87": "1/15",
+        "88": "6",
+        "89": "8",
+        "90": "4",
+        "91": "1",
+        "92": "6",
+        "93": "3",
+        "94": "4",
+        "95": "1",
+        "96": "3",
+        "97": "1/15",
+        "98": "1/15",
+        "99": "1/15",
+        "100": "1/15",
+        "101": "1/15",
+        "102": "1/15",
+        "103": "1/15",
+        "104": "1/15",
+        "105": "1/15",
+        "106": "1/15",
+        "107": "1/15",
+        "108": "1/15",
+        "109": "1/15",
+        "110": "1/15",
+        "111": "1/15",
+        "112": "0",
+        "113": "0",
+        "114": "1",
+        "115": "6",
+        "116": "1",
+        "117": "1",
+        "118": "1",
+        "119": "1/2",
+        "120": "0",
+        "121": "1",
+        "122": "1",
+        "123": "1/2",
+        "124": "1",
+        "125": "2",
+        "126": "1",
+        "127": "1/2",
+        "128": "1/2",
+        "129": "1/15",
+        "130": "1/15",
+        "131": "1/15",
+        "132": "1/15",
+        "133": "1/15",
+        "134": "1/15",
+        "135": "1/15",
+        "136": "1/15",
+        "137": "1/15",
+        "138": "1/15",
+        "139": "1/15",
+        "140": "1/15",
+        "141": "1/15",
+        "142": "1/15",
+        "143": "1/15",
+        "144": "1",
+        "145": "1",
+        "146": "2",
+        "147": "1",
+        "148": "6",
+        "149": "2",
+        "150": "14/17",
+        "151": "1",
+        "152": "1",
+        "153": "23/2",
+        "154": "8",
+        "155": "8",
+        "156": "10",
+        "157": "198/17",
+        "158": "363/17",
+        "159": "1/2",
+        "160": "4",
+        "161": "7/2",
+        "162": "28",
+        "163": "14",
+        "164": "6",
+        "165": "9",
+        "166": "1",
+        "167": "1",
+        "168": "2",
+        "169": "2",
+        "170": "18",
+        "171": "1/15",
+        "172": "1/15",
+        "173": "1/15",
+        "174": "1/15",
+        "175": "1/15",
+        "176": "1/15",
+        "177": "1/15",
+        "178": "1/15",
+        "179": "1/15",
+        "180": "1/15",
+        "181": "1/15",
+        "182": "1/15",
+        "183": "1/15",
+        "184": "1/15",
+        "185": "1/15"
+      },
+      "outcome": "constructive-control-refused",
+      "reason": "source family exceeds compiled three-branch interface",
+      "flight_allocation": [],
+      "elapsed_s": 1.3153635188937187,
+      "constructed_links": 0,
+      "junctions": [
+        4290
+      ]
+    }
+  ],
+  "control_runs": [
+    {
+      "case": "three-output",
+      "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+      "budget_s": 30.0,
+      "original_factory_gate": true,
+      "global_router_calls": 0,
+      "obligations": 27,
+      "flights_required": 24,
+      "flights_available": 24,
+      "held_out": false,
+      "assigned_rates": {
+        "0": "5/3",
+        "1": "5/3",
+        "2": "20/3",
+        "3": "15",
+        "4": "10/3",
+        "5": "10/3",
+        "6": "10/3",
+        "7": "0",
+        "8": "15/2",
+        "9": "20/3",
+        "10": "20/3",
+        "11": "50/3",
+        "12": "40/3",
+        "13": "20",
+        "14": "40/3",
+        "15": "10/3",
+        "16": "20/3",
+        "17": "30",
+        "18": "20/3",
+        "19": "15",
+        "20": "20/3",
+        "21": "35/6",
+        "22": "15",
+        "23": "15",
+        "24": "10/3",
+        "25": "10/3",
+        "26": "25/3"
+      },
+      "checks_run": 67,
+      "errors": 0,
+      "skipped": [],
+      "area": 37926,
+      "bounds": [
+        0,
+        0,
+        300,
+        125
+      ],
+      "outcome": "original-clean",
+      "buildings": 8363,
+      "flight_allocation": [
+        {
+          "id": 0,
+          "item": "graphene",
+          "role": "local-source",
+          "level": 1,
+          "exclusive_level": 1,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 1,
+          "item": "hydrogen",
+          "role": "local-source",
+          "level": 2,
+          "exclusive_level": 2,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 2,
+          "item": "casimir-crystal",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 3,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 3,
+          "item": "casimir-crystal",
+          "role": "internal",
+          "level": 4,
+          "exclusive_level": 4,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "item": "circuit-board",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 5,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 5,
+          "item": "glass",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 6,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 6,
+          "item": "graphene",
+          "role": "internal",
+          "level": 5,
+          "exclusive_level": 7,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "item": "graphene",
+          "role": "internal",
+          "level": 6,
+          "exclusive_level": 8,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "item": "hydrogen",
+          "role": "internal",
+          "level": 7,
+          "exclusive_level": 9,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "item": "hydrogen",
+          "role": "internal",
+          "level": 8,
+          "exclusive_level": 10,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "item": "high-purity-silicon",
+          "role": "internal",
+          "level": 4,
+          "exclusive_level": 11,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "item": "microcrystalline-component",
+          "role": "internal",
+          "level": 9,
+          "exclusive_level": 12,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "item": "titanium-glass",
+          "role": "internal",
+          "level": 10,
+          "exclusive_level": 13,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 14,
+          "item": "optical-grating-crystal",
+          "role": "external",
+          "level": 3,
+          "exclusive_level": 15,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 16,
+          "item": "optical-grating-crystal",
+          "role": "external",
+          "level": 9,
+          "exclusive_level": 17,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 17,
+          "item": "copper-ingot",
+          "role": "external",
+          "level": 11,
+          "exclusive_level": 18,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 18,
+          "item": "iron-ingot",
+          "role": "external",
+          "level": 12,
+          "exclusive_level": 19,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 19,
+          "item": "stone",
+          "role": "external",
+          "level": 13,
+          "exclusive_level": 20,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 20,
+          "item": "fire-ice",
+          "role": "external",
+          "level": 14,
+          "exclusive_level": 21,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 21,
+          "item": "silicon-ore",
+          "role": "external",
+          "level": 4,
+          "exclusive_level": 22,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 22,
+          "item": "copper-ingot",
+          "role": "external",
+          "level": 6,
+          "exclusive_level": 23,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 23,
+          "item": "high-purity-silicon",
+          "role": "external",
+          "level": 8,
+          "exclusive_level": 24,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 24,
+          "item": "titanium-ingot",
+          "role": "external",
+          "level": 15,
+          "exclusive_level": 25,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 14,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 25,
+          "item": "water",
+          "role": "external",
+          "level": 16,
+          "exclusive_level": 26,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 14,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 15,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "item": "hydrogen",
+          "role": "external",
+          "level": 10,
+          "exclusive_level": 14,
+          "predecessors": [
+            14
+          ],
+          "rejected": [
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 15,
+          "item": "hydrogen",
+          "role": "external",
+          "level": 17,
+          "exclusive_level": 16,
+          "predecessors": [
+            16
+          ],
+          "rejected": [
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 14,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 15,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 16,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        }
+      ],
+      "elapsed_s": 3.6793821468017995,
+      "constructed_links": 33,
+      "junctions": [
+        2924,
+        2928,
+        2932,
+        2941,
+        2950,
+        2959
+      ]
+    },
+    {
+      "case": "three-output",
+      "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+      "budget_s": 30.0,
+      "original_factory_gate": true,
+      "global_router_calls": 0,
+      "obligations": 27,
+      "flights_required": 24,
+      "flights_available": 24,
+      "held_out": false,
+      "assigned_rates": {
+        "0": "5/3",
+        "1": "5/3",
+        "2": "20/3",
+        "3": "15",
+        "4": "10/3",
+        "5": "10/3",
+        "6": "0",
+        "7": "10/3",
+        "8": "15/2",
+        "9": "20/3",
+        "10": "20/3",
+        "11": "20",
+        "12": "40/3",
+        "13": "50/3",
+        "14": "40/3",
+        "15": "10/3",
+        "16": "20/3",
+        "17": "30",
+        "18": "20/3",
+        "19": "15",
+        "20": "20/3",
+        "21": "35/6",
+        "22": "15",
+        "23": "15",
+        "24": "10/3",
+        "25": "10/3",
+        "26": "25/3"
+      },
+      "checks_run": 67,
+      "errors": 0,
+      "skipped": [],
+      "area": 37926,
+      "bounds": [
+        0,
+        0,
+        300,
+        125
+      ],
+      "outcome": "original-clean",
+      "buildings": 8363,
+      "flight_allocation": [
+        {
+          "id": 0,
+          "item": "graphene",
+          "role": "local-source",
+          "level": 1,
+          "exclusive_level": 1,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 1,
+          "item": "hydrogen",
+          "role": "local-source",
+          "level": 2,
+          "exclusive_level": 2,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 2,
+          "item": "casimir-crystal",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 3,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 3,
+          "item": "casimir-crystal",
+          "role": "internal",
+          "level": 4,
+          "exclusive_level": 4,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "item": "circuit-board",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 5,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 5,
+          "item": "glass",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 6,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 6,
+          "item": "graphene",
+          "role": "internal",
+          "level": 5,
+          "exclusive_level": 7,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "item": "graphene",
+          "role": "internal",
+          "level": 6,
+          "exclusive_level": 8,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "item": "hydrogen",
+          "role": "internal",
+          "level": 7,
+          "exclusive_level": 9,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "item": "hydrogen",
+          "role": "internal",
+          "level": 8,
+          "exclusive_level": 10,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "item": "high-purity-silicon",
+          "role": "internal",
+          "level": 4,
+          "exclusive_level": 11,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "item": "microcrystalline-component",
+          "role": "internal",
+          "level": 9,
+          "exclusive_level": 12,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "item": "titanium-glass",
+          "role": "internal",
+          "level": 10,
+          "exclusive_level": 13,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 14,
+          "item": "optical-grating-crystal",
+          "role": "external",
+          "level": 3,
+          "exclusive_level": 15,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 16,
+          "item": "optical-grating-crystal",
+          "role": "external",
+          "level": 9,
+          "exclusive_level": 17,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 17,
+          "item": "copper-ingot",
+          "role": "external",
+          "level": 11,
+          "exclusive_level": 18,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 18,
+          "item": "iron-ingot",
+          "role": "external",
+          "level": 12,
+          "exclusive_level": 19,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 19,
+          "item": "stone",
+          "role": "external",
+          "level": 13,
+          "exclusive_level": 20,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 20,
+          "item": "fire-ice",
+          "role": "external",
+          "level": 14,
+          "exclusive_level": 21,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 21,
+          "item": "silicon-ore",
+          "role": "external",
+          "level": 4,
+          "exclusive_level": 22,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 22,
+          "item": "copper-ingot",
+          "role": "external",
+          "level": 6,
+          "exclusive_level": 23,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 23,
+          "item": "high-purity-silicon",
+          "role": "external",
+          "level": 8,
+          "exclusive_level": 24,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 24,
+          "item": "titanium-ingot",
+          "role": "external",
+          "level": 15,
+          "exclusive_level": 25,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 14,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 25,
+          "item": "water",
+          "role": "external",
+          "level": 16,
+          "exclusive_level": 26,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 14,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 15,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "item": "hydrogen",
+          "role": "external",
+          "level": 10,
+          "exclusive_level": 14,
+          "predecessors": [
+            14
+          ],
+          "rejected": [
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 15,
+          "item": "hydrogen",
+          "role": "external",
+          "level": 17,
+          "exclusive_level": 16,
+          "predecessors": [
+            16
+          ],
+          "rejected": [
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 14,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 15,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 16,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        }
+      ],
+      "elapsed_s": 3.4293982330709696,
+      "constructed_links": 33,
+      "junctions": [
+        2924,
+        2928,
+        2932,
+        2941,
+        2950,
+        2959
+      ]
+    },
+    {
+      "case": "three-output",
+      "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+      "budget_s": 30.0,
+      "original_factory_gate": true,
+      "global_router_calls": 0,
+      "obligations": 27,
+      "flights_required": 24,
+      "flights_available": 24,
+      "held_out": false,
+      "assigned_rates": {
+        "0": "5/3",
+        "1": "5/3",
+        "2": "20/3",
+        "3": "15",
+        "4": "10/3",
+        "5": "10/3",
+        "6": "0",
+        "7": "10/3",
+        "8": "15/2",
+        "9": "20/3",
+        "10": "20/3",
+        "11": "20",
+        "12": "40/3",
+        "13": "50/3",
+        "14": "40/3",
+        "15": "10/3",
+        "16": "20/3",
+        "17": "30",
+        "18": "20/3",
+        "19": "15",
+        "20": "20/3",
+        "21": "35/6",
+        "22": "15",
+        "23": "15",
+        "24": "10/3",
+        "25": "10/3",
+        "26": "25/3"
+      },
+      "checks_run": 67,
+      "errors": 0,
+      "skipped": [],
+      "area": 37926,
+      "bounds": [
+        0,
+        0,
+        300,
+        125
+      ],
+      "outcome": "original-clean",
+      "buildings": 8363,
+      "flight_allocation": [
+        {
+          "id": 0,
+          "item": "graphene",
+          "role": "local-source",
+          "level": 1,
+          "exclusive_level": 1,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 1,
+          "item": "hydrogen",
+          "role": "local-source",
+          "level": 2,
+          "exclusive_level": 2,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 2,
+          "item": "casimir-crystal",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 3,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 3,
+          "item": "casimir-crystal",
+          "role": "internal",
+          "level": 4,
+          "exclusive_level": 4,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "item": "circuit-board",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 5,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 5,
+          "item": "glass",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 6,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 6,
+          "item": "graphene",
+          "role": "internal",
+          "level": 5,
+          "exclusive_level": 7,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "item": "graphene",
+          "role": "internal",
+          "level": 6,
+          "exclusive_level": 8,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "item": "hydrogen",
+          "role": "internal",
+          "level": 7,
+          "exclusive_level": 9,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "item": "hydrogen",
+          "role": "internal",
+          "level": 8,
+          "exclusive_level": 10,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "item": "high-purity-silicon",
+          "role": "internal",
+          "level": 4,
+          "exclusive_level": 11,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "item": "microcrystalline-component",
+          "role": "internal",
+          "level": 9,
+          "exclusive_level": 12,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "item": "titanium-glass",
+          "role": "internal",
+          "level": 10,
+          "exclusive_level": 13,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 14,
+          "item": "optical-grating-crystal",
+          "role": "external",
+          "level": 3,
+          "exclusive_level": 15,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 16,
+          "item": "optical-grating-crystal",
+          "role": "external",
+          "level": 9,
+          "exclusive_level": 17,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 17,
+          "item": "copper-ingot",
+          "role": "external",
+          "level": 11,
+          "exclusive_level": 18,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 18,
+          "item": "iron-ingot",
+          "role": "external",
+          "level": 12,
+          "exclusive_level": 19,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 19,
+          "item": "stone",
+          "role": "external",
+          "level": 13,
+          "exclusive_level": 20,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 20,
+          "item": "fire-ice",
+          "role": "external",
+          "level": 14,
+          "exclusive_level": 21,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 21,
+          "item": "silicon-ore",
+          "role": "external",
+          "level": 4,
+          "exclusive_level": 22,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 22,
+          "item": "copper-ingot",
+          "role": "external",
+          "level": 6,
+          "exclusive_level": 23,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 23,
+          "item": "high-purity-silicon",
+          "role": "external",
+          "level": 8,
+          "exclusive_level": 24,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 24,
+          "item": "titanium-ingot",
+          "role": "external",
+          "level": 15,
+          "exclusive_level": 25,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 14,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 25,
+          "item": "water",
+          "role": "external",
+          "level": 16,
+          "exclusive_level": 26,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 14,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 15,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "item": "hydrogen",
+          "role": "external",
+          "level": 10,
+          "exclusive_level": 14,
+          "predecessors": [
+            14
+          ],
+          "rejected": [
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 15,
+          "item": "hydrogen",
+          "role": "external",
+          "level": 17,
+          "exclusive_level": 16,
+          "predecessors": [
+            16
+          ],
+          "rejected": [
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 14,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 15,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 16,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        }
+      ],
+      "elapsed_s": 3.5051211430691183,
+      "constructed_links": 33,
+      "junctions": [
+        2924,
+        2928,
+        2932,
+        2941,
+        2950,
+        2959
+      ]
+    }
+  ],
+  "full_segment_audit": {
+    "collisions": 0,
+    "roles": {
+      "local-merge": 4,
+      "output": 3,
+      "local-source": 2,
+      "internal": 11,
+      "external": 13
+    },
+    "occupied_cells": 5678
+  },
+  "frozen_hashes_verified": 7,
+  "ruff": "passed on all three changed scripts",
+  "lsp": {
+    "errors": 0,
+    "warnings": 31,
+    "files": 3
+  },
+  "source_sha256": {
+    "constructive_control.py": "2f01879b3129a43f001c54c122c14db2db2976ae7e7e4306cc59a1c963ca5a68",
+    "flight_reuse.py": "b5848556a3e3ff060d14b3cc5b6b717df36905b8bd8b8d6d1707c4f41954ae78",
+    "reuse_capacity_certificate.py": "765b1d05de8d7f4ee0f5e3814dfa4df1a75fef681d54d32cfb9a4c7e563cb0fd",
+    "constructive_composition.py": "ae00963a05dbd1943e2d486aa92180e9d7cae00fbac6dd63993e20983e497694",
+    "transport_first.py": "2202f3d6e73a83e204a01345704f232713910bb6f200f87d13f1431f63619fdd",
+    "planned_service.py": "bd2f3a2dfa1da3e90a885701dcfa97cb5bb9a6cef04277d97dea79da2c4fe592",
+    "run_experiment.py": "1a115b159944b93cfa99cdfc7b88eecc171d07f86468b08334abab58fcb803a8",
+    "channel_probe.py": "003c03bf6e6c0419f2860cb7ae986a46969a48fb069b05485cff7d9de559a1b0"
+  },
+  "not_reached": [
+    "coated factory composition",
+    "successful mall cold repeats"
+  ]
+}

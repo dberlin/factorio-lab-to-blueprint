@@ -1,0 +1,117 @@
+{
+  "decision": "Recommend blocker-owned reversible pruning as the next isolated revision; no template redesign or cap increase justified yet",
+  "scope": "Completed throwaway diagnostic only; no algorithm change or production promotion",
+  "frozen_outcome_and_all_work_counters_reproduced": true,
+  "frozen_sources_manifest_admissions_policy_unchanged": true,
+  "predicate_accounting": [
+    {
+      "category": "self:search",
+      "predicates": 213182,
+      "percent": 4.26364
+    },
+    {
+      "category": "static:search",
+      "predicates": 866118,
+      "percent": 17.32236
+    },
+    {
+      "category": "pair_miss",
+      "predicates": 3920700,
+      "percent": 78.414
+    }
+  ],
+  "unattributed_predicates": 0,
+  "decode_calls": 39518,
+  "unique_candidate_ids": 8650,
+  "hydrogen_obligation_13_decodes": 36082,
+  "same_seven_choice_prefix_repeat_decodes_of_still_blocked_hydrogen_candidates": 30500,
+  "completed_repeated_pair_cache_misses": 52525,
+  "predicates_spent_on_completed_repeated_pair_cache_misses": 2445867,
+  "static_index_predicates_after_first_identical_segment_query": 809695,
+  "conditional_geometry": {
+    "domain_count": 5400,
+    "static_invalid": 15,
+    "static_valid": 5385,
+    "compatible_with_seven_choice_prefix": 25,
+    "compatible_with_eight_choice_prefix": 0,
+    "smallest_core_ordinals": [
+      1,
+      10,
+      4,
+      8,
+      14,
+      15,
+      22
+    ],
+    "attempted_stone_choices": [
+      {
+        "stone_candidate": 48,
+        "hydrogen_survivors": []
+      },
+      {
+        "stone_candidate": 264,
+        "hydrogen_survivors": []
+      },
+      {
+        "stone_candidate": 480,
+        "hydrogen_survivors": []
+      },
+      {
+        "stone_candidate": 696,
+        "hydrogen_survivors": []
+      },
+      {
+        "stone_candidate": 3288,
+        "hydrogen_survivors": []
+      },
+      {
+        "stone_candidate": 3504,
+        "hydrogen_survivors": []
+      },
+      {
+        "stone_candidate": 3720,
+        "hydrogen_survivors": []
+      },
+      {
+        "stone_candidate": 3936,
+        "hydrogen_survivors": []
+      }
+    ],
+    "independent_pair_checks": 43280,
+    "production_oracle_disagreements": 0
+  },
+  "rejected_hypothesis": "Earlier seven choices alone exhaust hydrogen. Exhaustive replay instead found25 survivors; stone is a necessary member of the final blocking core.",
+  "root_cause": {
+    "location": "template_paths.select candidate/remove and chronological trail rollback, lines641-645 and681-686 in the frozen source",
+    "mechanism": "Rejections discovered while a deeper decision is active are restored with that decision even when their actual conflicting selected candidate belongs to an unchanged ancestor. These candidates are decoded and checked again on sibling branches.",
+    "evidence": "One unchanged seven-decision prefix;30,500 repeated decodes of candidates independently shown blocked by that prefix; all eight tried stone candidates block its25 surviving hydrogen candidates."
+  },
+  "recommendation": {
+    "change": "Associate each dynamic deletion with its actual blocking selected-candidate assignment, and restore only when that assignment is removed or replaced. Keep static deletions permanent.",
+    "invariant": "A dynamic candidate stays deleted only while its exact blocker assignment remains selected; assignment generations must prevent stale explanations after backtracking. Store one witnessed conflict, not an unbounded collection.",
+    "non_goals": [
+      "No larger caps",
+      "No new path templates",
+      "No source-specific special cases",
+      "No cache-capacity sweep",
+      "No skipping stone as an allegedly irrelevant decision",
+      "No factory feasibility claim"
+    ],
+    "verification_before_new_freeze": [
+      "Exhaustive-small-domain equivalence, including rollback and reassignment boundaries",
+      "All existing collision, owned-dock and work-limit witnesses",
+      "Explicit bounded explanation-storage accounting",
+      "Fresh cost admission, original control, then gated mall and held-outs"
+    ],
+    "remaining_uncertainty": "The diagnostic does not establish that this change completes the original control or mall within the original budgets."
+  },
+  "reproduction": {
+    "frozen_archive_sha256": "4a40451e64afde5d37a7903d87368459e16ab6c39b7f4ccf4f7c481e90c86b7e",
+    "commands": [
+      "python profile_selector.py frozen-reproduction.zip profile",
+      "python replay_conflict.py frozen-reproduction.zip profile"
+    ],
+    "runtime": "Use the project Python3.14 environment with flab2bp dependencies installed. Scripts dynamically import a temporary extraction of the frozen archive.",
+    "global_router_calls": 0
+  }
+}

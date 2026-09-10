@@ -1,0 +1,139 @@
+{
+  "source_commit": "27483797fe9df3e8f1e22635b80953e500bdb842",
+  "source_files_checked": 121,
+  "changed_source_files": [],
+  "baseline_count": 6,
+  "baseline_statuses": [
+    "refused",
+    "refused",
+    "refused",
+    "refused",
+    "refused",
+    "refused"
+  ],
+  "plan_bytes": 26062,
+  "plan_sha256": "40237bd494eae0b76371f6c39c7d33e7a8731a3361ce5aa643692b943b8690d8",
+  "plan_placeholders": [],
+  "scenarios": [
+    {
+      "surface": "web",
+      "budget": 15,
+      "process": {
+        "command": [
+          "uv",
+          "run",
+          "--frozen",
+          "python",
+          "diagnose_url.py",
+          "web",
+          "15"
+        ],
+        "cwd": "/tmp/flab-url-refusal-27483797",
+        "started_unix_s": 1789052131.8369305,
+        "elapsed_s": 20.29555043205619,
+        "returncode": 3
+      },
+      "status": "refused"
+    },
+    {
+      "surface": "web",
+      "budget": 30,
+      "process": {
+        "command": [
+          "uv",
+          "run",
+          "--frozen",
+          "python",
+          "diagnose_url.py",
+          "web",
+          "30"
+        ],
+        "cwd": "/tmp/flab-url-refusal-27483797",
+        "started_unix_s": 1789052152.1328619,
+        "elapsed_s": 34.70562610635534,
+        "returncode": 3
+      },
+      "status": "refused"
+    },
+    {
+      "surface": "web",
+      "budget": 60,
+      "process": {
+        "command": [
+          "uv",
+          "run",
+          "--frozen",
+          "python",
+          "diagnose_url.py",
+          "web",
+          "60"
+        ],
+        "cwd": "/tmp/flab-url-refusal-27483797",
+        "started_unix_s": 1789052186.8388216,
+        "elapsed_s": 65.2681967979297,
+        "returncode": 3
+      },
+      "status": "refused"
+    },
+    {
+      "surface": "cli",
+      "budget": 15,
+      "process": {
+        "command": [
+          "uv",
+          "run",
+          "--frozen",
+          "python",
+          "diagnose_url.py",
+          "cli",
+          "15"
+        ],
+        "cwd": "/tmp/flab-url-refusal-27483797",
+        "started_unix_s": 1789052252.1073067,
+        "elapsed_s": 98.49631327576935,
+        "returncode": 3
+      },
+      "status": "refused"
+    },
+    {
+      "surface": "cli",
+      "budget": 30,
+      "process": {
+        "command": [
+          "uv",
+          "run",
+          "--frozen",
+          "python",
+          "diagnose_url.py",
+          "cli",
+          "30"
+        ],
+        "cwd": "/tmp/flab-url-refusal-27483797",
+        "started_unix_s": 1789052350.6039164,
+        "elapsed_s": 185.6934566181153,
+        "returncode": 3
+      },
+      "status": "refused"
+    },
+    {
+      "surface": "cli",
+      "budget": 60,
+      "process": {
+        "command": [
+          "uv",
+          "run",
+          "--frozen",
+          "python",
+          "diagnose_url.py",
+          "cli",
+          "60"
+        ],
+        "cwd": "/tmp/flab-url-refusal-27483797",
+        "started_unix_s": 1789052536.2979,
+        "elapsed_s": 355.45145657099783,
+        "returncode": 3
+      },
+      "status": "refused"
+    }
+  ]
+}

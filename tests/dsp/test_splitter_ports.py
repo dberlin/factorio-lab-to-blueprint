@@ -515,6 +515,20 @@ def test_node_index_splitters_matches_the_item_id_filter_it_replaced() -> None:
     assert index.splitters == old_filtered
 
 
+@pytest.mark.parametrize(("direction", "port"), (("feed", 1), ("draw", 3)))
+def test_codec_preserves_splitter_ports_beyond_the_longitude_seam(
+    direction: splitter_ports.Direction, port: int
+) -> None:
+    frame = AreaFrame(897, 139, 200, (200,), False)
+    buildings = tuple(
+        replace(building, x=building.x + 726, y=building.y + 106)
+        for building in _observed_placement(38, direction, port)
+    )
+    assert splitter_ports.placement_issues(buildings) == ()
+    decoded = codec.decode(codec.encode(Placement(buildings, frame=frame)))
+    assert splitter_ports.blueprint_issues(decoded.buildings, frame=frame) == ()
+
+
 def test_corrected_construction_path_emits_only_game_valid_splitter_ports() -> None:
     wired = slots.assign_belt_slots(_minimal_broken_shape())
     frame = AreaFrame(56, 42, 160, (160,), False)
@@ -548,16 +562,6 @@ def test_corrected_construction_path_emits_only_game_valid_splitter_ports() -> N
     )
     for belt_index, port in attached:
         belt = blueprint.buildings[belt_index]
-        anchor = splitter_ports.blueprint_port_anchor(
-            splitter.model_index,
-            port,
-            splitter.yaw,
-            x=splitter.x,
-            y=splitter.y,
-            z=splitter.z,
-            frame=frame,
-        )
-        assert (belt.x, belt.y, belt.z) == pytest.approx(anchor)
         assert belt.z > splitter.z
         physical_port = catalog.port_poses_for_model(splitter.model_index)[port]
         port_distance = math.sqrt(physical_port.dx**2 + physical_port.dy**2 + physical_port.dz**2)

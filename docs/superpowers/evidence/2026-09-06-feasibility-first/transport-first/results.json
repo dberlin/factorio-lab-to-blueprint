@@ -1,0 +1,361 @@
+{
+  "decision": "NO-GO for central-bank dedicated-access-column topology",
+  "baseline": "f93f84b609d61efb54b6c52212e4f1a4ac4195d0",
+  "original_factory_successes": 0,
+  "frozen_specs_verified": 7,
+  "full_factory_repeat_runs": 0,
+  "full_suite_run": false,
+  "production_source_changed": false,
+  "type_diagnostics": "LSP incomplete: pyright and basedpyright servers failed; no full type-check pass claimed",
+  "script_sha256": {
+    "planned_service.py": "bd2f3a2dfa1da3e90a885701dcfa97cb5bb9a6cef04277d97dea79da2c4fe592",
+    "transport_first.py": "2202f3d6e73a83e204a01345704f232713910bb6f200f87d13f1431f63619fdd",
+    "channel_probe.py": "003c03bf6e6c0419f2860cb7ae986a46969a48fb069b05485cff7d9de559a1b0",
+    "channel_mechanics.py": "f1b9d160cbc89d95531a38aff92d01aea4b4f76cbd8468053246a6bb241ad470",
+    "run_experiment.py": "1a115b159944b93cfa99cdfc7b88eecc171d07f86468b08334abab58fcb803a8",
+    "analyze_topology.py": "1c738d74e96008244217bbd9eabc0c16c361e2ce3c5a0cff5acfdfd12f814e38"
+  },
+  "primary_and_held_out": [
+    {
+      "strips": 56,
+      "demands": 149,
+      "roles": {
+        "internal": 120,
+        "external": 20,
+        "output": 9
+      },
+      "shared_roots": 1,
+      "prelinked": 0,
+      "shared_groups": [
+        [
+          "fire-ice",
+          "unsprayed",
+          [
+            6274,
+            6750
+          ]
+        ]
+      ],
+      "module_area": 35589,
+      "banks": 6,
+      "access_columns": 678,
+      "trunk_rows": 15,
+      "levels": 27,
+      "frame": [
+        1081,
+        154
+      ],
+      "area": 166474,
+      "fits_band": false,
+      "case": "unsprayed-mall",
+      "held_out": false,
+      "spec_sha256": "3995a1266312d463293bae0a8e01b6f95f254550df54c56e5888e6d846e00ff3",
+      "outcome": "topology-band-refused",
+      "original_factory_gate": false,
+      "settlement": "not reached: primary physical integration refused",
+      "coater_service_demands": 0,
+      "original_spray_rate": "0",
+      "multiplexed_access_optimistic_price": {
+        "frame": [
+          523,
+          154
+        ],
+        "fits_band_cost_only": true,
+        "physical_status": "unproved cross-layer access and shared-column conflicts; not an admitted plan"
+      },
+      "elapsed_s": 0.9594125079456717
+    },
+    {
+      "strips": 46,
+      "demands": 271,
+      "roles": {
+        "internal": 92,
+        "local": 79,
+        "external": 14,
+        "output": 7,
+        "coater-service": 79
+      },
+      "shared_roots": 1,
+      "prelinked": 0,
+      "shared_groups": [
+        [
+          "iron-ore",
+          "requires-spray",
+          [
+            8215,
+            8220
+          ]
+        ]
+      ],
+      "module_area": 22597,
+      "banks": 5,
+      "access_columns": 787,
+      "trunk_rows": 27,
+      "levels": 27,
+      "frame": [
+        1073,
+        154
+      ],
+      "area": 165242,
+      "fits_band": false,
+      "case": "coated-mall",
+      "held_out": false,
+      "spec_sha256": "2ac9f763d8bca40a93e11f6e6c45ca41ec3fb763a501aefa97a323d18cd0f68e",
+      "outcome": "topology-band-refused",
+      "original_factory_gate": false,
+      "settlement": "not reached: primary physical integration refused",
+      "coater_service_demands": 79,
+      "original_spray_rate": "16081549/562500",
+      "local_service_sharing_price": {
+        "global_service_interfaces": 41,
+        "frame": [
+          959,
+          154
+        ],
+        "fits_band_cost_only": true,
+        "physical_status": "not implemented: needs locally compiled and globally connected service roots"
+      },
+      "multiplexed_access_optimistic_price": {
+        "frame": [
+          401,
+          154
+        ],
+        "fits_band_cost_only": true,
+        "physical_status": "unproved cross-layer access and shared-column conflicts; not an admitted plan"
+      },
+      "elapsed_s": 0.5454373401589692
+    },
+    {
+      "strips": 10,
+      "demands": 27,
+      "roles": {
+        "internal": 11,
+        "external": 13,
+        "output": 3
+      },
+      "shared_roots": 0,
+      "prelinked": 0,
+      "shared_groups": [],
+      "module_area": 7058,
+      "banks": 1,
+      "access_columns": 104,
+      "trunk_rows": 6,
+      "levels": 27,
+      "frame": [
+        270,
+        154
+      ],
+      "area": 41580,
+      "fits_band": true,
+      "case": "three-output",
+      "held_out": false,
+      "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+      "outcome": "band-admitted-unverified",
+      "original_factory_gate": false,
+      "settlement": "not reached: primary physical integration refused",
+      "coater_service_demands": 0,
+      "original_spray_rate": "0",
+      "multiplexed_access_optimistic_price": {
+        "frame": [
+          183,
+          154
+        ],
+        "fits_band_cost_only": true,
+        "physical_status": "unproved cross-layer access and shared-column conflicts; not an admitted plan"
+      },
+      "elapsed_s": 0.2240620709490031
+    },
+    {
+      "strips": 53,
+      "demands": 443,
+      "roles": {
+        "internal": 134,
+        "local": 139,
+        "external": 19,
+        "output": 12,
+        "coater-service": 139
+      },
+      "shared_roots": 0,
+      "prelinked": 0,
+      "shared_groups": [],
+      "module_area": 14284,
+      "banks": 9,
+      "access_columns": 1137,
+      "trunk_rows": 57,
+      "levels": 27,
+      "frame": [
+        1374,
+        154
+      ],
+      "area": 211596,
+      "fits_band": false,
+      "case": "universe-matrix",
+      "held_out": false,
+      "spec_sha256": "8eb481d486228dfaed052af14cb8d8c9aeca8c1c3d35bf07fc6679cfe9bcb101",
+      "outcome": "topology-band-refused",
+      "original_factory_gate": false,
+      "settlement": "not reached: primary physical integration refused",
+      "coater_service_demands": 139,
+      "original_spray_rate": "10184438/5859375",
+      "local_service_sharing_price": {
+        "global_service_interfaces": 50,
+        "frame": [
+          1054,
+          154
+        ],
+        "fits_band_cost_only": false,
+        "physical_status": "not implemented: needs locally compiled and globally connected service roots"
+      },
+      "multiplexed_access_optimistic_price": {
+        "frame": [
+          417,
+          154
+        ],
+        "fits_band_cost_only": true,
+        "physical_status": "unproved cross-layer access and shared-column conflicts; not an admitted plan"
+      },
+      "elapsed_s": 0.5710156951099634
+    },
+    {
+      "strips": 49,
+      "demands": 123,
+      "roles": {
+        "internal": 98,
+        "external": 18,
+        "output": 7
+      },
+      "shared_roots": 1,
+      "prelinked": 0,
+      "shared_groups": [
+        [
+          "iron-ore",
+          "unsprayed",
+          [
+            7561,
+            7899
+          ]
+        ]
+      ],
+      "module_area": 26970,
+      "banks": 5,
+      "access_columns": 577,
+      "trunk_rows": 12,
+      "levels": 27,
+      "frame": [
+        889,
+        154
+      ],
+      "area": 136906,
+      "fits_band": true,
+      "case": "unsprayed-mall-075",
+      "held_out": true,
+      "spec_sha256": "d6aade99fcafb5bdb4603a3cdde32115632305d3cf0bbec5a74f6fd53588e54c",
+      "outcome": "band-admitted-unverified",
+      "original_factory_gate": false,
+      "settlement": "not reached: primary physical integration refused",
+      "coater_service_demands": 0,
+      "original_spray_rate": "0",
+      "multiplexed_access_optimistic_price": {
+        "frame": [
+          412,
+          154
+        ],
+        "fits_band_cost_only": true,
+        "physical_status": "unproved cross-layer access and shared-column conflicts; not an admitted plan"
+      },
+      "elapsed_s": 0.680691545130685
+    },
+    {
+      "strips": 59,
+      "demands": 161,
+      "roles": {
+        "internal": 130,
+        "external": 22,
+        "output": 9
+      },
+      "shared_roots": 1,
+      "prelinked": 0,
+      "shared_groups": [
+        [
+          "fire-ice",
+          "unsprayed",
+          [
+            7873,
+            8460
+          ]
+        ]
+      ],
+      "module_area": 44130,
+      "banks": 6,
+      "access_columns": 708,
+      "trunk_rows": 18,
+      "levels": 27,
+      "frame": [
+        1233,
+        154
+      ],
+      "area": 189882,
+      "fits_band": false,
+      "case": "unsprayed-mall-125",
+      "held_out": true,
+      "spec_sha256": "8b767432f5260328ab80cbf2d8528ec8c02475d81a52074e8b242fa3db2a89e9",
+      "outcome": "topology-band-refused",
+      "original_factory_gate": false,
+      "settlement": "not reached: primary physical integration refused",
+      "coater_service_demands": 0,
+      "original_spray_rate": "0",
+      "multiplexed_access_optimistic_price": {
+        "frame": [
+          642,
+          154
+        ],
+        "fits_band_cost_only": true,
+        "physical_status": "unproved cross-layer access and shared-column conflicts; not an admitted plan"
+      },
+      "elapsed_s": 1.0492652680259198
+    },
+    {
+      "strips": 57,
+      "demands": 186,
+      "roles": {
+        "internal": 153,
+        "external": 18,
+        "output": 15
+      },
+      "shared_roots": 0,
+      "prelinked": 0,
+      "shared_groups": [],
+      "module_area": 13164,
+      "banks": 7,
+      "access_columns": 770,
+      "trunk_rows": 30,
+      "levels": 27,
+      "frame": [
+        963,
+        151
+      ],
+      "area": 145413,
+      "fits_band": true,
+      "case": "unsprayed-universe",
+      "held_out": true,
+      "spec_sha256": "8337dfe1999a9f82d1bc8c92649db1fcaf1621dd3ef112bf9540ad9978d35033",
+      "outcome": "band-admitted-unverified",
+      "original_factory_gate": false,
+      "settlement": "not reached: primary physical integration refused",
+      "coater_service_demands": 0,
+      "original_spray_rate": "0",
+      "multiplexed_access_optimistic_price": {
+        "frame": [
+          333,
+          151
+        ],
+        "fits_band_cost_only": true,
+        "physical_status": "unproved cross-layer access and shared-column conflicts; not an admitted plan"
+      },
+      "elapsed_s": 0.42667163792066276
+    }
+  ],
+  "control_artifact": "allocated-channel-physical/three-output.json",
+  "mechanics_artifact": "channel-mechanics.json",
+  "scope": "Service sharing and multiplexed access are cost projections, not admitted physical factories."
+}

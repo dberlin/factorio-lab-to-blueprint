@@ -1,0 +1,310 @@
+{
+  "budget_s": 60.0,
+  "command": [
+    "diagnose_url.py",
+    "cli",
+    "60"
+  ],
+  "cwd": "/tmp/flab-url-refusal-27483797",
+  "details": {
+    "attempt_failures": [
+      {
+        "candidate": "no-proliferator",
+        "projection_failures": [],
+        "reason": "every packing that wired was rejected by our own validator (flow.self_loop_primed, flow.conservation; findings: flow.self_loop_primed (): 'hydrogen''s loop lane does not close: x-ray-cracking's own output sorter never reaches its own input pickups, so there is no lane to prime and the group has no source of it ({'item': 'hydrogen', 'recipe_id': 'x-ray-cracking'}); flow.conservation (140, 279, 280, 281, 1245): hydrogen: directed flow obligations are short by at least 47/80 items/s ({'item': 'hydrogen', 'demand': '61/3', 'supply': '4739/240', 'shortfall': '47/80'})); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run",
+        "stats": {
+          "alns_applied": 0.0,
+          "alns_choices": 0.0,
+          "alns_encode_errors": 0.0,
+          "alns_evaluations": 3.0,
+          "alns_operators": "destroy:failed-endpoints:0|destroy:band-boundary:0|repair:sequence-reinsert:0|repair:local-exact-pack:0",
+          "alns_routing_seconds": 0.0,
+          "alns_skipped_no_goods": 0.0,
+          "alns_window_accepted": 0.0,
+          "alns_window_seconds": 0.0,
+          "alns_window_solves": 0.0,
+          "attempts": 3.0,
+          "budget_unspent_s": 0.0,
+          "certify_skipped": 0.0,
+          "compaction_time_s": 0.12915808567777276,
+          "detailed_route_time_s": 48.57143798749894,
+          "distinct_assignments": 3.0,
+          "evaluations": 3.0,
+          "finalization_time_s": 3.84673013119027,
+          "pack_cp_deterministic_time_s": 0.15610245753048166,
+          "pack_cp_feasible": 3.0,
+          "pack_cp_infeasible": 0.0,
+          "pack_cp_last_best_bound": 2605834.0,
+          "pack_cp_last_objective": 6648018.0,
+          "pack_cp_last_status": "FEASIBLE",
+          "pack_cp_model_invalid": 0.0,
+          "pack_cp_optimal": 0.0,
+          "pack_cp_solves": 3.0,
+          "pack_cp_unknown": 0.0,
+          "pack_cp_wall_time_s": 0.6093338537029922,
+          "pack_time_s": 0.6279917727224529,
+          "pack_window_distinct_submodels": 0.0,
+          "pack_window_feasible": 0.0,
+          "pack_window_infeasible": 0.0,
+          "pack_window_model_invalid": 0.0,
+          "pack_window_optimal": 0.0,
+          "pack_window_repeated_submodel_seconds": 0.0,
+          "pack_window_repeated_submodels": 0.0,
+          "pack_window_solves": 0.0,
+          "pack_window_unknown": 0.0,
+          "preparation_time_s": 4.499047433026135,
+          "skipped_heights": 0.0,
+          "stale_draws": 0.0,
+          "stale_stop": 0.0,
+          "validation_time_s": 1.6110253832302988,
+          "window_accepted": 0.0,
+          "window_solves": 0.0
+        },
+        "strategy": "freeform"
+      },
+      {
+        "candidate": "no-proliferator",
+        "projection_failures": [],
+        "reason": "all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; exact validation failures: flow.conservation, flow.self_loop_primed; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an exact layout; island 3: deadline exhausted before finding an exact layout; exact validation failures: flow.self_loop_primed",
+        "stats": {},
+        "strategy": "sequence-pair"
+      },
+      {
+        "candidate": "all-products",
+        "projection_failures": [],
+        "reason": "the 60s deadline passed with no completed packing of 39 strips; 1 pack was routed in that time and the best of them still left 129 nets unrouted (worst 129), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec",
+        "stats": {
+          "alns_applied": 0.0,
+          "alns_choices": 0.0,
+          "alns_encode_errors": 0.0,
+          "alns_evaluations": 1.0,
+          "alns_operators": "destroy:failed-endpoints:0|destroy:band-boundary:0|repair:sequence-reinsert:0|repair:local-exact-pack:0",
+          "alns_routing_seconds": 0.0,
+          "alns_skipped_no_goods": 0.0,
+          "alns_window_accepted": 0.0,
+          "alns_window_seconds": 0.0,
+          "alns_window_solves": 0.0,
+          "attempts": 1.0,
+          "budget_unspent_s": 0.0,
+          "certify_skipped": 0.0,
+          "compaction_time_s": 0.0,
+          "detailed_route_time_s": 51.997384797781706,
+          "distinct_assignments": 1.0,
+          "evaluations": 1.0,
+          "finalization_time_s": 0.0,
+          "pack_cp_deterministic_time_s": 0.05202376556654319,
+          "pack_cp_feasible": 1.0,
+          "pack_cp_infeasible": 0.0,
+          "pack_cp_last_best_bound": 1382415.0,
+          "pack_cp_last_objective": 3320462.0,
+          "pack_cp_last_status": "FEASIBLE",
+          "pack_cp_model_invalid": 0.0,
+          "pack_cp_optimal": 0.0,
+          "pack_cp_solves": 1.0,
+          "pack_cp_unknown": 0.0,
+          "pack_cp_wall_time_s": 0.20241626584902406,
+          "pack_time_s": 0.2075156308710575,
+          "pack_window_distinct_submodels": 0.0,
+          "pack_window_feasible": 0.0,
+          "pack_window_infeasible": 0.0,
+          "pack_window_model_invalid": 0.0,
+          "pack_window_optimal": 0.0,
+          "pack_window_repeated_submodel_seconds": 0.0,
+          "pack_window_repeated_submodels": 0.0,
+          "pack_window_solves": 0.0,
+          "pack_window_unknown": 0.0,
+          "preparation_time_s": 7.59527803491801,
+          "skipped_heights": 0.0,
+          "stale_draws": 0.0,
+          "stale_stop": 0.0,
+          "validation_time_s": 0.0,
+          "window_accepted": 0.0,
+          "window_solves": 0.0
+        },
+        "strategy": "freeform"
+      },
+      {
+        "candidate": "all-products",
+        "projection_failures": [],
+        "reason": "all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an exact layout; island 3: deadline exhausted before finding an exact layout",
+        "stats": {},
+        "strategy": "sequence-pair"
+      },
+      {
+        "candidate": "output-products",
+        "projection_failures": [],
+        "reason": "the 60s deadline passed with no completed packing of 39 strips; 3 packs were routed in that time and the best of them still left 2 nets unrouted (worst 74), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec",
+        "stats": {
+          "alns_applied": 0.0,
+          "alns_choices": 1.0,
+          "alns_encode_errors": 0.0,
+          "alns_evaluations": 3.0,
+          "alns_operators": "destroy:failed-endpoints:1|destroy:band-boundary:0|repair:sequence-reinsert:0|repair:local-exact-pack:1",
+          "alns_routing_seconds": 0.0,
+          "alns_skipped_no_goods": 0.0,
+          "alns_window_accepted": 0.0,
+          "alns_window_seconds": 0.0,
+          "alns_window_solves": 0.0,
+          "attempts": 3.0,
+          "budget_unspent_s": 0.0,
+          "certify_skipped": 0.0,
+          "compaction_time_s": 0.0,
+          "detailed_route_time_s": 54.88827803451568,
+          "distinct_assignments": 3.0,
+          "evaluations": 3.0,
+          "finalization_time_s": 0.0,
+          "pack_cp_deterministic_time_s": 0.15602478263116037,
+          "pack_cp_feasible": 3.0,
+          "pack_cp_infeasible": 0.0,
+          "pack_cp_last_best_bound": 2127227.0,
+          "pack_cp_last_objective": 4660217.0,
+          "pack_cp_last_status": "FEASIBLE",
+          "pack_cp_model_invalid": 0.0,
+          "pack_cp_optimal": 0.0,
+          "pack_cp_solves": 3.0,
+          "pack_cp_unknown": 0.0,
+          "pack_cp_wall_time_s": 0.7128841071389616,
+          "pack_time_s": 0.734477526973933,
+          "pack_window_distinct_submodels": 0.0,
+          "pack_window_feasible": 0.0,
+          "pack_window_infeasible": 0.0,
+          "pack_window_model_invalid": 0.0,
+          "pack_window_optimal": 0.0,
+          "pack_window_repeated_submodel_seconds": 0.0,
+          "pack_window_repeated_submodels": 0.0,
+          "pack_window_solves": 0.0,
+          "pack_window_unknown": 0.0,
+          "preparation_time_s": 4.085531314834952,
+          "skipped_heights": 0.0,
+          "stale_draws": 0.0,
+          "stale_stop": 0.0,
+          "validation_time_s": 0.0,
+          "window_accepted": 0.0,
+          "window_solves": 0.0
+        },
+        "strategy": "freeform"
+      },
+      {
+        "candidate": "output-products",
+        "projection_failures": [
+          {
+            "band": 200,
+            "buildings": [
+              1679,
+              239
+            ],
+            "check": "game.belt_collide",
+            "detail": "belt probe overlaps the projected build collider"
+          },
+          {
+            "band": 200,
+            "buildings": [
+              3295,
+              87
+            ],
+            "check": "game.belt_collide",
+            "detail": "belt probe overlaps the projected build collider"
+          },
+          {
+            "band": 200,
+            "buildings": [
+              1401,
+              941
+            ],
+            "check": "game.belt_collide",
+            "detail": "belt probe overlaps the projected build collider"
+          },
+          {
+            "band": 200,
+            "buildings": [
+              3909,
+              89
+            ],
+            "check": "game.belt_collide",
+            "detail": "belt probe overlaps the projected build collider"
+          },
+          {
+            "band": 200,
+            "buildings": [
+              1393,
+              239
+            ],
+            "check": "game.belt_collide",
+            "detail": "belt probe overlaps the projected build collider"
+          }
+        ],
+        "reason": "all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; exact validation failures: game.belt_collide; no legal DSP latitude band/orientation accepts the final placement: band 200 game.belt_collide (1679, 239): belt probe overlaps the projected build collider; band 200 game.belt_collide (3295, 87): belt probe overlaps the projected build collider; band 200 game.belt_collide (1401, 941): belt probe overlaps the projected build collider; island 2: deadline exhausted before finding an exact layout; exact validation failures: flow.conservation, flow.self_loop_primed; island 3: deadline exhausted before finding an exact layout; exact validation failures: game.belt_collide; no legal DSP latitude band/orientation accepts the final placement: band 200 game.belt_collide (3909, 89): belt probe overlaps the projected build collider; band 200 game.belt_collide (1393, 239): belt probe overlaps the projected build collider",
+        "stats": {},
+        "strategy": "sequence-pair"
+      }
+    ],
+    "attempt_reasons": [
+      "freeform/no-proliferator: every packing that wired was rejected by our own validator (flow.self_loop_primed, flow.conservation; findings: flow.self_loop_primed (): 'hydrogen''s loop lane does not close: x-ray-cracking's own output sorter never reaches its own input pickups, so there is no lane to prime and the group has no source of it ({'item': 'hydrogen', 'recipe_id': 'x-ray-cracking'}); flow.conservation (140, 279, 280, 281, 1245): hydrogen: directed flow obligations are short by at least 47/80 items/s ({'item': 'hydrogen', 'demand': '61/3', 'supply': '4739/240', 'shortfall': '47/80'})); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run",
+      "sequence-pair/no-proliferator: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; exact validation failures: flow.conservation, flow.self_loop_primed; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an exact layout; island 3: deadline exhausted before finding an exact layout; exact validation failures: flow.self_loop_primed",
+      "freeform/all-products: the 60s deadline passed with no completed packing of 39 strips; 1 pack was routed in that time and the best of them still left 129 nets unrouted (worst 129), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec",
+      "sequence-pair/all-products: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an exact layout; island 3: deadline exhausted before finding an exact layout",
+      "freeform/output-products: the 60s deadline passed with no completed packing of 39 strips; 3 packs were routed in that time and the best of them still left 2 nets unrouted (worst 74), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec",
+      "sequence-pair/output-products: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; exact validation failures: game.belt_collide; no legal DSP latitude band/orientation accepts the final placement: band 200 game.belt_collide (1679, 239): belt probe overlaps the projected build collider; band 200 game.belt_collide (3295, 87): belt probe overlaps the projected build collider; band 200 game.belt_collide (1401, 941): belt probe overlaps the projected build collider; island 2: deadline exhausted before finding an exact layout; exact validation failures: flow.conservation, flow.self_loop_primed; island 3: deadline exhausted before finding an exact layout; exact validation failures: game.belt_collide; no legal DSP latitude band/orientation accepts the final placement: band 200 game.belt_collide (3909, 89): belt probe overlaps the projected build collider; band 200 game.belt_collide (1393, 239): belt probe overlaps the projected build collider"
+    ],
+    "budget_s": 60.0,
+    "projection_failures": [
+      {
+        "band": 200,
+        "buildings": [
+          1679,
+          239
+        ],
+        "check": "game.belt_collide",
+        "detail": "belt probe overlaps the projected build collider"
+      },
+      {
+        "band": 200,
+        "buildings": [
+          3295,
+          87
+        ],
+        "check": "game.belt_collide",
+        "detail": "belt probe overlaps the projected build collider"
+      },
+      {
+        "band": 200,
+        "buildings": [
+          1401,
+          941
+        ],
+        "check": "game.belt_collide",
+        "detail": "belt probe overlaps the projected build collider"
+      },
+      {
+        "band": 200,
+        "buildings": [
+          3909,
+          89
+        ],
+        "check": "game.belt_collide",
+        "detail": "belt probe overlaps the projected build collider"
+      },
+      {
+        "band": 200,
+        "buildings": [
+          1393,
+          239
+        ],
+        "check": "game.belt_collide",
+        "detail": "belt probe overlaps the projected build collider"
+      }
+    ],
+    "reason": "freeform/no-proliferator: every packing that wired was rejected by our own validator (flow.self_loop_primed, flow.conservation; findings: flow.self_loop_primed (): 'hydrogen''s loop lane does not close: x-ray-cracking's own output sorter never reaches its own input pickups, so there is no lane to prime and the group has no source of it ({'item': 'hydrogen', 'recipe_id': 'x-ray-cracking'}); flow.conservation (140, 279, 280, 281, 1245): hydrogen: directed flow obligations are short by at least 47/80 items/s ({'item': 'hydrogen', 'demand': '61/3', 'supply': '4739/240', 'shortfall': '47/80'})); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run; sequence-pair/no-proliferator: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; exact validation failures: flow.conservation, flow.self_loop_primed; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an exact layout; island 3: deadline exhausted before finding an exact layout; exact validation failures: flow.self_loop_primed; freeform/all-products: the 60s deadline passed with no completed packing of 39 strips; 1 pack was routed in that time and the best of them still left 129 nets unrouted (worst 129), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec; sequence-pair/all-products: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an exact layout; island 3: deadline exhausted before finding an exact layout; freeform/output-products: the 60s deadline passed with no completed packing of 39 strips; 3 packs were routed in that time and the best of them still left 2 nets unrouted (worst 74), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec; sequence-pair/output-products: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; exact validation failures: game.belt_collide; no legal DSP latitude band/orientation accepts the final placement: band 200 game.belt_collide (1679, 239): belt probe overlaps the projected build collider; band 200 game.belt_collide (3295, 87): belt probe overlaps the projected build collider; band 200 game.belt_collide (1401, 941): belt probe overlaps the projected build collider; island 2: deadline exhausted before finding an exact layout; exact validation failures: flow.conservation, flow.self_loop_primed; island 3: deadline exhausted before finding an exact layout; exact validation failures: game.belt_collide; no legal DSP latitude band/orientation accepts the final placement: band 200 game.belt_collide (3909, 89): belt probe overlaps the projected build collider; band 200 game.belt_collide (1393, 239): belt probe overlaps the projected build collider",
+    "spec_label": "no-proliferator, all-products, output-products",
+    "stats": {}
+  },
+  "elapsed_s": 353.74888897826895,
+  "exception_type": "NoValidLayout",
+  "finished_unix_s": 1789052891.2098324,
+  "message": "no valid layout for no-proliferator, all-products, output-products after 60s: freeform/no-proliferator: every packing that wired was rejected by our own validator (flow.self_loop_primed, flow.conservation; findings: flow.self_loop_primed (): 'hydrogen''s loop lane does not close: x-ray-cracking's own output sorter never reaches its own input pickups, so there is no lane to prime and the group has no source of it ({'item': 'hydrogen', 'recipe_id': 'x-ray-cracking'}); flow.conservation (140, 279, 280, 281, 1245): hydrogen: directed flow obligations are short by at least 47/80 items/s ({'item': 'hydrogen', 'demand': '61/3', 'supply': '4739/240', 'shortfall': '47/80'})); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run; sequence-pair/no-proliferator: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; exact validation failures: flow.conservation, flow.self_loop_primed; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an exact layout; island 3: deadline exhausted before finding an exact layout; exact validation failures: flow.self_loop_primed; freeform/all-products: the 60s deadline passed with no completed packing of 39 strips; 1 pack was routed in that time and the best of them still left 129 nets unrouted (worst 129), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec; sequence-pair/all-products: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an exact layout; island 3: deadline exhausted before finding an exact layout; freeform/output-products: the 60s deadline passed with no completed packing of 39 strips; 3 packs were routed in that time and the best of them still left 2 nets unrouted (worst 74), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec; sequence-pair/output-products: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; exact validation failures: game.belt_collide; no legal DSP latitude band/orientation accepts the final placement: band 200 game.belt_collide (1679, 239): belt probe overlaps the projected build collider; band 200 game.belt_collide (3295, 87): belt probe overlaps the projected build collider; band 200 game.belt_collide (1401, 941): belt probe overlaps the projected build collider; island 2: deadline exhausted before finding an exact layout; exact validation failures: flow.conservation, flow.self_loop_primed; island 3: deadline exhausted before finding an exact layout; exact validation failures: game.belt_collide; no legal DSP latitude band/orientation accepts the final placement: band 200 game.belt_collide (3909, 89): belt probe overlaps the projected build collider; band 200 game.belt_collide (1393, 239): belt probe overlaps the projected build collider. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.",
+  "source_commit": "27483797fe9df3e8f1e22635b80953e500bdb842",
+  "started_unix_s": 1789052537.4609416,
+  "status": "refused",
+  "surface": "cli",
+  "trace_enabled": false
+}

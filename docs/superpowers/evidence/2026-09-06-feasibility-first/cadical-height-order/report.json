@@ -1,0 +1,72 @@
+{
+  "revision": "height-order",
+  "rule_sha256": "8b8ce3d0b6500f92d3f00b921eef3f83c0d69a86cfa983206b50ee5a690e6e3f",
+  "control": {
+    "outcome": "VALIDATOR_COMPLETE_WITNESS",
+    "elapsed_s": 11.03044190723449,
+    "budget_s": 30.0,
+    "original_factory_gate": false
+  },
+  "archive_sha256": "990ad9d6fe5a3ce98fe95bc2585e27df2b9040079549ca7d6a2b907b195cb6be",
+  "members": 89,
+  "member_hashes_verified": true,
+  "cold_repeats": "NOT_REACHED",
+  "held_outs": "NOT_REACHED",
+  "promotion": false,
+  "mall": {
+    "outcome": "POLICY_BOUND",
+    "reason": "predicates work limit reached at 5000000",
+    "elapsed_s": 39.88606213312596,
+    "budget_s": 60.0,
+    "original_factory_gate": false,
+    "progress": {
+      "phase": "checking-model",
+      "work": {
+        "arcs": 515,
+        "augmentations": 141,
+        "audit_cells": 2679360,
+        "predicates": 4980242,
+        "candidates": 852063,
+        "assignments": 44
+      },
+      "stats": {
+        "started": 2157890.768385569,
+        "preparation_seconds": 4.395246258936822,
+        "candidate_variables": 846000,
+        "auxiliary_variables": 174678,
+        "occupancy_variables": 44676,
+        "clauses": 6107357,
+        "rounds": 44,
+        "native_calls": 447,
+        "solver_seconds": 8.566161496099085,
+        "collision_cuts": 8552,
+        "static_cuts": 0,
+        "entry_rejected_candidates": 96000,
+        "static_rejected_candidates": 107653,
+        "self_rejections": 1,
+        "selected_candidate_ids": {}
+      }
+    },
+    "supervisor": {
+      "command": [
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+        "-m",
+        "2026-09-09-cadical-height-order.template_experiment",
+        "run",
+        "unsprayed-mall"
+      ],
+      "exit": 0,
+      "hard_deadline_terminated": false,
+      "bootstrap_inclusive_seconds": 45.58799429517239,
+      "original_budget_s": 60.0,
+      "progress": {
+        "case": "unsprayed-mall",
+        "started_monotonic": 2157890.768113779,
+        "deadline": 2157950.768113779,
+        "budget_s": 60.0,
+        "outcome": "UNKNOWN"
+      },
+      "final_report_written": true
+    }
+  }
+}

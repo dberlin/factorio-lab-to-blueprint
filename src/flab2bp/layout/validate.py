@@ -34,7 +34,7 @@ from flab2bp.dsp import catalog as cat
 from flab2bp.dsp import codec, colliders, params, rules, splitter_ports
 from flab2bp.dsp import colliders as dsp_colliders
 from flab2bp.indexed import Sorters
-from flab2bp.layout import markers, slots
+from flab2bp.layout import markers, physical_flow, slots
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.buildings import Buildings
 from flab2bp.spec import BuildSpec, MachineGroup
@@ -238,12 +238,10 @@ def _dedup_ints(seq: Iterable[int]) -> tuple[int, ...]:
 class _Cache:
     """Derived indexes, built at most once per :func:`validate` call.
 
-    Nothing here changes a verdict.  Every field is a pure function of the
-    ``Context`` it hangs off, and several checks want the same one: measured on
-    a 37,225-building ``universe-matrix`` placement, ``flow.belt_capacity`` and
-    ``flow.headroom`` each rebuilt the whole ``_run_demand`` propagation, and
-    ``ctx.of_kind`` -- a full scan of every building -- was called once per
-    sorter from inside ``_item_share``, which made the sorter checks quadratic.
+    Every field derives from the immutable Context. Shared physical-flow
+    constraints/results serve acceptance checks; fair-share demand estimates
+    serve headroom and tier selection only. Group/item indexes avoid repeated
+    full-placement scans from inside per-sorter checks.
 
     It is a mutable box on a frozen ``Context`` on purpose: the Context is the
     immutable *statement* of what was placed, and this is scratch space for
@@ -281,6 +279,11 @@ class _Cache:
     sorter_peers: _SorterPeers | None = None
     coater_rides: dict[int, int] | None = None
     port_docks: tuple[_Dock, ...] | None = None
+    physical_model: _PhysicalFlow | None = None
+    physical_results: dict[
+        tuple[frozenset[physical_flow.ResourceKind], frozenset[str] | None, frozenset[int] | None],
+        physical_flow.Result,
+    ] = field(default_factory=dict)
     belts_by_tile: dict[tuple[int, int], tuple[int, ...]] | None = None
     addon_area_belts: dict[tuple[PlacedBuilding, int], int | None] = field(default_factory=dict)
     addon_crossing_reach: dict[tuple[int, int, int], int] = field(default_factory=dict)
@@ -5566,9 +5569,8 @@ def _conservation(ctx: Context) -> Iterable[Finding]:
     able to reach machine demand through the placement's directed belt tiles,
     junctions, sorters, and ports.  Run-level or undirected connectivity is not
     enough: a pickup upstream of an injection is starved even when both touch
-    the same lane.  :func:`_lane_balance` solves the exact single-commodity
-    feasibility problem for each item without assigning invented equal shares
-    at splitters or fan-outs.
+    the same lane. The shared physical-flow model retains pickup/injection
+    order and proves feasibility without assigning invented equal shares.
 
     The placement clause stops when the spec clause fires.  Routing is only a
     meaningful question once the recipe arithmetic balances; otherwise a
@@ -5601,304 +5603,326 @@ def _conservation(ctx: Context) -> Iterable[Finding]:
     yield from _lane_balance(ctx)
 
 
-@dataclass(slots=True)
-class _FlowEdge:
-    to: int
-    reverse: int
-    capacity: int
+@dataclass(frozen=True)
+class _PhysicalFlow:
+    model: physical_flow.Model
+    supplied: frozenset[str]
+    consumers: Mapping[str, tuple[int, ...]]
 
 
-def _add_flow_edge(
-    graph: list[list[_FlowEdge]],
-    source: int,
-    destination: int,
-    capacity: int,
-) -> None:
-    if capacity <= 0:
-        return
-    forward = _FlowEdge(destination, len(graph[destination]), capacity)
-    backward = _FlowEdge(source, len(graph[source]), 0)
-    graph[source].append(forward)
-    graph[destination].append(backward)
-
-
-def _flow_rate_units(rate: Fraction, scale: int) -> int:
-    return rate.numerator * (scale // rate.denominator)
-
-
-def _add_flow_link(
-    graph: list[list[_FlowEdge]],
-    predecessors: dict[int, set[int]],
-    source: int,
-    destination: int,
-    capacity: int,
-) -> None:
-    _add_flow_edge(graph, source, destination, capacity)
-    if capacity > 0:
-        predecessors[destination].add(source)
-
-
-def _max_flow(graph: list[list[_FlowEdge]], source: int, sink: int) -> int:
-    """Exact integer max flow; each augmentation saturates a real rate edge."""
-    total = 0
-    while True:
-        parent_node = [-1] * len(graph)
-        parent_edge = [-1] * len(graph)
-        parent_node[source] = source
-        pending = deque((source,))
-        while pending and parent_node[sink] < 0:
-            node = pending.popleft()
-            for edge_index, edge in enumerate(graph[node]):
-                if edge.capacity <= 0 or parent_node[edge.to] >= 0:
-                    continue
-                parent_node[edge.to] = node
-                parent_edge[edge.to] = edge_index
-                pending.append(edge.to)
-                if edge.to == sink:
-                    break
-        if parent_node[sink] < 0:
-            return total
-
-        amount: int | None = None
-        node = sink
-        while node != source:
-            previous = parent_node[node]
-            edge = graph[previous][parent_edge[node]]
-            amount = edge.capacity if amount is None else min(amount, edge.capacity)
-            node = previous
-        assert amount is not None
-        node = sink
-        while node != source:
-            previous = parent_node[node]
-            edge = graph[previous][parent_edge[node]]
-            edge.capacity -= amount
-            graph[node][edge.reverse].capacity += amount
-            node = previous
-        total += amount
-
-
-def _lane_balance(ctx: Context) -> Iterable[Finding]:
-    """Prove exact directed supply-to-demand feasibility for each supplied item.
-
-    Belt tiles remain distinct nodes, so a pickup before an injection cannot
-    consume that injection merely because both belong to one run.  Splitters,
-    native merges, fan-out sorters, and fan-in sorters are ordinary capacitated
-    edges: max flow lets game backpressure choose their allocation instead of
-    inventing equal shares.
-
-    Physical edges are capped at total demand because their throughput belongs
-    to the separate belt and sorter capacity checks.  Machine producer and
-    consumer endpoints are distinct, including when one recipe both consumes
-    and produces the same item.  An unresolved sorter identity is admitted for
-    every item, preserving the validator's permissive policy for unknown cargo.
-    """
+def _physical_flow(ctx: Context) -> _PhysicalFlow:
+    """Build one item-aware graph for conservation and all capacity queries."""
+    cached = ctx.cache.physical_model
+    if cached is not None:
+        return cached
     assert ctx.spec is not None
-    items = _sorter_items(ctx)
-    run_items = _run_items(ctx, items)
     bs = ctx.placement.buildings
-    makes: dict[int, Mapping[str, Fraction]] = {}
-    needs: dict[int, Mapping[str, Fraction]] = {}
-    for i, _ in ctx.of_kind(Kind.MACHINE):
-        group = ctx.group_for(i)
-        if group is None:
-            continue
-        makes[i] = group.outputs_per_machine
-        needs[i] = group.inputs_per_machine
-    supplied_items = {item for rates in makes.values() for item in rates}
-    supplied_items.update(ctx.spec.external_inputs)
-    wanted_items = sorted({item for rates in needs.values() for item in rates} & supplied_items)
-    physical_kinds = (Kind.BELT, Kind.SPLITTER, Kind.PILER)
-    building_count = len(bs)
-    source_node = 3 * building_count
-    external_node = source_node + 1
-    sink_node = source_node + 2
-    node_count = sink_node + 1
-    sorters = ctx.sorters()
-    belt_edges: list[tuple[int, int]] = []
+    physical = {
+        i for i, kind in enumerate(ctx.kinds) if kind in (Kind.BELT, Kind.SPLITTER, Kind.PILER)
+    }
+    edges: set[tuple[int, int]] = set()
     for index, belt in ctx.of_kind(Kind.BELT):
-        onward = belt.output_obj
+        if belt.output_obj in physical:
+            assert belt.output_obj is not None
+            edges.add((index, belt.output_obj))
+        if belt.input_obj in physical and ctx.kinds[belt.input_obj] is not Kind.BELT:
+            assert belt.input_obj is not None
+            edges.add((belt.input_obj, index))
+    incoming: dict[int, set[int]] = defaultdict(set)
+    outgoing: dict[int, set[int]] = defaultdict(set)
+    for source, sink in edges:
+        outgoing[source].add(sink)
+        incoming[sink].add(source)
+    sorter_items = _sorter_items(ctx)
+    sorters = ctx.sorters()
+    docks = _port_docks(ctx)
+    internal = _cached_closure(ctx, _cached_internal_seeds(ctx)[1])
+    carried = _run_items(ctx, sorter_items)
+    entry_items = {
+        index: {
+            item
+            for item in carried.get(index, set()) | {bs[b].carries_item for b in run.indices}
+            if item is not None
+        }
+        for index, run in enumerate(ctx.runs)
+        if index not in internal and not incoming[run.head]
+    }
+    attached = {ctx.runs[index].head for index in entry_items}
+    attached.update(index for index in physical if not outgoing[index])
+    for _, sorter in ctx.of_kind(Kind.SORTER):
+        attached.update(i for i in (sorter.input_obj, sorter.output_obj) if i in physical)
+    attached.update(dock.belt for dock in docks)
+    # Only untouched series interiors contract. A pickup or injection tile
+    # never shares a capacity variable with an earlier/later belt segment.
+    contracts: dict[int, set[int]] = defaultdict(set)
+    for source, sink in edges:
         if (
-            onward is not None
-            and 0 <= onward < building_count
-            and ctx.kinds[onward] in physical_kinds
+            source not in attached
+            and sink not in attached
+            and ctx.kinds[source] is Kind.BELT
+            and ctx.kinds[sink] is Kind.BELT
+            and len(outgoing[source]) == 1
+            and len(incoming[sink]) == 1
         ):
-            belt_edges.append((index, onward))
-        upstream = belt.input_obj
-        if (
-            upstream is not None
-            and 0 <= upstream < building_count
-            and ctx.kinds[upstream] in (Kind.SPLITTER, Kind.PILER)
-        ):
-            belt_edges.append((upstream, index))
-
-    def producer_node(machine: int) -> int:
-        return building_count + machine
-
-    def consumer_node(machine: int) -> int:
-        return 2 * building_count + machine
-
-    for item in wanted_items:
-        supply_rates = {machine: rates[item] for machine, rates in makes.items() if item in rates}
-        demand_rates = {machine: rates[item] for machine, rates in needs.items() if item in rates}
-        external_rate = ctx.spec.external_inputs.get(item, Fraction(0))
-        scale = math.lcm(
-            *(
-                rate.denominator
-                for rate in (*supply_rates.values(), *demand_rates.values(), external_rate)
-                if rate
-            )
-        )
-
-        total_demand = sum(_flow_rate_units(rate, scale) for rate in demand_rates.values())
-        if total_demand <= 0:
+            contracts[source].add(sink)
+            contracts[sink].add(source)
+    representative: dict[int, int] = {}
+    members: dict[int, tuple[int, ...]] = {}
+    for index in sorted(physical):
+        if index in representative:
             continue
-        graph: list[list[_FlowEdge]] = [[] for _ in range(node_count)]
-        predecessors: dict[int, set[int]] = defaultdict(set)
-        consumer_feeders: set[int] = set()
+        group: list[int] = []
+        pending = [index]
+        representative[index] = index
+        while pending:
+            here = pending.pop()
+            group.append(here)
+            for peer in contracts[here]:
+                if peer not in representative:
+                    representative[peer] = index
+                    pending.append(peer)
+        members[index] = tuple(sorted(group))
+    links = {
+        (representative[a], representative[b])
+        for a, b in edges
+        if representative[a] != representative[b]
+    }
+    neighbours: dict[int, set[int]] = defaultdict(set)
+    for source, sink in links:
+        neighbours[source].add(sink)
+        neighbours[sink].add(source)
+    # Transfers join transport components, never machine input/output pools.
+    for _, sorter in ctx.of_kind(Kind.SORTER):
+        if sorter.input_obj in physical and sorter.output_obj in physical:
+            source = representative[sorter.input_obj]
+            sink = representative[sorter.output_obj]
+            neighbours[source].add(sink)
+            neighbours[sink].add(source)
+    component_of: dict[int, int] = {}
+    components: list[tuple[int, ...]] = []
+    for index in members:
+        if index in component_of:
+            continue
+        group = []
+        pending = [index]
+        component_of[index] = len(components)
+        while pending:
+            here = pending.pop()
+            group.append(here)
+            for peer in neighbours[here]:
+                if peer not in component_of:
+                    component_of[peer] = len(components)
+                    pending.append(peer)
+        components.append(tuple(group))
+    links_by_component: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    for source, sink in links:
+        links_by_component[component_of[source]].append((source, sink))
+    makes: dict[str, dict[int, Fraction]] = defaultdict(dict)
+    needs: dict[str, dict[int, Fraction]] = defaultdict(dict)
+    for index, _ in ctx.of_kind(Kind.MACHINE):
+        group_spec = ctx.group_for(index)
+        if group_spec is None:
+            continue
+        for item, rate in group_spec.outputs_per_machine.items():
+            makes[item][index] = rate
+        for item, rate in group_spec.inputs_per_machine.items():
+            needs[item][index] = rate
+    supplied = frozenset(makes) | frozenset(ctx.spec.external_inputs)
+    items = sorted(
+        supplied | needs.keys() | ctx.spec.outputs.keys() | ctx.spec.surplus_outputs.keys()
+    )
+    arcs: list[physical_flow.Arc] = []
+    resource_arcs: dict[tuple[physical_flow.ResourceKind, int], list[int]] = defaultdict(list)
+    nodes: dict[tuple[str, int, int], int] = {}
+    consumers: dict[str, tuple[int, ...]] = {}
 
-        for belt_source, belt_destination in belt_edges:
-            _add_flow_link(graph, predecessors, belt_source, belt_destination, total_demand)
+    def node(item: str, kind: int, index: int = 0) -> int:
+        key = (item, kind, index)
+        result = nodes.get(key)
+        if result is None:
+            result = len(nodes)
+            nodes[key] = result
+        return result
 
-        for sorter_index in sorters.carrying_or_unknown(item):
+    def add(item: str, source: int, sink: int, capacity: Fraction, *, fixed: bool = False) -> int:
+        index = len(arcs)
+        arcs.append(
+            physical_flow.Arc(source, sink, capacity, item, capacity if fixed else Fraction(0))
+        )
+        return index
+
+    for item in items:
+        maximum = sum(makes[item].values(), Fraction(0)) + sum(needs[item].values(), Fraction(0))
+        exported = ctx.spec.outputs.get(item, Fraction(0)) + ctx.spec.surplus_outputs.get(
+            item, Fraction(0)
+        )
+        maximum += exported + ctx.spec.external_inputs.get(item, Fraction(0))
+        if maximum <= 0:
+            continue
+        selected_sorters = tuple(sorters.carrying_or_unknown(item))
+        selected_docks = tuple(
+            dock
+            for dock in docks
+            if ctx.kinds[dock.peer] is Kind.MACHINE and bs[dock.belt].carries_item in (None, item)
+        )
+        entries = [
+            ctx.runs[index].head for index, carried in entry_items.items() if item in carried
+        ]
+        seeds = set(entries)
+        for sorter_index in selected_sorters:
             sorter = sorters.building(sorter_index)
-            source = sorter.input_obj
-            destination = sorter.output_obj
+            seeds.update(i for i in (sorter.input_obj, sorter.output_obj) if i in physical)
+        seeds.update(dock.belt for dock in selected_docks)
+        selected_components = {component_of[representative[index]] for index in seeds}
+        if not selected_components and not selected_sorters and not selected_docks:
+            # Missing attachments are already machine.inputs_supplied /
+            # machine.output_removed failures, not transport capacity cuts.
+            continue
+        selected_nodes = {index for c in selected_components for index in components[c]}
+        boundary = node(item, 4)
+        for index in selected_nodes:
+            if ctx.kinds[index] is Kind.BELT:
+                arc = add(item, node(item, 0, index), node(item, 1, index), maximum)
+                resource_arcs[("belt", index)].append(arc)
+        for component in selected_components:
+            for source, sink in links_by_component[component]:
+                source_kind = 1 if ctx.kinds[source] is Kind.BELT else 0
+                add(item, node(item, source_kind, source), node(item, 0, sink), maximum)
+        producer_attachments: set[int] = set()
+        consumer_attachments: set[int] = set()
+        for sorter_index in selected_sorters:
+            sorter = sorters.building(sorter_index)
+            source, sink = sorter.input_obj, sorter.output_obj
             if (
                 source is None
-                or destination is None
-                or not 0 <= source < building_count
-                or not 0 <= destination < building_count
+                or sink is None
+                or not (0 <= source < len(bs) and 0 <= sink < len(bs))
             ):
                 continue
             if ctx.kinds[source] is Kind.MACHINE:
-                flow_source = producer_node(source)
-            elif ctx.kinds[source] in physical_kinds:
-                flow_source = source
+                origin = node(item, 2, source)
+                producer_attachments.add(source)
+            elif source in physical:
+                index = representative[source]
+                origin = node(item, 1 if ctx.kinds[index] is Kind.BELT else 0, index)
             else:
                 continue
-            if ctx.kinds[destination] is Kind.MACHINE:
-                flow_destination = consumer_node(destination)
-                if flow_source < building_count:
-                    consumer_feeders.add(flow_source)
-            elif ctx.kinds[destination] in physical_kinds:
-                flow_destination = destination
+            if ctx.kinds[sink] is Kind.MACHINE:
+                target = node(item, 3, sink)
+                consumer_attachments.add(sink)
+            elif sink in physical:
+                target = node(item, 0, representative[sink])
             else:
                 continue
-            _add_flow_link(
-                graph,
-                predecessors,
-                flow_source,
-                flow_destination,
-                total_demand,
-            )
-
-        for dock in _port_docks(ctx):
-            if ctx.kinds[dock.peer] is not Kind.MACHINE:
-                continue
-            moved = bs[dock.belt].carries_item
-            if moved is not None and moved != item:
-                continue
+            resource_arcs[("sorter", sorter_index)].append(add(item, origin, target, maximum))
+        for dock in selected_docks:
+            index = representative[dock.belt]
             if dock.draws:
-                _add_flow_link(
-                    graph,
-                    predecessors,
-                    producer_node(dock.peer),
-                    dock.belt,
-                    total_demand,
-                )
+                add(item, node(item, 2, dock.peer), node(item, 0, index), maximum)
+                producer_attachments.add(dock.peer)
             else:
-                _add_flow_link(
-                    graph,
-                    predecessors,
-                    dock.belt,
-                    consumer_node(dock.peer),
-                    total_demand,
-                )
-                consumer_feeders.add(dock.belt)
-
-        for machine, rate in supply_rates.items():
-            _add_flow_link(
-                graph,
-                predecessors,
-                source_node,
-                producer_node(machine),
-                _flow_rate_units(rate, scale),
-            )
-        for machine, rate in demand_rates.items():
-            _add_flow_link(
-                graph,
-                predecessors,
-                consumer_node(machine),
-                sink_node,
-                _flow_rate_units(rate, scale),
-            )
-
-        if external_rate > 0:
-            _add_flow_link(
-                graph,
-                predecessors,
-                source_node,
-                external_node,
-                _flow_rate_units(external_rate, scale),
-            )
-            for run_index, carried in _entry_items(ctx).items():
-                if item in carried:
-                    _add_flow_link(
-                        graph,
-                        predecessors,
-                        external_node,
-                        ctx.runs[run_index].head,
-                        total_demand,
+                add(item, node(item, 1, index), node(item, 3, dock.peer), maximum)
+                consumer_attachments.add(dock.peer)
+        for machine, rate in makes[item].items():
+            if machine in producer_attachments:
+                add(item, boundary, node(item, 2, machine), rate, fixed=True)
+        for machine, rate in needs[item].items():
+            if machine in consumer_attachments:
+                add(item, node(item, 3, machine), boundary, rate, fixed=True)
+        consumers[item] = tuple(sorted(needs[item].keys() & consumer_attachments))
+        external = ctx.spec.external_inputs.get(item, Fraction(0))
+        if item not in supplied:
+            # A capacity-only partial spec does not declare upstream supply.
+            # Conservation excludes this item; capacity still sees its load.
+            external = maximum
+        if external > 0:
+            external_node = node(item, 5)
+            add(item, boundary, external_node, external)
+            for index in entries:
+                add(item, external_node, node(item, 0, representative[index]), maximum)
+        export_node = node(item, 6) if exported else boundary
+        if exported:
+            add(item, export_node, boundary, exported, fixed=True)
+        for index in selected_nodes:
+            # A real belt tail can discharge cargo; a run boundary at a
+            # junction or mid-run sorter cannot manufacture an export.
+            if ctx.kinds[index] is Kind.BELT and any(not outgoing[b] for b in members[index]):
+                add(item, node(item, 1, index), export_node, maximum)
+    resources: list[physical_flow.Resource] = []
+    for (kind, index), indices in resource_arcs.items():
+        if kind == "belt":
+            buildings = members[index]
+            capacities = [
+                rate * ctx.stack_of(ctx.run_of[b])
+                for b in buildings
+                if (rate := cat.BELT_RATE.get(bs[b].item_id)) is not None
+            ]
+            capacity = min(capacities) if capacities else None
+        else:
+            sorter = bs[index]
+            anchors = _anchors(sorter)
+            capacity = None
+            if anchors is not None and sorter.item_id in cat.SORTER_RATE_AT_1:
+                (x1, y1, _), (x2, y2, _) = anchors
+                span = max(abs(x2 - x1), abs(y2 - y1))
+                if 1 <= span <= cat.SORTER_MAX_REACH:
+                    capacity = cat.sorter_rate(sorter.item_id, span) * _sorter_stack(
+                        ctx, index, sorter
                     )
+            buildings = (index,)
+        if capacity is not None:
+            resources.append(physical_flow.Resource(tuple(indices), capacity, kind, buildings))
+    cached = _PhysicalFlow(
+        physical_flow.Model(len(nodes), tuple(arcs), tuple(resources)), supplied, consumers
+    )
+    ctx.cache.physical_model = cached
+    return cached
 
-        delivered = _max_flow(graph, source_node, sink_node)
-        if delivered >= total_demand:
-            continue
-        consumers = sorted(demand_rates)
-        if (
-            delivered == 0
-            and len(consumers) == 1
-            and not predecessors.get(consumer_node(consumers[0]))
-        ):
-            # ``machine.inputs_supplied`` already names this unattached machine.
-            continue
 
-        reaches_consumer = set(consumer_feeders)
-        pending = list(consumer_feeders)
-        while pending:
-            node = pending.pop()
-            for previous in predecessors.get(node, ()):
-                if previous in reaches_consumer:
-                    continue
-                reaches_consumer.add(previous)
-                pending.append(previous)
-        lanes = sorted(
-            run_index
-            for run_index, run in enumerate(ctx.runs)
-            if any(belt in reaches_consumer for belt in run.indices)
-            and (
-                item in run_items.get(run_index, set())
-                or any(bs[belt].carries_item == item for belt in run.indices)
+def _solve_physical(
+    ctx: Context,
+    kinds: frozenset[physical_flow.ResourceKind] = frozenset(),
+    *,
+    items: frozenset[str] | None = None,
+    resources: frozenset[int] | None = None,
+) -> physical_flow.Result:
+    model = _physical_flow(ctx).model
+    if items is not None and all(arc.item in items for arc in model.arcs):
+        items = None
+    key = (kinds, items, resources)
+    cached = ctx.cache.physical_results.get(key)
+    if cached is None:
+        cached = physical_flow.solve(model, kinds, items=items, resources=resources)
+        ctx.cache.physical_results[key] = cached
+    return cached
+
+
+def _lane_balance(ctx: Context) -> Iterable[Finding]:
+    physical = _physical_flow(ctx)
+    result = _solve_physical(ctx, items=physical.supplied)
+    if result.feasible is True:
+        return
+    # Per-item diagnostics use the same model, only after the joint query
+    # failed. Successful full factories never rebuild/solve once per item.
+    for item in sorted(physical.supplied):
+        result = _solve_physical(ctx, items=frozenset({item}))
+        if result.feasible is True:
+            continue
+        consumers = physical.consumers.get(item, ())
+        bound = result.upper_bound
+        detail: dict[str, object] = {"item": item, "demand": str(result.required)}
+        if result.feasible is False:
+            assert bound is not None
+            detail.update(supply=str(bound), shortfall=str(result.required - bound))
+            message = (
+                f"{item}: directed flow obligations are short by at least "
+                f"{result.required - bound} items/s"
             )
-        )
-        want = Fraction(total_demand, scale)
-        have = Fraction(delivered, scale)
-        yield Finding(
-            "flow.conservation",
-            Severity.ERROR,
-            f"{len(consumers)} machine(s) consume {want} items/s of {item} but only "
-            f"{have} items/s of it can reach them in flow order "
-            f"(lanes {lanes[:6] or 'none'}); short by {want - have} items/s",
-            tuple(consumers[:5]),
-            {
-                "item": item,
-                "demand": str(want),
-                "supply": str(have),
-                "shortfall": str(want - have),
-                "consumers": len(consumers),
-                "lanes": lanes,
-            },
-        )
+        else:
+            message = (
+                f"{item}: native flow result has no exact feasibility or shortfall certificate"
+            )
+        yield Finding("flow.conservation", Severity.ERROR, message, consumers[:5], detail)
 
 
 def _belt_run_rate(ctx: Context, run: BeltRun) -> Fraction | None:
@@ -5913,86 +5937,88 @@ def _belt_run_rate(ctx: Context, run: BeltRun) -> Fraction | None:
 
 @check("flow.belt_capacity", needs_spec=True, needs_groups=True)
 def _belt_capacity(ctx: Context) -> Iterable[Finding]:
-    """No belt run may be asked to carry more than its tier sustains.
+    """All cargo must fit simultaneously, with no invented split allocation."""
+    yield from _capacity_findings(ctx, "flow.belt_capacity", "belt", joint=True)
 
-    The comparison is against the SUM across every item on the run, because a
-    lane is one pipe: 7/s of copper and 7/s of iron do not each fit in a 12/s
-    belt merely because neither exceeds 12 alone.
-    """
-    assert ctx.spec is not None
-    for ridx, per_item in sorted(_run_demand(ctx).items()):
-        run = ctx.runs[ridx]
-        # A run can be mixed after the finalizer's compaction merges two runs
-        # whose tiles were retiered differently, so the run's capacity is the
-        # SLOWEST tile in it -- that tile is what actually throttles the lane.
-        rate = _belt_run_rate(ctx, run)
-        if rate is None:
-            continue
-        # A belt's tier rate is CARGO per second; the stack says how many items
-        # ride in one cargo (design 5.5).  At stack 1 -- every unstacked save --
-        # this is the arithmetic it always was.
-        stack = ctx.stack_of(ridx)
-        capacity = rate * stack
-        required = sum(per_item.values(), Fraction(0))
-        if required <= capacity:
-            continue
-        breakdown = {
-            (k or "unattributed"): str(v)
-            for k, v in sorted(per_item.items(), key=lambda kv: (kv[0] is None, kv[0] or ""))
-        }
-        shared = " across " + ", ".join(breakdown) if len(per_item) > 1 else ""
-        # Name the stack when there is one, or a stacked refusal reads as a
-        # plain tier refusal and sends the reader to the wrong fix.
-        stacked = f" at stack {stack}" if stack > 1 else ""
-        yield Finding(
-            "flow.belt_capacity",
-            Severity.ERROR,
-            f"belt run {ridx} must carry {required} items/s{shared} but its tier "
-            f"sustains only {capacity}{stacked}",
-            run.indices,
-            {
-                "run": ridx,
-                "required": str(required),
-                "capacity": str(capacity),
-                "stack": stack,
-                "per_item": breakdown,
-            },
+
+def _capacity_findings(
+    ctx: Context,
+    check_name: str,
+    kind: physical_flow.ResourceKind,
+    *,
+    joint: bool = False,
+    resource_indices: frozenset[int] | None = None,
+) -> Iterable[Finding]:
+    baseline = _solve_physical(ctx)
+    if baseline.feasible is False:
+        # Missing supply/connectivity is a conservation finding, not evidence
+        # that a physical capacity was exceeded.
+        return
+    result = _solve_physical(ctx, frozenset({kind}), resources=resource_indices)
+    if joint and result.feasible is True:
+        sorter_result = _solve_physical(ctx, frozenset({"sorter"}))
+        if sorter_result.feasible is True:
+            result = _solve_physical(ctx, frozenset({"belt", "sorter"}))
+    if result.feasible is True:
+        return
+    physical = _physical_flow(ctx)
+    selected = [
+        resource
+        for resource, price in zip(physical.model.resources, result.resource_prices, strict=True)
+        if price > 0
+    ]
+    buildings = tuple(sorted({b for resource in selected for b in resource.buildings}))
+    detail: dict[str, object] = {
+        "required": str(result.required),
+        "resources": [_flow_resource_detail(ctx, resource) for resource in selected],
+    }
+    if result.feasible is False:
+        assert result.upper_bound is not None
+        shortfall = result.required - result.upper_bound
+        detail.update(upper_bound=str(result.upper_bound), shortfall=str(shortfall))
+        message = (
+            "shared physical capacity cannot satisfy fixed flow rates; "
+            f"exact shortfall at least {shortfall} items/s"
         )
+    else:
+        message = "native capacity result has no exact feasibility or shortfall certificate"
+    yield Finding(check_name, Severity.ERROR, message, buildings, detail)
+
+
+def _flow_resource_detail(ctx: Context, resource: physical_flow.Resource) -> dict[str, object]:
+    model = _physical_flow(ctx).model
+    detail: dict[str, object] = {
+        "kind": resource.kind,
+        "capacity": str(resource.capacity),
+        "buildings": resource.buildings,
+        "items": sorted({model.arcs[i].item for i in resource.arcs}),
+    }
+    index = resource.buildings[0]
+    if resource.kind == "belt":
+        run = ctx.run_of[index]
+        detail.update(run=run, stack=ctx.stack_of(run))
+    else:
+        sorter = ctx.placement.buildings[index]
+        detail.update(sorter=index, stack=_sorter_stack(ctx, index, sorter))
+        anchors = _anchors(sorter)
+        if anchors is not None:
+            (x1, y1, _), (x2, y2, _) = anchors
+            detail["span"] = str(max(abs(x2 - x1), abs(y2 - y1)))
+    return detail
 
 
 @check("piler.input_rate", needs_spec=True, needs_groups=True)
 def _piler_input_rate(ctx: Context) -> Iterable[Finding]:
-    """A piler's incoming cargo rate may not exceed its slowest belt tile."""
-    demand: dict[int, dict[str | None, Fraction]] | None = None
-    for piler_index, _piler in ctx.of_kind(Kind.PILER):
-        if demand is None:
-            demand = _run_demand(ctx)
-        for run_index in ctx.runs_feeding_junction(piler_index):
-            run = ctx.runs[run_index]
-            capacity = _belt_run_rate(ctx, run)
-            if capacity is None:
-                continue
-            required = sum(demand.get(run_index, {}).values(), Fraction(0))
-            stack = ctx.stack_of(run_index)
-            cargo_rate = required / stack
-            if cargo_rate <= capacity:
-                continue
-            yield Finding(
-                "piler.input_rate",
-                Severity.ERROR,
-                f"piler {piler_index} receives {required} items/s from belt run "
-                f"{run_index} at stack {stack}, or {cargo_rate} cargo/s, but that "
-                f"run's slowest belt sustains only {capacity} cargo/s",
-                (piler_index, *run.indices),
-                {
-                    "piler": piler_index,
-                    "run": run_index,
-                    "required": str(required),
-                    "stack": stack,
-                    "cargo_rate": str(cargo_rate),
-                    "capacity": str(capacity),
-                },
-            )
+    """Project the shared capacity model onto actual piler input runs."""
+    runs = {run for index, _ in ctx.of_kind(Kind.PILER) for run in ctx.runs_feeding_junction(index)}
+    if not runs:
+        return
+    selected = frozenset(
+        index
+        for index, resource in enumerate(_physical_flow(ctx).model.resources)
+        if resource.kind == "belt" and any(ctx.run_of[b] in runs for b in resource.buildings)
+    )
+    yield from _capacity_findings(ctx, "piler.input_rate", "belt", resource_indices=selected)
 
 
 def _sorter_stack(ctx: Context, index: int, s: PlacedBuilding) -> int:
@@ -6055,49 +6081,8 @@ def _stack_pickable(ctx: Context) -> Iterable[Finding]:
 
 @check("flow.sorter_capacity", needs_spec=True, needs_groups=True)
 def _sorter_capacity(ctx: Context) -> Iterable[Finding]:
-    """No sorter may be asked to move more than its tier sustains at its span."""
-    assert ctx.spec is not None
-    items = _sorter_items(ctx)
-    for i, s in ctx.of_kind(Kind.SORTER):
-        a = _anchors(s)
-        if a is None:
-            continue
-        (x1, y1, _), (x2, y2, _) = a
-        # Chebyshev, matching `sorter.reach`. For a straight sorter one axis is
-        # zero so the two agree, but keeping them in step stops a future
-        # non-integer anchor from being charged a longer span here than the
-        # reach check measured -- they must not disagree about the same sorter.
-        span = max(abs(x2 - x1), abs(y2 - y1))
-        if span < 1 or span > cat.SORTER_MAX_REACH:
-            continue  # sorter.reach already reported this
-        if s.item_id not in cat.SORTER_RATE_AT_1:
-            continue
-        # `catalog.SORTER_STACK_RATE_FACTOR` is True: a sorter carrying a stack
-        # of n moves n items on that trip, so its items/s scales with the stack
-        # it handles.  Which stack that is depends on which end of it is the
-        # belt -- it PICKS a run's cargo on the way in and FORMS one on the way
-        # out -- and it is the run's own stack, derived from what was built.
-        stack = _sorter_stack(ctx, i, s)
-        capacity = cat.sorter_rate(s.item_id, span) * stack
-        required = _sorter_demand(ctx, i, items)
-        if required is None or required <= capacity:
-            continue
-        moves = f" of {items[i]}" if items.get(i) else ""
-        yield Finding(
-            "flow.sorter_capacity",
-            Severity.ERROR,
-            f"sorter {i} must move {required} items/s{moves} across {span} tiles but "
-            f"sustains only {capacity}",
-            (i,) + tuple(x for x in (s.input_obj, s.output_obj) if x is not None),
-            {
-                "sorter": i,
-                "span": span,
-                "item": items.get(i),
-                "required": str(required),
-                "capacity": str(capacity),
-                "stack": stack,
-            },
-        )
+    """All sorter flows must fit their actual span and researched stack."""
+    yield from _capacity_findings(ctx, "flow.sorter_capacity", "sorter")
 
 
 @check("belt.tier_allowed", needs_spec=True)
@@ -6545,23 +6530,13 @@ def _propagate(
     ``succ``; ``downstream=False`` answers "what is put on before here" by
     walking ``pred``.
 
-    A junction DIVIDES.  Reaching node *m* from *n*, only ``1/len(preds(m))`` of
-    *m*'s downstream demand is charged to *n*, because *m*'s other predecessors
-    supply the rest -- charging each input a merge's whole load is how a
-    correctly split lane acquires an invented violation.  Symmetrically, a
-    junction's supply divides among its outputs.  Both divisions are exact
-    ``Fraction`` arithmetic; a float here would produce capacity verdicts that
-    depend on rounding, which is the one thing these checks exist to rule out.
+    Junction loads are divided evenly as a fair-share estimate. These exact
+    Fraction calculations are still estimates, not lower or upper bounds:
+    game backpressure need not choose equal allocations. No conservation,
+    belt-capacity, sorter-capacity or piler-input acceptance check uses them.
 
-    That even split is a fair-share ESTIMATE and not a bound, which is why
-    ``flow.conservation`` does not use this function at all: a DSP splitter is
-    not a fixed divider -- it feeds whichever output has room -- so charging a
-    lane its arithmetic share is right for "how loaded is this belt" and wrong
-    for "does anything starve".  See :func:`_lane_balance`.
-
-    Cycles contribute nothing rather than looping forever.  A belt cycle is a
-    real defect, but it is ``belt.acyclic``'s to report -- a capacity check that
-    hung on one would be strictly worse than one that under-reports it.
+    Cycles contribute nothing rather than looping forever; ``belt.acyclic``
+    reports the actual defect.
     """
     onward = ctx.succ if downstream else ctx.pred
     splits = ctx.pred if downstream else ctx.succ
@@ -6611,32 +6586,11 @@ def _sorter_flows(ctx: Context) -> tuple[dict[Node, dict[str | None, Fraction]],
 
 
 def _run_demand(ctx: Context) -> dict[int, dict[str | None, Fraction]]:
-    """Items/second each belt run must carry, broken down by item.
+    """Fair-share items/second estimates for headroom and heuristic retiering.
 
-    Two independent lower bounds on what a lane carries, and the answer is the
-    larger: what is taken OFF it (its own consumers, plus its share of every
-    consumer past the junctions it feeds) and what is put ON it (its own
-    producers, plus its share of everything pushed into the junctions that feed
-    it).  Both cross junctions, which is the whole point -- a trunk feeding four
-    branches through a splitter has no sorter of its own, so summing only the
-    sorters that touch it charged that trunk ZERO and missed every genuine
-    overload on it.
-
-    The max is also what un-inflates the ordinary case.  Adding the two used to
-    charge a lane its producer's 10/s *plus* its consumers' 10/s and call it
-    20/s, which is not what a belt carries: put 10 on and take 10 off and the
-    belt is carrying 10.  Measured on freeform's real output, five runs on
-    ``fan_out_spec`` were being double-charged this way.
-
-    The breakdown matters for shared lanes: a bare total says a lane is over
-    capacity without saying which items put it there.  The flows on one lane are
-    coupled by ONE capacity, so callers compare the SUM against the tier --
-    judging items independently would accept 7/s plus 7/s on a 12/s belt because
-    neither exceeds 12 alone.
-
-    Two checks want this -- ``flow.belt_capacity`` and ``flow.headroom`` -- and
-    it is the most expensive index the validator builds (two full propagations
-    over the flow graph, in Fractions).  Building it twice was 20% of certify.
+    Take the larger of propagated producer and consumer estimates rather
+    than charging the same cargo twice. Junction shares are not mandatory
+    physical loads. Acceptance uses the shared physical-flow model instead.
     """
     cached = ctx.cache.run_demand
     if cached is not None:
@@ -6733,14 +6687,12 @@ def id_map(spec: BuildSpec) -> IdMap:
 def belt_run_demands(
     placement: Placement, spec: BuildSpec
 ) -> tuple[tuple[BeltRun, ...], dict[int, dict[str | None, Fraction]], dict[int, int]]:
-    """Each belt run, the items/second it must carry by item, and its stack.
+    """Each run, its fair-share per-item rate estimate, and its physical stack.
 
-    The same runs ``_build_runs`` chains, the same demand ``_run_demand``
-    computes for ``flow.belt_capacity``, and the same stack ``Context.stack_of``
-    derives -- exposed so the belt-tier pass in ``layout/belt_tiers.py`` and the
-    judge can never disagree about what a run carries.  All three together, and
-    not the demand alone: a tier chosen against items where the judge counts
-    cargo would pay for an upgrade the lane does not need, or skip one it does.
+    Used by heuristic belt retiering and informational consumers. Estimates
+    may over- or under-attribute a junction branch; they are not capacity or
+    conservation certificates. The stack is shared with the actual validator
+    so retiering still converts items/second to cargo/second consistently.
     Runs no checks.
 
     When a machine cannot be resolved to a spec group the demand is empty: the

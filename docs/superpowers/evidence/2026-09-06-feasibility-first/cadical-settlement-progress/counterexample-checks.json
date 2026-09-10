@@ -1,0 +1,12 @@
+[
+  {
+    "exit": 0,
+    "stdout": "1 file reformatted\n",
+    "stderr": ""
+  },
+  {
+    "exit": 0,
+    "stdout": "All checks passed!\n",
+    "stderr": ""
+  }
+]

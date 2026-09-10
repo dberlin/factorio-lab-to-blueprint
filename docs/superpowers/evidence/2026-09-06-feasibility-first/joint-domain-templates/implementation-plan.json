@@ -1,0 +1,28 @@
+{
+  "goal": "Detect small residual-domain contradictions and backtrack using exact selected-blocker explanations in a separate bounded experiment.",
+  "approved_design": "User approved the four-step experiment: joint checks, blocker explanations, exhaustive correctness verification, and unchanged-limit control with existing downstream gates.",
+  "files": {
+    "template_paths.py": "Add a 32-candidate residual threshold and 4096-pair-probe local allowance; collect complete residuals, detect unsupported domain pairs, derive sufficient conflict sets from live blocker buckets, and unwind irrelevant DFS frames before retrying the latest explaining blocker.",
+    "template_experiment.py": "Freeze new search rules and auxiliary memory bounds; preserve all template, deadline, work-limit and acceptance rules.",
+    "template_joint_witness.py": "Real finite-path witnesses for earlier contradiction detection, ancestor restoration, multiple explaining blockers, compatible alternatives, and incomplete joint checks; independently expand cells and exhaust finite products.",
+    "template-pyrightconfig.json": "Include the new witness in focused checks."
+  },
+  "invariants": [
+    "Public select signature and complete-path geometry remain unchanged.",
+    "Each live deletion belongs to one exact selected-candidate lifetime; unselect drains its bucket before reassignment.",
+    "Only fully enumerated residual domains can prove a contradiction; residuals are ephemeral and discarded after each forward pass.",
+    "A pair is contradictory only after all candidate pairs fail. Local allowance exhaustion is unknown; global work/deadline refusals remain refusals.",
+    "The explanation unions every selected bucket owning a deletion in either contradictory domain. Static invalid candidates require no assignment assumption.",
+    "Jump only across selected assignments absent from the sufficient explanation. Discard their iterators; resume the latest explaining frame's existing iterator after restoring its bucket.",
+    "No learned candidate deletions, persistent nogoods, obligation-specific handling, cache-size change, new geometry family, or production integration."
+  ],
+  "verification": [
+    "Capture failing finite real-geometry reproduction before selector edits.",
+    "Run independent finite exhaustive cases including satisfiable ancestor changes and explanation lifetimes.",
+    "Replay recorded hydrogen/crystal residual paths: 625 pairs, zero support; verify unconditioned compatible alternative and partial-check unknown.",
+    "Run all existing focused template witnesses, Ruff and focused basedpyright once after implementation.",
+    "Measure all five cost admissions, freeze the separate policy, and run three-output with the existing 30-second and five-million-predicate limits.",
+    "Run only downstream cases admitted by unchanged prerequisite checks; preserve refusals otherwise.",
+    "Archive revision, source identities, evidence and isolated reproduction; verify old frozen identities remain unchanged."
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "kind": "exhaustive retained fixed-path pair geometry replay",
+  "source_flights_sha256": "7be50d3227e6f328f679c714cde32c1b410622365c7890c380221b6939789a30",
+  "flight_ids": [
+    61,
+    114
+  ],
+  "legal_global_heights": [
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26
+  ],
+  "height_pairs_checked": 576,
+  "height_pairs_with_full_segment_intersections": 576,
+  "scope": "Unchanged retained XY shapes only; not a proof the factory is infeasible."
+}

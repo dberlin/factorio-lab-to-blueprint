@@ -1,0 +1,38 @@
+{
+  "kind": "split-4",
+  "original_factory_gate": false,
+  "checks": [
+    "geom.footprint",
+    "geom.overlap",
+    "geom.collide",
+    "geom.belt_single_occupancy",
+    "geom.altitude_range",
+    "geom.altitude_step",
+    "geom.bounds",
+    "game.addon_supply",
+    "game.addon_facing",
+    "game.addon_corner",
+    "game.belt_crossing",
+    "game.belt_collide",
+    "belt.continuity",
+    "junction.stack_support",
+    "junction.ports",
+    "junction.colocated",
+    "junction.port_pose",
+    "junction.records_no_links",
+    "belt.link_adjacent",
+    "belt.acyclic"
+  ],
+  "skipped": [],
+  "errors": 0,
+  "findings": [],
+  "buildings": 29,
+  "junctions": 2,
+  "rated_leaves": [
+    "1/16",
+    "1/8",
+    "3/16",
+    "1/4"
+  ],
+  "junction_rate_conservation": true
+}

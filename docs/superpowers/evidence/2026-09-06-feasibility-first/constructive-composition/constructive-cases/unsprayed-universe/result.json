@@ -1,0 +1,16 @@
+{
+  "case": "unsprayed-universe",
+  "spec_sha256": "8337dfe1999a9f82d1bc8c92649db1fcaf1621dd3ef112bf9540ad9978d35033",
+  "budget_s": 60.0,
+  "original_factory_gate": false,
+  "global_router_calls": 0,
+  "obligations": 186,
+  "flights_required": 171,
+  "flights_available": 24,
+  "held_out": true,
+  "outcome": "constructive-control-refused",
+  "reason": "fixed one-level-per-flight construction needs 171 flight levels; original technology provides 24",
+  "elapsed_s": 0.5736039590556175,
+  "constructed_links": 0,
+  "junctions": []
+}

@@ -1,0 +1,14 @@
+{
+  "command": [
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.superpowers/sdd/2026-09-09-z3-feasibility/probe.py",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/docs/superpowers/evidence/2026-09-06-feasibility-first/joint-domain-templates/reproduction.zip",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.superpowers/sdd/2026-09-09-z3-feasibility/run"
+  ],
+  "exit": 0,
+  "elapsed_seconds_including_bootstrap": 108.31896816939116,
+  "terminated_at_deadline": null,
+  "deadline_phase": "audit",
+  "recovered_from_checkpoint": false,
+  "outcome": "COMPLETE_TEMPLATE_GEOMETRY_WITNESS"
+}

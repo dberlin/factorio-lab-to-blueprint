@@ -1,0 +1,15 @@
+{
+  "archive_sha256": "3011748376cf296888f6b3a1fdbc85b05416895014b06af12c865aa163016d17",
+  "restored_member_hashes": 177,
+  "command": [
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+    "-m",
+    "2026-09-10-cadical-wall-budget.supervisor_witness"
+  ],
+  "exit": 0,
+  "stdout": "{\"frozen_preflight\": \"PASS\", \"rss\": \"PASS\", \"layout_deadline\": \"PASS\", \"bootstrap_deadline\": \"PASS\", \"normal_exit\": \"PASS\", \"repeat_launch\": \"PASS\"}\n",
+  "stderr": "",
+  "full_mall_reexecuted": false,
+  "restored_launch_record_present": true,
+  "temporary_extraction_removed": true
+}

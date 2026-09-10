@@ -1,0 +1,7 @@
+{
+  "command": "import json; from flab2bp.layout import route_kernel; from flab2bp.layout import _route_kernel,_sequence_kernel; from flab2bp.dsp import _geometry_kernel; print(json.dumps({\"route_backend\":route_kernel.selected_backend(),\"route_so\":_route_kernel.__file__,\"sequence_so\":_sequence_kernel.__file__,\"geometry_so\":_geometry_kernel.__file__}))",
+  "returncode": 0,
+  "elapsed_s": 0.07678104005753994,
+  "stdout": "{\"route_backend\": \"cython\", \"route_so\": \"/tmp/flab-url-refusal-27483797/src/flab2bp/layout/_route_kernel.cpython-314-x86_64-linux-gnu.so\", \"sequence_so\": \"/tmp/flab-url-refusal-27483797/src/flab2bp/layout/_sequence_kernel.cpython-314-x86_64-linux-gnu.so\", \"geometry_so\": \"/tmp/flab-url-refusal-27483797/src/flab2bp/dsp/_geometry_kernel.cpython-314-x86_64-linux-gnu.so\"}\n",
+  "stderr": "warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead\n"
+}

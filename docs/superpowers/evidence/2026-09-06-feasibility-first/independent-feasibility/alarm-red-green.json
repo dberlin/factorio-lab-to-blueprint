@@ -1,0 +1,5 @@
+{
+  "exit": 0,
+  "stdout": "[{\"corrected\": false, \"evidence_flushed\": false, \"deadline_interrupted_flush\": true}, {\"corrected\": true, \"evidence_flushed\": true, \"deadline_interrupted_flush\": false}]\n",
+  "stderr": ""
+}

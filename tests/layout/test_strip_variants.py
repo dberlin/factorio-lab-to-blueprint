@@ -1880,6 +1880,58 @@ def _flanked_strip_for(spec: BuildSpec) -> routing_domain.Strip:
     return next(strip for strip in plan_strips(spec, strip_len=6) if strip.flank_outputs)
 
 
+@pytest.mark.parametrize("count", (1, 3))
+def test_flanked_output_drain_contains_only_productive_belts(count: int) -> None:
+    spec = BuildSpec(
+        groups=(
+            _group(
+                "circuit-board",
+                "em-rail-ejector",
+                count,
+                {"a": Fraction(1), "b": Fraction(1)},
+                {"out": Fraction(1)},
+            ),
+        )
+    )
+    strips = plan_strips(spec, strip_len=6)
+    belt_id = catalog.item_id(spec.belt_item_id)
+    for strip in strips:
+        assert strip.flank_outputs
+        canvas = routing_domain._Canvas()
+        _, outputs, _, _ = routing_domain._emit_strip(
+            canvas,
+            strip,
+            0,
+            0,
+            belt_id,
+            catalog.building(belt_id).model_index,
+            {"out": Fraction(strip.machines)},
+            {"a": Fraction(1), "b": Fraction(1)},
+            {"out": Fraction(1)},
+        )
+        product_sorters = [
+            building
+            for building in canvas.buildings
+            if catalog.is_sorter(building.item_id) and building.carries_item == "out"
+        ]
+        assert len(product_sorters) == strip.machines
+        reached: set[int] = set()
+        for sorter in product_sorters:
+            current = sorter.output_obj
+            path: set[int] = set()
+            while current is not None:
+                assert current not in path
+                path.add(current)
+                current = canvas.buildings[current].output_obj
+            assert next(iter(outputs.values())).belt in path
+            reached.update(path)
+        assert reached == {
+            index
+            for index, building in enumerate(canvas.buildings)
+            if catalog.is_belt(building.item_id) and building.carries_item == "out"
+        }
+
+
 def test_a_matrix_lab_seats_six_ingredients_as_six_single_item_lanes() -> None:
     """`universe-matrix` stops needing a mixed belt (spec §9 R2).
 

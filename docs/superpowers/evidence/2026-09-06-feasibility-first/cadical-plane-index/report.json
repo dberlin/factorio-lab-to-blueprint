@@ -1,0 +1,20 @@
+{
+  "revision": "plane-index",
+  "rule_sha256": "c0bdeda1b89783d2c08f11c423aaa3a0032bea4757c17ccc3dd85d007759046f",
+  "control": {
+    "outcome": "VALIDATOR_COMPLETE_WITNESS",
+    "elapsed_s": 10.916141260415316,
+    "budget_s": 30.0,
+    "original_factory_gate": false
+  },
+  "archive_sha256": "a69e51a008b800a21d644116322e940574a3e3fe82de7263db02d1f688aeb3f0",
+  "members": 77,
+  "member_hashes_verified": true,
+  "cold_repeats": "NOT_REACHED",
+  "held_outs": "NOT_REACHED",
+  "promotion": false,
+  "mall": {
+    "outcome": "NOT_RUN",
+    "reason": "Actual-mall pair-query predicates regressed from 6764 to 12609."
+  }
+}

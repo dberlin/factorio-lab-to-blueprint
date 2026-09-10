@@ -1,0 +1,23 @@
+{
+  "command": [
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+    "-m",
+    "2026-09-09-cadical-original-budget.template_experiment",
+    "run",
+    "three-output"
+  ],
+  "exit": -15,
+  "hard_deadline_terminated": true,
+  "bootstrap_inclusive_seconds": 35.61247499193996,
+  "original_budget_s": 30.0,
+  "progress": {
+    "case": "three-output",
+    "started_monotonic": 2148270.654575467,
+    "deadline": 2148300.654575467,
+    "budget_s": 30.0,
+    "outcome": "UNKNOWN"
+  },
+  "final_report_written": false,
+  "outcome": "UNKNOWN",
+  "reason": "hard deadline or missing final report; not infeasibility or acceptance"
+}

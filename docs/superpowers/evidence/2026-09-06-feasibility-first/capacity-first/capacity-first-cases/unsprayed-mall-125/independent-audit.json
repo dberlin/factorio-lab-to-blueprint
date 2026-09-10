@@ -1,0 +1,45 @@
+{
+  "case": "unsprayed-mall-125",
+  "original_factory_gate": false,
+  "audited_links": 34,
+  "full_segment_intersections": [],
+  "partial_geometry_only": true,
+  "impossible_height_cycle": [
+    {
+      "higher": 38,
+      "higher_item": "carbon-nanotube",
+      "lower": 143,
+      "lower_item": "gear",
+      "plane_crosses_ground_riser_at": [
+        [
+          433,
+          12
+        ]
+      ]
+    },
+    {
+      "higher": 143,
+      "higher_item": "gear",
+      "lower": 50,
+      "lower_item": "electromagnetic-turbine",
+      "plane_crosses_ground_riser_at": [
+        [
+          532,
+          61
+        ]
+      ]
+    },
+    {
+      "higher": 50,
+      "higher_item": "electromagnetic-turbine",
+      "lower": 38,
+      "lower_item": "carbon-nanotube",
+      "plane_crosses_ground_riser_at": [
+        [
+          623,
+          12
+        ]
+      ]
+    }
+  ]
+}

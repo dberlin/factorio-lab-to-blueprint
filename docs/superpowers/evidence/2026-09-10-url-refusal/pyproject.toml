@@ -1,0 +1,122 @@
+[project]
+name = "flab2bp"
+version = "0.1.0"
+description = "Convert FactorioLab URLs for Dyson Sphere Program into dense, pasteable DSP blueprints"
+readme = "README.md"
+authors = [
+    { name = "Daniel Berlin", email = "dberlin@dberlin.org" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    # ortools provides BOTH the CP-SAT solver (layout) and, via its SCIP/HiGHS
+    # backends, the MILP solver (rates).
+    #
+    # Do NOT add `highspy`. ortools bundles its own HiGHS inside libortools, and
+    # the two cannot share a process: import highspy first and ortools resolves
+    # HiGHS symbols into the incompatible library (`ImportError: Symbol not
+    # found: setLocalOptionValue`); import it second and it segfaults mid-solve,
+    # which showed up as the whole suite exiting 139.
+    "ortools>=9.15.6755",
+    "httpx>=0.27",
+    "pydantic>=2.13.4",
+    "sympy>=1.14.0",
+    "nodriver==0.47.0",
+    # Indexed domain types (`flab2bp.indexed`). Both are PURE PYTHON with no
+    # transitive dependencies, so neither can conflict with the ortools/HiGHS
+    # symbol problem above. They are importable ONLY from `flab2bp.indexed`;
+    # `tests/indexed/test_backend_containment.py` fails on any other import.
+    "littletable>=3.0",
+    "networkx>=3.4",
+]
+
+[project.scripts]
+flab2bp = "flab2bp.cli:main"
+# The web front end adds NO dependency: `flab2bp.web` is standard library plus
+# `httpx`, which is already required. There is deliberately no `[web]` extra to
+# install, because there is nothing in it -- the only thing the browser half
+# needs that Python cannot provide is `bun`, to build the TypeScript in `web/`.
+flab2bp-web = "flab2bp.web.server:main"
+
+[dependency-groups]
+build = [
+    "Cython==3.1.3",
+    "setuptools==80.9.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-timeout>=2.3",
+    "pytest-xdist>=3.6",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[build-system]
+requires = ["setuptools==80.9.0", "Cython==3.1.3"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+flab2bp = [
+    "py.typed",
+    "lab/vendored/*.json",
+    "dsp/data/*.json",
+    "layout/*.pyx",
+    "dsp/*.pyx",
+]
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The default run is the WHOLE suite. There is no `-m 'not slow'` here any more:
+# a default that hides the solver-heavy tests is not a fast test suite, it is a
+# test suite that is not being run, and every regression those tests exist to
+# catch lands unnoticed until someone remembers the incantation.
+#
+# Deliberately NOT parallel. CP-SAT already saturates the machine on its own --
+# a single solve runs at ~700% CPU -- so `-n auto` did not add throughput, it
+# subtracted it: 16 pytest workers x 16 CP-SAT search workers oversubscribed the
+# box by an order of magnitude, and because `time_budget_s` is wall-clock, every
+# solve then got a fraction of the search it was budgeted for. That is what made
+# the parallel run both slower and flakier than the serial one. It also split
+# the shared layout memo in `tests/conftest.py` into one cache per worker, so
+# the same placement was re-solved once per worker that happened to receive a
+# test needing it. One process, one cache, one solve.
+#
+# ``timeout`` is a backstop, not a search budget. It is generous on purpose:
+# emission and validation complete atomically after the requested search
+# deadline, so killing the process at that boundary would discard a result the
+# solver already found.
+addopts = "-q"
+timeout = 120
+markers = [
+    "network: hits the live FactorioLab dataset; gated on FLAB2BP_NETWORK_TESTS=1",
+    "bun: cross-validates against the dsp-blueprint-viewer TypeScript decoder",
+    "dotnet: differential-tests against the game's own C# in oracle/; needs the game installed",
+    "slow: solver-heavy; still runs by default -- deselect with `-m 'not slow'` if you must",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["littletable"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["networkx", "networkx.*"]
+ignore_missing_imports = true

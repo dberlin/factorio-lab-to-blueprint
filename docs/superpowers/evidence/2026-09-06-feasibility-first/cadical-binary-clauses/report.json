@@ -1,0 +1,413 @@
+{
+  "decision": "NO_GO_ORIGINAL_MALL",
+  "rule_sha256": "96d58bda11daa232d53c209613a96dd883f389a5ece653a4e48635abf9005af2",
+  "frozen_revisions_verified": 21,
+  "verification_commands_passed": 13,
+  "binary_boundary_pairs_passed": 36,
+  "identical_ordered_clauses": 105750,
+  "preparation_predicates_saved": 554763,
+  "control": {
+    "case": "three-output",
+    "outcome": "VALIDATOR_COMPLETE_WITNESS",
+    "reason": null,
+    "elapsed_s": 9.582777951844037,
+    "budget_s": 30.0,
+    "mode": "GEOMETRY_ONLY",
+    "original_factory_gate": false,
+    "global_router_calls": 0,
+    "supervisor": {
+      "command": [
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+        "-m",
+        "2026-09-09-cadical-binary-clauses.template_experiment",
+        "run",
+        "three-output"
+      ],
+      "exit": 0,
+      "hard_deadline_terminated": false,
+      "bootstrap_inclusive_seconds": 15.308086341246963,
+      "original_budget_s": 30.0,
+      "progress": {
+        "case": "three-output",
+        "started_monotonic": 2166986.69461232,
+        "deadline": 2167016.69461232,
+        "budget_s": 30.0,
+        "outcome": "UNKNOWN"
+      },
+      "final_report_written": true
+    },
+    "solver": {
+      "started": 2166986.694889637,
+      "preparation_seconds": 0.6592232929542661,
+      "logical_candidates": 140400,
+      "primary_variables": 6474,
+      "auxiliary_variables": 2661,
+      "guard_variables": 87,
+      "primitive_occurrences": 44330,
+      "primitive_descriptors": 5497,
+      "families": 156,
+      "clauses": 38902,
+      "rounds": 10,
+      "native_calls": 10,
+      "solver_seconds": 0.011726795695722103,
+      "collision_cuts": 3744,
+      "static_cuts": 0,
+      "entry_rejected_candidates": 15120,
+      "static_rejected_candidates": 16010,
+      "self_rejections": 0,
+      "selected_candidate_ids": {
+        "4": 17,
+        "5": 18,
+        "6": 21,
+        "7": 2181,
+        "8": 1304,
+        "9": 3652,
+        "10": 21,
+        "11": 1459,
+        "12": 44,
+        "13": 0,
+        "14": 22,
+        "15": 1257,
+        "16": 50,
+        "17": 207,
+        "18": 461,
+        "19": 25,
+        "20": 7,
+        "21": 32,
+        "22": 23,
+        "23": 22,
+        "24": 21,
+        "25": 22,
+        "26": 35,
+        "27": 21,
+        "28": 23,
+        "29": 22
+      }
+    },
+    "work": {
+      "arcs": 12046,
+      "augmentations": 533,
+      "audit_cells": 314236,
+      "predicates": 1227158,
+      "candidates": 140660,
+      "assignments": 10
+    }
+  },
+  "mall": {
+    "case": "unsprayed-mall",
+    "outcome": "POLICY_BOUND",
+    "reason": "CaDiCaL collision prohibition cap",
+    "elapsed_s": 4.4218143108300865,
+    "budget_s": 60.0,
+    "mode": "GEOMETRY_ONLY",
+    "original_factory_gate": false,
+    "global_router_calls": 0,
+    "supervisor": {
+      "command": [
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+        "-m",
+        "2026-09-09-cadical-binary-clauses.template_experiment",
+        "run",
+        "unsprayed-mall"
+      ],
+      "exit": 0,
+      "hard_deadline_terminated": false,
+      "bootstrap_inclusive_seconds": 11.527689869981259,
+      "original_budget_s": 60.0,
+      "progress": {
+        "case": "unsprayed-mall",
+        "started_monotonic": 2167116.521448472,
+        "deadline": 2167176.521448472,
+        "budget_s": 60.0,
+        "outcome": "UNKNOWN"
+      },
+      "final_report_written": true
+    },
+    "solver": {
+      "started": 2167116.52173478,
+      "preparation_seconds": 3.6507650916464627,
+      "logical_candidates": 846000,
+      "primary_variables": 38634,
+      "auxiliary_variables": 14791,
+      "guard_variables": 268,
+      "primitive_occurrences": 267900,
+      "primitive_descriptors": 31444,
+      "families": 833,
+      "clauses": 234728,
+      "rounds": 1,
+      "native_calls": 1,
+      "solver_seconds": 0.0045541380532085896,
+      "collision_cuts": 20000,
+      "static_cuts": 0,
+      "entry_rejected_candidates": 96000,
+      "static_rejected_candidates": 107653,
+      "self_rejections": 0,
+      "selected_candidate_ids": {}
+    },
+    "work": {
+      "arcs": 515,
+      "augmentations": 141,
+      "audit_cells": 94830,
+      "predicates": 4766907,
+      "candidates": 846141,
+      "assignments": 1
+    }
+  },
+  "cold_repeats": "NOT_REACHED",
+  "held_outs": "NOT_REACHED",
+  "production_promotion": false,
+  "ledger": {
+    "2026-09-09-cadical-conflict-family": {
+      "scope": "saved actual geometry,60s diagnostic; excludes emitter/settlement; not original acceptance",
+      "revision": "2026-09-09-cadical-conflict-family",
+      "outcome": "POLICY_BOUND",
+      "reason": "predicates work limit reached at 4999997",
+      "phases": {
+        "domains_and_static_geometry": {
+          "seconds": 0.8968608169816434,
+          "work": {
+            "predicates": 584598,
+            "audit_cells": 8187,
+            "candidates": 846000
+          }
+        },
+        "primitive_membership_preparation": {
+          "seconds": 0.7030637776479125,
+          "work": {
+            "predicates": 1250388,
+            "audit_cells": 0,
+            "candidates": 0
+          }
+        },
+        "factor_cardinality_threshold_cnf": {
+          "seconds": 0.2280947952531278,
+          "work": {
+            "predicates": 1055949,
+            "audit_cells": 0,
+            "candidates": 0
+          }
+        },
+        "static_exclusion_cnf": {
+          "seconds": 0.3273485228419304,
+          "work": {
+            "predicates": 753571,
+            "audit_cells": 0,
+            "candidates": 0
+          }
+        },
+        "native_solve": {
+          "seconds": 0.003983683884143829,
+          "work": {
+            "predicates": 0,
+            "audit_cells": 0,
+            "candidates": 0,
+            "assignments": 1
+          }
+        },
+        "selected_model_decode": {
+          "seconds": 0.005526142194867134,
+          "work": {
+            "predicates": 91791,
+            "audit_cells": 0,
+            "candidates": 0,
+            "assignments": 0
+          }
+        },
+        "selected_path_checks": {
+          "seconds": 0.07347468100488186,
+          "work": {
+            "predicates": 21558,
+            "audit_cells": 85506,
+            "candidates": 141,
+            "assignments": 0
+          }
+        },
+        "selected_pair_checks": {
+          "seconds": 0.08413919154554605,
+          "work": {
+            "predicates": 18434,
+            "audit_cells": 0,
+            "candidates": 0,
+            "assignments": 0
+          }
+        },
+        "family_compilation": {
+          "seconds": 0.4341198285110295,
+          "work": {
+            "predicates": 1223708,
+            "audit_cells": 0,
+            "candidates": 0,
+            "assignments": 0
+          }
+        }
+      },
+      "work": {
+        "predicates": 4999997,
+        "audit_cells": 93693,
+        "candidates": 846141,
+        "assignments": 1
+      },
+      "stats": {
+        "started": 2166750.767101336,
+        "preparation_seconds": 2.1553871743381023,
+        "logical_candidates": 846000,
+        "primary_variables": 38634,
+        "auxiliary_variables": 14763,
+        "guard_variables": 239,
+        "primitive_occurrences": 267900,
+        "primitive_descriptors": 31444,
+        "families": 656,
+        "clauses": 229704,
+        "rounds": 1,
+        "native_calls": 1,
+        "solver_seconds": 0.003949298989027739,
+        "collision_cuts": 15744,
+        "static_cuts": 0,
+        "entry_rejected_candidates": 96000,
+        "static_rejected_candidates": 107653,
+        "self_rejections": 0,
+        "selected_candidate_ids": {}
+      }
+    },
+    "2026-09-09-cadical-binary-clauses": {
+      "scope": "saved actual geometry,60s diagnostic; excludes emitter/settlement; not original acceptance",
+      "revision": "2026-09-09-cadical-binary-clauses",
+      "outcome": "POLICY_BOUND",
+      "reason": "CaDiCaL collision prohibition cap",
+      "phases": {
+        "domains_and_static_geometry": {
+          "seconds": 0.9128736201673746,
+          "work": {
+            "predicates": 584598,
+            "audit_cells": 8187,
+            "candidates": 846000
+          }
+        },
+        "primitive_membership_preparation": {
+          "seconds": 1.0009755468927324,
+          "work": {
+            "predicates": 1250388,
+            "audit_cells": 0,
+            "candidates": 0
+          }
+        },
+        "factor_cardinality_threshold_cnf": {
+          "seconds": 0.21488889586180449,
+          "work": {
+            "predicates": 824145,
+            "audit_cells": 0,
+            "candidates": 0
+          }
+        },
+        "static_exclusion_cnf": {
+          "seconds": 0.31472625816240907,
+          "work": {
+            "predicates": 430612,
+            "audit_cells": 0,
+            "candidates": 0
+          }
+        },
+        "native_solve": {
+          "seconds": 0.006588356103748083,
+          "work": {
+            "predicates": 0,
+            "audit_cells": 0,
+            "candidates": 0,
+            "assignments": 1
+          }
+        },
+        "selected_model_decode": {
+          "seconds": 0.007679593749344349,
+          "work": {
+            "predicates": 91791,
+            "audit_cells": 0,
+            "candidates": 0,
+            "assignments": 0
+          }
+        },
+        "selected_path_checks": {
+          "seconds": 0.11157604120671749,
+          "work": {
+            "predicates": 21558,
+            "audit_cells": 85506,
+            "candidates": 141,
+            "assignments": 0
+          }
+        },
+        "selected_pair_checks": {
+          "seconds": 0.16924584517255425,
+          "work": {
+            "predicates": 24835,
+            "audit_cells": 0,
+            "candidates": 0,
+            "assignments": 0
+          }
+        },
+        "family_compilation": {
+          "seconds": 0.7827590918168426,
+          "work": {
+            "predicates": 1538980,
+            "audit_cells": 0,
+            "candidates": 0,
+            "assignments": 0
+          }
+        }
+      },
+      "work": {
+        "predicates": 4766907,
+        "audit_cells": 93693,
+        "candidates": 846141,
+        "assignments": 1
+      },
+      "stats": {
+        "started": 2166874.535053812,
+        "preparation_seconds": 2.443492835853249,
+        "logical_candidates": 846000,
+        "primary_variables": 38634,
+        "auxiliary_variables": 14791,
+        "guard_variables": 268,
+        "primitive_occurrences": 267900,
+        "primitive_descriptors": 31444,
+        "families": 833,
+        "clauses": 234728,
+        "rounds": 1,
+        "native_calls": 1,
+        "solver_seconds": 0.006536254193633795,
+        "collision_cuts": 20000,
+        "static_cuts": 0,
+        "entry_rejected_candidates": 96000,
+        "static_rejected_candidates": 107653,
+        "self_rejections": 0,
+        "selected_candidate_ids": {}
+      }
+    }
+  },
+  "proof": [
+    {
+      "command": [
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+        "-m",
+        "2026-09-09-cadical-binary-clauses.binary_witness"
+      ],
+      "exit": 0,
+      "stdout": "{\"construction_predicates\": 24, \"equivalent_binary_exclusions\": true, \"exact_exclusion_clauses\": 6}\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+        "-c",
+        "import importlib,hashlib,json,time\nfrom itertools import product\nfrom pathlib import Path\nfrom pydantic import TypeAdapter\nold=importlib.import_module(\"2026-09-09-cadical-conflict-family.family_cnf\")\nnew=importlib.import_module(\"2026-09-09-cadical-binary-clauses.family_cnf\")\np=importlib.import_module(\"2026-09-09-cadical-binary-clauses.template_paths\")\nw=importlib.import_module(\"2026-09-09-cadical-binary-clauses.template_budget\")\nproblem=TypeAdapter(p.TemplateProblem).validate_json(Path('.superpowers/sdd/2026-09-09-cadical-interface-static/problem.json').read_text())\nds=p.domains(problem,w.WorkBudget(time.monotonic()+60))\nreports=[]\nfor encoder in (old.FactorCNF,new.FactorCNF):\n b=w.WorkBudget(time.monotonic()+60);h=hashlib.sha256();count=[0]\n def emit(clause):h.update((','.join(map(str,clause))+';').encode());count[0]+=1\n cnf=encoder(ds,emit,b)\n for di,d in enumerate(ds):\n  for ci in (0,1,23,24,199,d.count-1):cnf.exclude(di,ci)\n  cnf.guard(di,(1<<15)-1)\n reports.append({'clauses':count[0],'sha256':h.hexdigest(),'predicates':b.counts['predicates'],'variables':cnf.top_id})\nassert reports[0]['sha256']==reports[1]['sha256'] and reports[0]['variables']==reports[1]['variables']\nassert reports[1]['predicates']<reports[0]['predicates']\nfor a,b in product((-9,-2,-1,1,2,9),repeat=2):\n before=[];after=[];budget=w.WorkBudget(time.monotonic()+30)\n x=old.FactorCNF((),before.append,budget);y=new.FactorCNF((),after.append,budget)\n x.clause([a,b]);y._binary(a,b);assert before==after\nprint(json.dumps({'full_original_domain_cnf_equivalence':reports,'binary_boundary_pairs':36}))\n"
+      ],
+      "exit": 0,
+      "stdout": "{\"full_original_domain_cnf_equivalence\": [{\"clauses\": 105750, \"sha256\": \"be8a9f2fd00ea49a134eb866675bc1f7e3d47f0562df4c100e3b3fecd77ac5b2\", \"predicates\": 1092891, \"variables\": 53298}, {\"clauses\": 105750, \"sha256\": \"be8a9f2fd00ea49a134eb866675bc1f7e3d47f0562df4c100e3b3fecd77ac5b2\", \"predicates\": 852204, \"variables\": 53298}], \"binary_boundary_pairs\": 36}\n",
+      "stderr": ""
+    }
+  ],
+  "proof_baseline": "cadical-conflict-family reproduction.zip SHA256 cab123d13491c5a438c8a0b068d2166eecd7bc6382374508e5256a310e650637",
+  "environment": "Existing project checkout, Python .venv and cadical-feasibility/deps; see retained command records.",
+  "interpretation": "Exact ordered CNF preserved with 554763 fewer preparation predicates; full control accepted. Original mall reaches unchanged 20000 collision prohibition cap during first model refinement. Not factory infeasibility; no tuning or budget relaxation.",
+  "archive_sha256": "eda0e09180196e6f373e7ad2c5baaba8b5dacbe84a5dceb31171e5ae70b13dba",
+  "archive_members": 100,
+  "member_hashes_verified": true
+}

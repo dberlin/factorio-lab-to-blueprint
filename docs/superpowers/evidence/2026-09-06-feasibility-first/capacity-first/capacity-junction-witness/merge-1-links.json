@@ -1,0 +1,60 @@
+[
+  {
+    "item": "iron-ingot",
+    "source": 1,
+    "sink": 3,
+    "rate": "1",
+    "cells": [
+      [
+        10,
+        10,
+        0
+      ],
+      [
+        11,
+        10,
+        0
+      ],
+      [
+        12,
+        10,
+        0
+      ],
+      [
+        13,
+        10,
+        0
+      ]
+    ],
+    "role": "witness-boundary"
+  },
+  {
+    "item": "iron-ingot",
+    "source": 6,
+    "sink": 2,
+    "rate": "1",
+    "cells": [
+      [
+        7,
+        10,
+        0
+      ],
+      [
+        8,
+        10,
+        0
+      ],
+      [
+        9,
+        10,
+        0
+      ],
+      [
+        10,
+        10,
+        0
+      ]
+    ],
+    "role": "witness-boundary"
+  }
+]

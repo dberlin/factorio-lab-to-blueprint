@@ -1,0 +1,12 @@
+{
+  "outcome": "INDEPENDENT_COMPLETE_GEOMETRY_WITNESS",
+  "diagnostic_only": true,
+  "solver_rerun": false,
+  "actual_control_problem_equality": true,
+  "problem_sha256": "fc0288585c67647540b36b69e0f33979f0b8bab6a15cedad53d9065aa39faf11",
+  "selected_obligations": 26,
+  "independent_selected_pairs": 325,
+  "static_and_dynamic_geometry_agree": true,
+  "original_budget_gate": "UNKNOWN; no construction/audit completion",
+  "no_function_profile": true
+}

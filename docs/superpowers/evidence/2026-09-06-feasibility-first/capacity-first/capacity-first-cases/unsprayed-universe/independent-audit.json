@@ -1,0 +1,69 @@
+{
+  "case": "unsprayed-universe",
+  "original_factory_gate": false,
+  "audited_links": 44,
+  "full_segment_intersections": [],
+  "partial_geometry_only": true,
+  "impossible_height_cycle": [
+    {
+      "higher": 35,
+      "higher_item": "electromagnetic-matrix",
+      "lower": 47,
+      "lower_item": "electromagnetic-turbine",
+      "plane_crosses_ground_riser_at": [
+        [
+          519,
+          13
+        ]
+      ]
+    },
+    {
+      "higher": 47,
+      "higher_item": "electromagnetic-turbine",
+      "lower": 102,
+      "lower_item": "magnet",
+      "plane_crosses_ground_riser_at": [
+        [
+          453,
+          13
+        ]
+      ]
+    },
+    {
+      "higher": 102,
+      "higher_item": "magnet",
+      "lower": 50,
+      "lower_item": "energy-matrix",
+      "plane_crosses_ground_riser_at": [
+        [
+          226,
+          126
+        ]
+      ]
+    },
+    {
+      "higher": 50,
+      "higher_item": "energy-matrix",
+      "lower": 40,
+      "lower_item": "electromagnetic-matrix",
+      "plane_crosses_ground_riser_at": [
+        [
+          208,
+          47
+        ]
+      ]
+    },
+    {
+      "higher": 40,
+      "higher_item": "electromagnetic-matrix",
+      "lower": 35,
+      "lower_item": "electromagnetic-matrix",
+      "plane_crosses_ground_riser_at": [
+        [
+          728,
+          13
+        ]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,116 @@
+{
+  "bounded_escape_work": {
+    "assignments": 6,
+    "candidates": 62,
+    "predicates": 2122
+  },
+  "assignment_cap": 8,
+  "joint_blocker_exhaustive_cases": [
+    {
+      "ancestor_escape": false,
+      "sibling_escape": false,
+      "feasible": false,
+      "backjump": {
+        "contradictory_domains": [
+          3,
+          4
+        ],
+        "selected_at_contradiction": [
+          0,
+          1,
+          2
+        ],
+        "crossed_active_irrelevant_domain": 2,
+        "resumed_explaining_domain": 1
+      },
+      "work": {
+        "assignments": 14,
+        "candidates": 442,
+        "predicates": 11458
+      }
+    },
+    {
+      "ancestor_escape": false,
+      "sibling_escape": true,
+      "feasible": true,
+      "backjump": {
+        "contradictory_domains": [
+          3,
+          4
+        ],
+        "selected_at_contradiction": [
+          0,
+          1,
+          2
+        ],
+        "crossed_active_irrelevant_domain": 2,
+        "resumed_explaining_domain": 1
+      },
+      "work": {
+        "assignments": 7,
+        "candidates": 127,
+        "predicates": 7043
+      }
+    },
+    {
+      "ancestor_escape": true,
+      "sibling_escape": false,
+      "feasible": true,
+      "backjump": {
+        "contradictory_domains": [
+          3,
+          4
+        ],
+        "selected_at_contradiction": [
+          0,
+          1,
+          2
+        ],
+        "crossed_active_irrelevant_domain": 2,
+        "resumed_explaining_domain": 1
+      },
+      "work": {
+        "assignments": 12,
+        "candidates": 284,
+        "predicates": 11357
+      }
+    },
+    {
+      "ancestor_escape": true,
+      "sibling_escape": true,
+      "feasible": true,
+      "backjump": {
+        "contradictory_domains": [
+          3,
+          4
+        ],
+        "selected_at_contradiction": [
+          0,
+          1,
+          2
+        ],
+        "crossed_active_irrelevant_domain": 2,
+        "resumed_explaining_domain": 1
+      },
+      "work": {
+        "assignments": 7,
+        "candidates": 126,
+        "predicates": 7043
+      }
+    }
+  ],
+  "incomplete_local_checks": {
+    "incomplete_compatible_pair": "unknown",
+    "incomplete_unsupported_pair": "unknown",
+    "complete_unsupported_pair": [
+      0,
+      1
+    ],
+    "compatible_solution_after_local_cutoff": true,
+    "work": {
+      "candidates": 16,
+      "predicates": 451,
+      "assignments": 4
+    }
+  }
+}

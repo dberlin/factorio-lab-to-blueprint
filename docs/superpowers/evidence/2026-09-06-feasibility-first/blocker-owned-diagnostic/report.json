@@ -1,0 +1,283 @@
+{
+  "scope": "Bounded diagnosis only. No selector changes, new policy, cap/deadline changes, production integration, or mall bypass.",
+  "decision": "Recommend one separately approved experiment: bounded residual-domain pair consistency with blocker explanations and conflict-directed backtracking.",
+  "frozen_archive_sha256": "76627e7d23cfb840c542839e1e47cb52a0847e827b2947eb5a623f4a53147668",
+  "frozen_identities": {
+    "2026-09-08-transport-first": {
+      "rule_sha256": "0004c2846e2d9da69a2738d2a976b3b6d1abad0ff67903a0ef23e35b237e4e75",
+      "source_files": 23,
+      "admissions": 5,
+      "specs": 5,
+      "all_match": true
+    },
+    "2026-09-09-blocker-owned-templates": {
+      "rule_sha256": "cca61b0440ef96a960ad9d5585400378645235cd6e9f745f43ba7f4deab09404",
+      "source_files": 24,
+      "admissions": 5,
+      "specs": 5,
+      "all_match": true
+    }
+  },
+  "profile": {
+    "same_frozen_outcome_and_counters": true,
+    "outcome": "POLICY_BOUND",
+    "work": {
+      "arcs": 28,
+      "augmentations": 26,
+      "audit_cells": 39,
+      "predicates": 5000000,
+      "assignments": 177,
+      "candidates": 17589
+    },
+    "maximum_selected_depth": 9,
+    "obligations": 26,
+    "predicates": {
+      "self:search": 422287,
+      "static:search": 1532474,
+      "decode": 0,
+      "pair_miss": 3045239,
+      "pair_hit": 0
+    },
+    "unattributed_predicates": 0,
+    "pair_repeated_miss_predicates": 25724,
+    "pair_repeated_miss_share_percent": 0.5144799999999999,
+    "assignment_attempts_by_obligation": {
+      "1": 1,
+      "10": 1,
+      "4": 1,
+      "6": 1,
+      "8": 1,
+      "14": 1,
+      "15": 1,
+      "22": 161,
+      "13": 9
+    },
+    "static_segment_predicates_after_first_query": 1436615,
+    "global_router_calls": 0
+  },
+  "conditional_obstruction": {
+    "fixed_prefix": {
+      "1": 0,
+      "10": 240,
+      "4": 1081,
+      "6": 1082,
+      "8": 217,
+      "14": 2,
+      "15": 457
+    },
+    "targets": {
+      "13": {
+        "item": "hydrogen",
+        "domain_count": 5400,
+        "static_bad": 15,
+        "first_blocker_counts": {
+          "10": 150,
+          "4": 3155,
+          "8": 985,
+          "15": 20,
+          "6": 50,
+          "14": 965,
+          "1": 35
+        },
+        "surviving_ids": [
+          48,
+          264,
+          480,
+          696,
+          3288,
+          3504,
+          3720,
+          3936,
+          912,
+          1128,
+          1344,
+          1560,
+          1776,
+          4152,
+          4368,
+          4584,
+          4800,
+          5016,
+          1992,
+          2208,
+          2424,
+          2640,
+          2856,
+          5232,
+          3072
+        ],
+        "surviving_count": 25
+      },
+      "18": {
+        "item": "optical-grating-crystal",
+        "domain_count": 5400,
+        "static_bad": 15,
+        "first_blocker_counts": {
+          "10": 150,
+          "4": 3155,
+          "8": 985,
+          "15": 20,
+          "6": 50,
+          "14": 965,
+          "1": 35
+        },
+        "surviving_ids": [
+          48,
+          264,
+          480,
+          696,
+          3288,
+          3504,
+          3720,
+          3936,
+          912,
+          1128,
+          1344,
+          1560,
+          1776,
+          4152,
+          4368,
+          4584,
+          4800,
+          5016,
+          1992,
+          2208,
+          2424,
+          2640,
+          2856,
+          5232,
+          3072
+        ],
+        "surviving_count": 25
+      }
+    },
+    "joint_pairs_checked": 625,
+    "compatible_pairs": 0,
+    "unavoidable_shared_corridor": {
+      "x": -8,
+      "z": 3,
+      "y_inclusive": [
+        -17,
+        25
+      ],
+      "cell_count": 43
+    },
+    "independent_comparisons": 42750,
+    "oracle_disagreements": 0,
+    "work": {
+      "predicates": 3214798,
+      "candidates": 10872
+    },
+    "unconditioned_pair": {
+      "ids": {
+        "13": 0,
+        "18": 1
+      },
+      "paths": {
+        "13": [
+          [
+            0,
+            -19,
+            0
+          ],
+          [
+            2,
+            -19,
+            0
+          ],
+          [
+            2,
+            -19,
+            3
+          ],
+          [
+            9,
+            -19,
+            3
+          ],
+          [
+            9,
+            27,
+            3
+          ],
+          [
+            9,
+            27,
+            0
+          ],
+          [
+            11,
+            27,
+            0
+          ]
+        ],
+        "18": [
+          [
+            0,
+            -28,
+            0
+          ],
+          [
+            2,
+            -28,
+            0
+          ],
+          [
+            2,
+            -28,
+            4
+          ],
+          [
+            9,
+            -28,
+            4
+          ],
+          [
+            9,
+            29,
+            4
+          ],
+          [
+            9,
+            29,
+            0
+          ],
+          [
+            11,
+            29,
+            0
+          ]
+        ]
+      },
+      "scope": "static-valid pair without the seven selected blockers"
+    },
+    "interpretation": "The first seven assignments leave individually nonempty but jointly incompatible domains for hydrogen 13 and optical-grating crystal 18. No stone 22 assignment can repair this fixed prefix.",
+    "oracle_scope": "Expanded integer-cell geometry independently checks pair compatibility and owned endpoint sharing; static path and fixed-obstacle checks use the frozen implementation."
+  },
+  "recommendation": {
+    "change": "When residual domains become small, test pair support within an explicit work bound. On a complete no-support proof, propagate the selected-blocker explanation and backtrack beyond assignments absent from that explanation.",
+    "why": "Per-domain forward checking misses this joint contradiction. The recorded 161 stone attempts and 9 hydrogen attempts retain the same already-infeasible seven-choice prefix.",
+    "safety": "A capped or incomplete pair check is unknown, never infeasible. Preserve existing templates, collision rules, limits, and factory acceptance gates. Do not hard-code obligation IDs or corridor geometry.",
+    "acceptance_for_future_experiment": "Detect this conditional contradiction without enumerating irrelevant stone assignments; validate explanations and restoration against finite exhaustive cases; then rerun the frozen control under unchanged limits. No claim of solving the control before that run.",
+    "alternatives_rejected": {
+      "larger_pair_cache": "Repeated pair misses consume only 0.51448% of the predicate budget.",
+      "static_segment_memoization_first": "Repeated static query work is material, but removing it would not eliminate this proven dead prefix; no whole-run speedup or success has been demonstrated.",
+      "template_redesign_now": "Conditional infeasibility does not establish template-family infeasibility. Candidates 13:0 and 18:1 coexist when the seven selected blockers are omitted."
+    }
+  },
+  "claim_limits": [
+    "No complete factory selection was produced.",
+    "No global template-family or factory infeasibility proof.",
+    "The compatible unconditioned pair is not a complete factory solution.",
+    "Graphene obligation 9 was interrupted, not proved individually infeasible.",
+    "No implementation or promotion decision made; mall and held-out gates remain unchanged."
+  ],
+  "reproduce": {
+    "environment": "Existing project Python 3.14 environment; run from project root with PYTHONPATH=src. Extract diagnostic reproduction.zip to a separate directory.",
+    "commands": [
+      ".venv/bin/python <extracted>/profile_selector.py <extracted>/frozen-reproduction.zip <output>",
+      ".venv/bin/python <extracted>/frontier_replay.py <extracted>/frozen-reproduction.zip <output>"
+    ],
+    "checks": "Both scripts exit 0; exact frozen outcome/work counters; 625 residual pairs, zero compatible; 42750 independent comparisons, zero disagreements."
+  }
+}

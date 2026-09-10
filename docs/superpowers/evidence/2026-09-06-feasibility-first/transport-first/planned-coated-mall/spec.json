@@ -1,0 +1,70 @@
+{
+  "groups": [
+    {
+      "recipe_id": "ray-receiver",
+      "machine_item_id": "re-composing-assembler",
+      "count": 1,
+      "proliferator_mode": "products",
+      "inputs_per_machine": {
+        "high-purity-silicon": "112/15",
+        "photon-combiner": "56/15",
+        "processor": "28/15",
+        "steel": "112/15",
+        "super-magnetic-ring": "112/15"
+      },
+      "outputs_per_machine": {
+        "ray-receiver": "7/15"
+      }
+    }
+  ],
+  "external_inputs": {
+    "high-purity-silicon": "112/15",
+    "photon-combiner": "56/15",
+    "processor": "28/15",
+    "steel": "112/15",
+    "super-magnetic-ring": "112/15",
+    "proliferator-3": "7/15"
+  },
+  "outputs": {
+    "ray-receiver": "7/15"
+  },
+  "surplus_outputs": {},
+  "belt_item_id": "conveyor-belt-3",
+  "belt_items_per_second": "30",
+  "belt_upgrades": [],
+  "sorter_item_ids": [
+    "sorter-1",
+    "sorter-2",
+    "sorter-3",
+    "sorter-4"
+  ],
+  "machine_rank": "exact",
+  "machine_moves": [],
+  "power_tower_item_id": "tesla-tower",
+  "belt_stack": 4,
+  "sorter_pick_stacks": [
+    1,
+    1,
+    1,
+    4
+  ],
+  "sorter_place_stacks": [
+    1,
+    1,
+    1,
+    4
+  ],
+  "piler_unlocked": true,
+  "label": "local-service:coated-mall#block0",
+  "belt_required_edges": [],
+  "spray_lanes": {
+    "high-purity-silicon": true,
+    "photon-combiner": true,
+    "processor": true,
+    "steel": true,
+    "super-magnetic-ring": true
+  },
+  "lanes_requiring_split": [],
+  "coproduct_buffer_proofs": [],
+  "self_loop_seeds": []
+}

@@ -1,0 +1,374 @@
+[
+  {
+    "surface": "web",
+    "budget_s": 15,
+    "status": "refused",
+    "pipeline_elapsed_s": 18.35800287500024,
+    "process_elapsed_s": 20.29555043205619,
+    "exit": 3,
+    "attempts": [
+      {
+        "candidate": "no-proliferator",
+        "strategy": "freeform",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": 57,
+        "projection_count": 0
+      },
+      {
+        "candidate": "no-proliferator",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": null,
+        "projection_count": 0
+      },
+      {
+        "candidate": "all-products",
+        "strategy": "freeform",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": 213,
+        "projection_count": 0
+      },
+      {
+        "candidate": "all-products",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": null,
+        "projection_count": 0
+      },
+      {
+        "candidate": "output-products",
+        "strategy": "freeform",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": 69,
+        "projection_count": 0
+      },
+      {
+        "candidate": "output-products",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": null,
+        "projection_count": 0
+      }
+    ]
+  },
+  {
+    "surface": "web",
+    "budget_s": 30,
+    "status": "refused",
+    "pipeline_elapsed_s": 33.28788216179237,
+    "process_elapsed_s": 34.70562610635534,
+    "exit": 3,
+    "attempts": [
+      {
+        "candidate": "no-proliferator",
+        "strategy": "freeform",
+        "terminal_stage": "validation",
+        "observed_checks": [
+          "flow.conservation",
+          "flow.self_loop_primed"
+        ],
+        "best_unrouted": null,
+        "projection_count": 0
+      },
+      {
+        "candidate": "no-proliferator",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": null,
+        "projection_count": 0
+      },
+      {
+        "candidate": "all-products",
+        "strategy": "freeform",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": 147,
+        "projection_count": 0
+      },
+      {
+        "candidate": "all-products",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": null,
+        "projection_count": 0
+      },
+      {
+        "candidate": "output-products",
+        "strategy": "freeform",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": 38,
+        "projection_count": 0
+      },
+      {
+        "candidate": "output-products",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": null,
+        "projection_count": 0
+      }
+    ]
+  },
+  {
+    "surface": "web",
+    "budget_s": 60,
+    "status": "refused",
+    "pipeline_elapsed_s": 63.46821768116206,
+    "process_elapsed_s": 65.2681967979297,
+    "exit": 3,
+    "attempts": [
+      {
+        "candidate": "no-proliferator",
+        "strategy": "freeform",
+        "terminal_stage": "validation",
+        "observed_checks": [
+          "flow.conservation",
+          "flow.self_loop_primed"
+        ],
+        "best_unrouted": null,
+        "projection_count": 0
+      },
+      {
+        "candidate": "no-proliferator",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [
+          "flow.conservation",
+          "flow.self_loop_primed"
+        ],
+        "best_unrouted": null,
+        "projection_count": 0
+      },
+      {
+        "candidate": "all-products",
+        "strategy": "freeform",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": 139,
+        "projection_count": 0
+      },
+      {
+        "candidate": "all-products",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": null,
+        "projection_count": 0
+      },
+      {
+        "candidate": "output-products",
+        "strategy": "freeform",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": 2,
+        "projection_count": 0
+      },
+      {
+        "candidate": "output-products",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [
+          "game.belt_collide"
+        ],
+        "best_unrouted": null,
+        "projection_count": 3
+      }
+    ]
+  },
+  {
+    "surface": "cli",
+    "budget_s": 15,
+    "status": "refused",
+    "pipeline_elapsed_s": 96.93653761781752,
+    "process_elapsed_s": 98.49631327576935,
+    "exit": 3,
+    "attempts": [
+      {
+        "candidate": "no-proliferator",
+        "strategy": "freeform",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": 46,
+        "projection_count": 0
+      },
+      {
+        "candidate": "no-proliferator",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": null,
+        "projection_count": 0
+      },
+      {
+        "candidate": "all-products",
+        "strategy": "freeform",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": 195,
+        "projection_count": 0
+      },
+      {
+        "candidate": "all-products",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": null,
+        "projection_count": 0
+      },
+      {
+        "candidate": "output-products",
+        "strategy": "freeform",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": 66,
+        "projection_count": 0
+      },
+      {
+        "candidate": "output-products",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": null,
+        "projection_count": 0
+      }
+    ]
+  },
+  {
+    "surface": "cli",
+    "budget_s": 30,
+    "status": "refused",
+    "pipeline_elapsed_s": 183.79424008680508,
+    "process_elapsed_s": 185.6934566181153,
+    "exit": 3,
+    "attempts": [
+      {
+        "candidate": "no-proliferator",
+        "strategy": "freeform",
+        "terminal_stage": "validation",
+        "observed_checks": [
+          "flow.conservation",
+          "flow.self_loop_primed"
+        ],
+        "best_unrouted": null,
+        "projection_count": 0
+      },
+      {
+        "candidate": "no-proliferator",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": null,
+        "projection_count": 0
+      },
+      {
+        "candidate": "all-products",
+        "strategy": "freeform",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": 147,
+        "projection_count": 0
+      },
+      {
+        "candidate": "all-products",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": null,
+        "projection_count": 0
+      },
+      {
+        "candidate": "output-products",
+        "strategy": "freeform",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": 2,
+        "projection_count": 0
+      },
+      {
+        "candidate": "output-products",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": null,
+        "projection_count": 0
+      }
+    ]
+  },
+  {
+    "surface": "cli",
+    "budget_s": 60,
+    "status": "refused",
+    "pipeline_elapsed_s": 353.74888897826895,
+    "process_elapsed_s": 355.45145657099783,
+    "exit": 3,
+    "attempts": [
+      {
+        "candidate": "no-proliferator",
+        "strategy": "freeform",
+        "terminal_stage": "validation",
+        "observed_checks": [
+          "flow.conservation",
+          "flow.self_loop_primed"
+        ],
+        "best_unrouted": null,
+        "projection_count": 0
+      },
+      {
+        "candidate": "no-proliferator",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [
+          "flow.conservation",
+          "flow.self_loop_primed"
+        ],
+        "best_unrouted": null,
+        "projection_count": 0
+      },
+      {
+        "candidate": "all-products",
+        "strategy": "freeform",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": 129,
+        "projection_count": 0
+      },
+      {
+        "candidate": "all-products",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": null,
+        "projection_count": 0
+      },
+      {
+        "candidate": "output-products",
+        "strategy": "freeform",
+        "terminal_stage": "deadline",
+        "observed_checks": [],
+        "best_unrouted": 2,
+        "projection_count": 0
+      },
+      {
+        "candidate": "output-products",
+        "strategy": "sequence-pair",
+        "terminal_stage": "deadline",
+        "observed_checks": [
+          "flow.conservation",
+          "flow.self_loop_primed",
+          "game.belt_collide"
+        ],
+        "best_unrouted": null,
+        "projection_count": 5
+      }
+    ]
+  }
+]

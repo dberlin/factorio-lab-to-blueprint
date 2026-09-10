@@ -1,0 +1,25 @@
+{
+  "goal": "Retain dynamic rejections until the exact blocking selected candidate is removed or replaced, without changing templates, caps or deadlines.",
+  "baseline": "../2026-09-08-transport-first/template-policy.json; frozen sources and evidence remain untouched",
+  "design": {
+    "files": ["template_paths.py", "template_experiment.py", "template_rollback_witness.py", "template-pyrightconfig.json"],
+    "selector_api": "select(TemplateProblem, WorkBudget) -> dict[int, tuple[Cell, ...]] remains unchanged",
+    "storage": "One list of (domain, candidate) deletions per currently selected blocker domain. Each list belongs to that exact selection lifetime. Pop and completely drain it before replacing the selection. No list survives into a new assignment at the same domain.",
+    "invariants": [
+      "A live candidate is removed at most once and appears in at most one blocker bucket",
+      "The bucket key names a currently selected domain, and its lifetime is the exact selected candidate's lifetime",
+      "Removing a blocker restores its dynamic deletions only; static bad bits remain permanent",
+      "Sibling rollback cannot restore deletions owned by still-selected ancestors",
+      "All loops retain existing deadline checks and before-exceeding work caps",
+      "Live deletion entries remain bounded by total candidate count and candidate-work cap; bucket count is bounded by obligation count"
+    ]
+  },
+  "steps": [
+    "Write a finite real-path witness: fixed ancestor, several failing sibling paths, late-discovered ancestor-blocked candidates, then a compatible sibling. It must finish under a 40-candidate budget; old chronological rollback must hit POLICY_BOUND.",
+    "Exercise full ancestor reassignment, stale sibling ownership, permanent static rejection, exhaustion, and independently exhaustive small domains with the unchanged geometry checker.",
+    "Replace the chronological trail and frame mark with per-selected-blocker deletion buckets. Update admission bucket-count bound and policy revision identity.",
+    "Run rollback, path, flow and audit witnesses plus focused Ruff and basedpyright. Do not run a project-wide suite.",
+    "Run cost admission for all five unsprayed frozen cases, freeze the new revision, then original control and gated mall/heldouts under original budgets. Preserve every refusal without tuning.",
+    "Retain implementation, commands, outputs, policy and reproducible archive; report geometry and rated acceptance separately."
+  ]
+}

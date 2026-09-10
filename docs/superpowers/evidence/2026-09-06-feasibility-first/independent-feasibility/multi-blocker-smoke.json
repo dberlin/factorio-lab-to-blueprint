@@ -1,0 +1,5 @@
+{
+  "exit": 0,
+  "stdout": "[{\"ancestor_escape\": false, \"sibling_escape\": false, \"expected\": false, \"outcome\": \"FROZEN_FAMILY_INFEASIBLE\", \"cuts\": 4, \"rounds\": 3}, {\"ancestor_escape\": false, \"sibling_escape\": true, \"expected\": true, \"outcome\": \"COMPLETE_TEMPLATE_GEOMETRY_WITNESS\", \"cuts\": 4, \"rounds\": 3}, {\"ancestor_escape\": true, \"sibling_escape\": false, \"expected\": true, \"outcome\": \"COMPLETE_TEMPLATE_GEOMETRY_WITNESS\", \"cuts\": 4, \"rounds\": 3}, {\"ancestor_escape\": true, \"sibling_escape\": true, \"expected\": true, \"outcome\": \"COMPLETE_TEMPLATE_GEOMETRY_WITNESS\", \"cuts\": 4, \"rounds\": 3}]\n",
+  "stderr": ""
+}

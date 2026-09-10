@@ -1,0 +1,46 @@
+{
+  "checks": [
+    {
+      "command": [
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+        "-m",
+        "2026-09-10-cadical-compact-local-repair.compact_witness"
+      ],
+      "exit": 0,
+      "stdout": "{\"cross_word_masks\": true, \"merged_intervals_exact\": true, \"set_equivalence_cases\": 64, \"static_and_independent_activation_projections\": 800, \"zero_work_refuses\": true}\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+        "-m",
+        "2026-09-10-cadical-compact-local-repair.local_repair_witness"
+      ],
+      "exit": 0,
+      "stdout": "{\"actual_geometric_core_widening\": true, \"boundary_candidate_projections\": 600, \"full_domain_unsat_preserved\": true, \"inactive_boundary_preserves_every_choice\": true, \"mutual_candidate_projections\": 20000, \"zero_allowance_refuses\": true}\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+        "-m",
+        "2026-09-10-cadical-compact-local-repair.verify_capture"
+      ],
+      "exit": 0,
+      "stdout": "{\"all_paths_self_and_static_valid\": true, \"canonical_conflicts\": 81, \"canonical_graph_agrees\": true, \"free\": 25, \"paths\": 141, \"retained\": 116, \"retained_pairwise_compatible\": true}\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+        "-m",
+        "2026-09-10-cadical-compact-local-repair.local_repair"
+      ],
+      "exit": 0,
+      "stdout": "{\"scope\": \"Optimistic local-only diagnostic; capture cost excluded, not original gate\", \"outcome\": \"POLICY_BOUND\", \"reason\": \"predicates work limit reached at 5000000\", \"elapsed_s\": 2.3404595009051263, \"budget_s\": 60, \"work\": {\"predicates\": 5000000, \"candidates\": 150116, \"audit_cells\": 2387}, \"initial_paths\": 141, \"initial_retained\": 116, \"initial_conflicts\": 81, \"original_factory_gate\": false}\n{\"stage\":\"retained-boundary\",\"clauses\":47260,\"collision_cuts\":245,\"boundary_relations\":11026,\"boundary_cuts\":245,\"boundary_domains_complete\":4,\"static_rejected_candidates\":17613,\"static_domains_complete\":25,\"boundary_raw_rectangles\":11016,\"boundary_groups\":245,\"mutual_relations\":0,\"mutual_pairs_complete\":0,\"unary_candidates_complete\":0,\"unary_rejections\":0,\"broadphase_probes\":290408,\"native_calls\":0,\"rebuilds\":1,\"released\":[],\"phases\":[{},{\"predicates\":345479,\"candidates\":116},{\"predicates\":716235,\"candidates\":116},{\"predicates\":2324253,\"candidates\":150116,\"audit_cells\":2387}],\"phase_names\":[\"domains-and-retained-audit\",\"factor-and-primitive-construction\",\"exact-static-exclusions\",\"retained-boundary\"]}\n",
+      "stderr": ""
+    }
+  ],
+  "deterministic_result_agrees": true,
+  "restored_elapsed_s": 2.3404595009051263
+}

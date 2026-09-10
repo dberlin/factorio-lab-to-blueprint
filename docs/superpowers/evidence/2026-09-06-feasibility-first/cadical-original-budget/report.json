@@ -1,0 +1,183 @@
+{
+  "selected_backend": "CaDiCaL 1.9.5 via python-sat1.9.dev15 Cadical195",
+  "scope": "Experimental selector, original-budget gate; no production promotion",
+  "outcome": "UNKNOWN",
+  "decision": "Control did not pass its original30-second end-to-end gate; mall and downstream gates not reached. No deadline increase or post-freeze tuning/rerun.",
+  "rule_sha256": "4b9ee01b951c99e6bf21b6841436b07e7b58bde237ea10fc25ed7126789a1aa2",
+  "control": {
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+      "-m",
+      "2026-09-09-cadical-original-budget.template_experiment",
+      "run",
+      "three-output"
+    ],
+    "exit": -15,
+    "hard_deadline_terminated": true,
+    "bootstrap_inclusive_seconds": 35.61247499193996,
+    "original_budget_s": 30.0,
+    "progress": {
+      "case": "three-output",
+      "started_monotonic": 2148270.654575467,
+      "deadline": 2148300.654575467,
+      "budget_s": 30.0,
+      "outcome": "UNKNOWN"
+    },
+    "final_report_written": false,
+    "outcome": "UNKNOWN",
+    "reason": "hard deadline or missing final report; not infeasibility or acceptance"
+  },
+  "admissions": {
+    "unsprayed-universe": {
+      "spec_sha256": "8337dfe1999a9f82d1bc8c92649db1fcaf1621dd3ef112bf9540ad9978d35033",
+      "budget_s": 60.0,
+      "outcome": "COST_ADMISSION_MEASURED",
+      "work": {
+        "arcs": 256,
+        "augmentations": 183,
+        "audit_cells": 9712,
+        "predicates": 397564,
+        "candidates": 1024
+      },
+      "elapsed_s": 1.9545949813909829,
+      "within_admission_budget": true
+    },
+    "unsprayed-mall-075": {
+      "spec_sha256": "d6aade99fcafb5bdb4603a3cdde32115632305d3cf0bbec5a74f6fd53588e54c",
+      "budget_s": 60.0,
+      "outcome": "COST_ADMISSION_MEASURED",
+      "work": {
+        "arcs": 382,
+        "augmentations": 116,
+        "audit_cells": 6292,
+        "predicates": 331797,
+        "candidates": 1024
+      },
+      "elapsed_s": 2.102298653218895,
+      "within_admission_budget": true
+    },
+    "unsprayed-mall": {
+      "spec_sha256": "3995a1266312d463293bae0a8e01b6f95f254550df54c56e5888e6d846e00ff3",
+      "budget_s": 60.0,
+      "outcome": "COST_ADMISSION_MEASURED",
+      "work": {
+        "arcs": 515,
+        "augmentations": 141,
+        "audit_cells": 7684,
+        "predicates": 371364,
+        "candidates": 1024
+      },
+      "elapsed_s": 3.9298656340688467,
+      "within_admission_budget": true
+    },
+    "three-output": {
+      "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+      "budget_s": 30.0,
+      "outcome": "COST_ADMISSION_MEASURED",
+      "work": {
+        "arcs": 28,
+        "augmentations": 26,
+        "audit_cells": 1339,
+        "predicates": 155944,
+        "candidates": 1024
+      },
+      "elapsed_s": 0.6972915478982031,
+      "within_admission_budget": true
+    },
+    "unsprayed-mall-125": {
+      "spec_sha256": "8b767432f5260328ab80cbf2d8528ec8c02475d81a52074e8b242fa3db2a89e9",
+      "budget_s": 60.0,
+      "outcome": "COST_ADMISSION_MEASURED",
+      "work": {
+        "arcs": 579,
+        "augmentations": 148,
+        "audit_cells": 8096,
+        "predicates": 344161,
+        "candidates": 1024
+      },
+      "elapsed_s": 3.1957175699062645,
+      "within_admission_budget": true
+    }
+  },
+  "representation": {
+    "candidate_domain": "Every original candidate ID retained; no deduplication or static prefilter",
+    "occupancy": "Per-XY-combination interval rows with bitset membership shared across heights; collinear union before XOR events",
+    "legality": "Lazy selected-candidate checks by unchanged frozen geometry and independent expanded cells; sound static cell exclusions and incremental collision cardinalities",
+    "budgets": "Original WorkLimits unchanged; interval comparisons/event scans charge predicates; adapter/selected-cell expansion charges audit_cells; solver rounds/clauses additionally bounded",
+    "canonical_geometry_declarations_ast_identical": [
+      "Endpoint",
+      "Obligation",
+      "FixedPath",
+      "TemplateProblem",
+      "_Segment",
+      "_segment",
+      "_intersection",
+      "_normal",
+      "_Geometry",
+      "_geometry",
+      "_path_error",
+      "_owned",
+      "_compatible",
+      "compatible",
+      "_adapter",
+      "_middle",
+      "Domain",
+      "domains",
+      "_Obstacle",
+      "_Node",
+      "_FixedIndex"
+    ]
+  },
+  "verification": {
+    "finite_occupancy_candidates": 3000,
+    "exact_occupancy_queries": 37800,
+    "finite_exhaustive_safety_cases": 8,
+    "retained_negative_height_pairs": 576,
+    "ownership_and_cutoff_witnesses_passed": true,
+    "rate_falsification_and_full_segment_audit_witnesses_passed": true,
+    "native_deadline_smoke_passed": true,
+    "ruff_exit": 0,
+    "focused_basedpyright": {
+      "files": 13,
+      "errors": 0,
+      "warnings": 0
+    },
+    "frozen_identities": {
+      "2026-09-08-transport-first": {
+        "rule_sha256": "0004c2846e2d9da69a2738d2a976b3b6d1abad0ff67903a0ef23e35b237e4e75",
+        "checks": 34,
+        "all_hashes_match": true
+      },
+      "2026-09-09-blocker-owned-templates": {
+        "rule_sha256": "cca61b0440ef96a960ad9d5585400378645235cd6e9f745f43ba7f4deab09404",
+        "checks": 35,
+        "all_hashes_match": true
+      },
+      "2026-09-09-joint-domain-templates": {
+        "rule_sha256": "109b02d2830cd5c6f490242fad67fc86c3f30dca8ed45bf316d43b996e6c3e8f",
+        "checks": 37,
+        "all_hashes_match": true
+      },
+      "2026-09-09-cadical-original-budget": {
+        "rule_sha256": "4b9ee01b951c99e6bf21b6841436b07e7b58bde237ea10fc25ed7126789a1aa2",
+        "checks": 37,
+        "all_hashes_match": true
+      }
+    }
+  },
+  "rejected_pre_freeze_representation": "Expanded XY-cell index failed larger cost-only admissions; preserved under rejected-expanded-index/. Replaced by compact intervals before the first frozen factory solve; no parameter/geometry/budget changes.",
+  "claim_limits": [
+    "No function-level performance profile was captured or created, per user instruction.",
+    "No selector preparation/solve timing or round/cut counters survived the hard-killed control. Cost-only admission timings are not runtime preparation measurements.",
+    "35.612s supervisor elapsed includes interpreter/import bootstrap; original deadline is30s from recorded layout start.",
+    "No complete selection, factory validation or blueprint was retained from this run.",
+    "UNKNOWN is not family infeasibility; the separate180-second diagnostic already proved geometry feasible.",
+    "Rate realization remains unproved; no original mall or held-out solve attempted."
+  ],
+  "reproduction": {
+    "python": "project Python3.14 environment with existing uv.lock dependencies",
+    "install": "uv pip install --python <project>/.venv/bin/python --target <deps> python-sat==1.9.dev15 six==1.17.0",
+    "run": "<project>/.venv/bin/python <extract>/2026-09-09-cadical-original-budget/run_original.py three-output --deps <deps>",
+    "rerun_note": "Archive includes measured gate outputs. For an explicit reproduction only, extract to a fresh directory and move template-cases/three-output aside first; runner deliberately refuses implicit overwrite/rerun. Frozen admission records must remain intact."
+  }
+}

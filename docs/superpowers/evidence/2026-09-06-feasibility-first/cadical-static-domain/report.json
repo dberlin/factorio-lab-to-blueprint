@@ -1,0 +1,10 @@
+{
+  "control": "VALIDATOR_COMPLETE_WITNESS",
+  "control_seconds": 11.369795843958855,
+  "mall": "POLICY_BOUND",
+  "mall_seconds": 29.87212197110057,
+  "reason": "predicates work limit reached at 5000000",
+  "rated_acceptance": false,
+  "members": 87,
+  "sha256": "e9456177c434a9b0afa9f0af6688cbfa0882eb7dd1049a391c2ed252993b90f2"
+}

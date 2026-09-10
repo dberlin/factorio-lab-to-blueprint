@@ -1,0 +1,10 @@
+{
+  "archive_sha256": "62c361b339b9baee09ea3c811abefe4598aa2fa90a9b45713aa3ec076414b8c0",
+  "archive_bytes": 1967273,
+  "members": 64,
+  "member_hashes_match": true,
+  "crc_passed": true,
+  "nested_archives_crc_passed": true,
+  "frozen_input_identity_matches": true,
+  "executed_sources_verified_in_report": true
+}

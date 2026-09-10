@@ -1,0 +1,9 @@
+{
+  "control": "VALIDATOR_COMPLETE_WITNESS",
+  "control_seconds": 29.612534791231155,
+  "mall": "UNKNOWN",
+  "mall_report": "POLICY_BOUND",
+  "rated_acceptance": false,
+  "members": 124,
+  "sha256": "ef66eada71cbd2f6131b306d8bb4d7b54bbb8ec25f8b98292c6af6f3a506fa86"
+}

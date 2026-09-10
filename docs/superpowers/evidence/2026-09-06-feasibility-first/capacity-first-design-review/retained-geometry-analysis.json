@@ -1,0 +1,629 @@
+{
+  "kind": "read-only retained-design counterexample analysis",
+  "method": "Expand each global flight ground segment points[0]..points[1] and points[6]..points[7] inclusively; intersect pairs and exclude only shared terminal endpoints. These are planned, not emitted, intersections. Also group source-port adjacency to check whether any port mixes internal and export edges.",
+  "cases": [
+    {
+      "case": "three-output",
+      "flights_sha256": "6879f27a9cefde656208f691474ea8625b89be2d41866b8479086e362486c099",
+      "topology_sha256": "a38944c993b0fc21613513471bcb12078532047a9ab826d2de733a690258a4aa",
+      "planned_ground_access_collision_pairs": 0,
+      "collisions": [],
+      "duplicate_global_riser_coordinates": 0,
+      "mixed_internal_export_source_ports": []
+    },
+    {
+      "case": "unsprayed-mall",
+      "flights_sha256": "7be50d3227e6f328f679c714cde32c1b410622365c7890c380221b6939789a30",
+      "topology_sha256": "472c1605524ceed3c3ea154b1710e71e0208b36fbd4a723817fa50504cfeb589",
+      "planned_ground_access_collision_pairs": 12,
+      "collisions": [
+        {
+          "flights": [
+            42,
+            163
+          ],
+          "items": [
+            "electric-motor",
+            "magnetic-coil"
+          ],
+          "cells": [
+            [
+              361,
+              51,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            43,
+            161
+          ],
+          "items": [
+            "electric-motor",
+            "magnetic-coil"
+          ],
+          "cells": [
+            [
+              361,
+              52,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            43,
+            162
+          ],
+          "items": [
+            "electric-motor",
+            "magnetic-coil"
+          ],
+          "cells": [
+            [
+              361,
+              52,
+              0
+            ],
+            [
+              361,
+              53,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            43,
+            163
+          ],
+          "items": [
+            "electric-motor",
+            "magnetic-coil"
+          ],
+          "cells": [
+            [
+              361,
+              51,
+              0
+            ],
+            [
+              361,
+              52,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            68,
+            136
+          ],
+          "items": [
+            "magnetic-coil",
+            "gear"
+          ],
+          "cells": [
+            [
+              199,
+              97,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            68,
+            148
+          ],
+          "items": [
+            "magnetic-coil",
+            "iron-ingot"
+          ],
+          "cells": [
+            [
+              199,
+              97,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            116,
+            176
+          ],
+          "items": [
+            "miniature-particle-collider",
+            "titanium-ingot"
+          ],
+          "cells": [
+            [
+              1533,
+              22,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            131,
+            163
+          ],
+          "items": [
+            "electric-motor",
+            "magnetic-coil"
+          ],
+          "cells": [
+            [
+              361,
+              50,
+              0
+            ],
+            [
+              361,
+              51,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            136,
+            147
+          ],
+          "items": [
+            "gear",
+            "iron-ingot"
+          ],
+          "cells": [
+            [
+              199,
+              96,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            136,
+            148
+          ],
+          "items": [
+            "gear",
+            "iron-ingot"
+          ],
+          "cells": [
+            [
+              199,
+              96,
+              0
+            ],
+            [
+              199,
+              97,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            136,
+            158
+          ],
+          "items": [
+            "gear",
+            "magnetic-coil"
+          ],
+          "cells": [
+            [
+              199,
+              97,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            148,
+            158
+          ],
+          "items": [
+            "iron-ingot",
+            "magnetic-coil"
+          ],
+          "cells": [
+            [
+              199,
+              97,
+              0
+            ],
+            [
+              199,
+              98,
+              0
+            ]
+          ]
+        }
+      ],
+      "duplicate_global_riser_coordinates": 0,
+      "mixed_internal_export_source_ports": []
+    },
+    {
+      "case": "unsprayed-mall-075",
+      "flights_sha256": "38e8a497f41ba86fa7379e56d0f159afaa7844437ed6496d7bf207ac76c8e92b",
+      "topology_sha256": "28e7c1a6012d2802d145f442d1d742167571e5bdef6884a8f3c284e4e171bab9",
+      "planned_ground_access_collision_pairs": 6,
+      "collisions": [
+        {
+          "flights": [
+            37,
+            77
+          ],
+          "items": [
+            "electric-motor",
+            "magnetic-coil"
+          ],
+          "cells": [
+            [
+              337,
+              32,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            37,
+            134
+          ],
+          "items": [
+            "electric-motor",
+            "magnetic-coil"
+          ],
+          "cells": [
+            [
+              337,
+              32,
+              0
+            ],
+            [
+              337,
+              33,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            54,
+            110
+          ],
+          "items": [
+            "magnet",
+            "copper-ingot"
+          ],
+          "cells": [
+            [
+              939,
+              13,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            58,
+            125
+          ],
+          "items": [
+            "magnetic-coil",
+            "iron-ingot"
+          ],
+          "cells": [
+            [
+              159,
+              91,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            76,
+            125
+          ],
+          "items": [
+            "magnetic-coil",
+            "iron-ingot"
+          ],
+          "cells": [
+            [
+              159,
+              91,
+              0
+            ],
+            [
+              159,
+              92,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            110,
+            130
+          ],
+          "items": [
+            "copper-ingot",
+            "magnet"
+          ],
+          "cells": [
+            [
+              939,
+              13,
+              0
+            ],
+            [
+              939,
+              14,
+              0
+            ]
+          ]
+        }
+      ],
+      "duplicate_global_riser_coordinates": 0,
+      "mixed_internal_export_source_ports": []
+    },
+    {
+      "case": "unsprayed-mall-125",
+      "flights_sha256": "fa657f6e1383b7e0b5e280d1f7b23747ac9d4ba0db2d2706ab39e4e72d02da47",
+      "topology_sha256": "87d2692060f5785032ff9af75d6b2fee00a66135147e7e6348205c2967f667c0",
+      "planned_ground_access_collision_pairs": 12,
+      "collisions": [
+        {
+          "flights": [
+            47,
+            171
+          ],
+          "items": [
+            "electric-motor",
+            "magnetic-coil"
+          ],
+          "cells": [
+            [
+              429,
+              70,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            47,
+            172
+          ],
+          "items": [
+            "electric-motor",
+            "magnetic-coil"
+          ],
+          "cells": [
+            [
+              429,
+              70,
+              0
+            ],
+            [
+              429,
+              71,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            48,
+            169
+          ],
+          "items": [
+            "electric-motor",
+            "magnetic-coil"
+          ],
+          "cells": [
+            [
+              429,
+              52,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            48,
+            170
+          ],
+          "items": [
+            "electric-motor",
+            "magnetic-coil"
+          ],
+          "cells": [
+            [
+              429,
+              52,
+              0
+            ],
+            [
+              429,
+              53,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            68,
+            134
+          ],
+          "items": [
+            "magnet",
+            "copper-ingot"
+          ],
+          "cells": [
+            [
+              1228,
+              49,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            93,
+            164
+          ],
+          "items": [
+            "electromagnetic-turbine",
+            "magnet"
+          ],
+          "cells": [
+            [
+              1702,
+              14,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            93,
+            165
+          ],
+          "items": [
+            "electromagnetic-turbine",
+            "magnet"
+          ],
+          "cells": [
+            [
+              1702,
+              14,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            95,
+            156
+          ],
+          "items": [
+            "magnetic-coil",
+            "iron-ingot"
+          ],
+          "cells": [
+            [
+              429,
+              14,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            134,
+            162
+          ],
+          "items": [
+            "copper-ingot",
+            "magnet"
+          ],
+          "cells": [
+            [
+              1228,
+              49,
+              0
+            ],
+            [
+              1228,
+              50,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            142,
+            153
+          ],
+          "items": [
+            "gear",
+            "iron-ingot"
+          ],
+          "cells": [
+            [
+              239,
+              96,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            142,
+            154
+          ],
+          "items": [
+            "gear",
+            "iron-ingot"
+          ],
+          "cells": [
+            [
+              239,
+              96,
+              0
+            ],
+            [
+              239,
+              97,
+              0
+            ]
+          ]
+        },
+        {
+          "flights": [
+            156,
+            167
+          ],
+          "items": [
+            "iron-ingot",
+            "magnetic-coil"
+          ],
+          "cells": [
+            [
+              429,
+              14,
+              0
+            ],
+            [
+              429,
+              15,
+              0
+            ]
+          ]
+        }
+      ],
+      "duplicate_global_riser_coordinates": 0,
+      "mixed_internal_export_source_ports": []
+    },
+    {
+      "case": "unsprayed-universe",
+      "flights_sha256": "03b08c14b35e00f8928a956a372344a8f9607286419ae0804a530531af808644",
+      "topology_sha256": "83bc2c1e00f48b3dbe169af5d6858a29609bac2349f296fb95c1baf7829ad09f",
+      "planned_ground_access_collision_pairs": 0,
+      "collisions": [],
+      "duplicate_global_riser_coordinates": 0,
+      "mixed_internal_export_source_ports": []
+    }
+  ]
+}

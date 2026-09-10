@@ -1,0 +1,328 @@
+{
+  "findings": [
+    {
+      "check": "belt.termination",
+      "severity": "warning",
+      "message": "belt run 1 (head building 13 at (15,13), carrying 'ray-receiver') runs 4 tiles and no sorter touches any of them; the whole lane is wasted",
+      "buildings": [
+        148
+      ],
+      "detail": {
+        "run": 1,
+        "tail": 148,
+        "length": 4,
+        "dead": 4,
+        "taps": 0
+      }
+    },
+    {
+      "check": "belt.termination",
+      "severity": "warning",
+      "message": "belt run 11 (head building 214 at (18,5), carrying 'proliferator-3') runs 2 tiles and no sorter touches any of them; the whole lane is wasted",
+      "buildings": [
+        107
+      ],
+      "detail": {
+        "run": 11,
+        "tail": 107,
+        "length": 2,
+        "dead": 2,
+        "taps": 0
+      }
+    },
+    {
+      "check": "belt.termination",
+      "severity": "warning",
+      "message": "belt run 13 (head building 217 at (0,18), carrying 'proliferator-3') runs 2 tiles and no sorter touches any of them; the whole lane is wasted",
+      "buildings": [
+        84
+      ],
+      "detail": {
+        "run": 13,
+        "tail": 84,
+        "length": 2,
+        "dead": 2,
+        "taps": 0
+      }
+    },
+    {
+      "check": "flow.headroom",
+      "severity": "info",
+      "message": "belt run 1 carries 7/15 of 30 items/s",
+      "buildings": [
+        13,
+        146,
+        147,
+        148
+      ],
+      "detail": {
+        "run": 1,
+        "required": "7/15",
+        "capacity": "30",
+        "per_item": {
+          "ray-receiver": "7/15"
+        }
+      }
+    },
+    {
+      "check": "flow.headroom",
+      "severity": "info",
+      "message": "belt run 2 carries 7/15 of 30 items/s",
+      "buildings": [
+        18,
+        19,
+        20,
+        21
+      ],
+      "detail": {
+        "run": 2,
+        "required": "7/15",
+        "capacity": "30",
+        "per_item": {
+          "ray-receiver": "7/15"
+        }
+      }
+    },
+    {
+      "check": "flow.headroom",
+      "severity": "info",
+      "message": "belt run 6 carries 112/15 of 30 items/s",
+      "buildings": [
+        111,
+        112,
+        113,
+        114,
+        115,
+        25,
+        26,
+        27,
+        28,
+        29,
+        210,
+        211,
+        212,
+        0
+      ],
+      "detail": {
+        "run": 6,
+        "required": "112/15",
+        "capacity": "30",
+        "per_item": {
+          "high-purity-silicon": "112/15"
+        }
+      }
+    },
+    {
+      "check": "flow.headroom",
+      "severity": "info",
+      "message": "belt run 7 carries 56/15 of 30 items/s",
+      "buildings": [
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        30,
+        31,
+        32,
+        33,
+        34,
+        200,
+        201,
+        202,
+        203,
+        204,
+        1,
+        2
+      ],
+      "detail": {
+        "run": 7,
+        "required": "56/15",
+        "capacity": "30",
+        "per_item": {
+          "photon-combiner": "56/15"
+        }
+      }
+    },
+    {
+      "check": "flow.headroom",
+      "severity": "info",
+      "message": "belt run 8 carries 28/15 of 30 items/s",
+      "buildings": [
+        125,
+        126,
+        127,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        35,
+        36,
+        37,
+        38,
+        39,
+        186,
+        187,
+        188,
+        189,
+        190,
+        191,
+        192,
+        3,
+        4,
+        5
+      ],
+      "detail": {
+        "run": 8,
+        "required": "28/15",
+        "capacity": "30",
+        "per_item": {
+          "processor": "28/15"
+        }
+      }
+    },
+    {
+      "check": "flow.headroom",
+      "severity": "info",
+      "message": "belt run 9 carries 112/15 of 30 items/s",
+      "buildings": [
+        134,
+        135,
+        136,
+        137,
+        138,
+        139,
+        140,
+        141,
+        40,
+        41,
+        42,
+        43,
+        44,
+        205,
+        206,
+        207,
+        208,
+        209,
+        6
+      ],
+      "detail": {
+        "run": 9,
+        "required": "112/15",
+        "capacity": "30",
+        "per_item": {
+          "steel": "112/15"
+        }
+      }
+    },
+    {
+      "check": "flow.headroom",
+      "severity": "info",
+      "message": "belt run 10 carries 112/15 of 30 items/s",
+      "buildings": [
+        142,
+        143,
+        144,
+        145,
+        45,
+        46,
+        47,
+        48,
+        49,
+        193,
+        194,
+        195,
+        196,
+        197,
+        198,
+        199,
+        7,
+        8
+      ],
+      "detail": {
+        "run": 10,
+        "required": "112/15",
+        "capacity": "30",
+        "per_item": {
+          "super-magnetic-ring": "112/15"
+        }
+      }
+    }
+  ],
+  "checks_run": [
+    "geom.footprint",
+    "geom.overlap",
+    "geom.collide",
+    "game.sorter_collide",
+    "geom.belt_single_occupancy",
+    "geom.machine_ground",
+    "geom.altitude_range",
+    "geom.altitude_step",
+    "geom.bounds",
+    "sorter.anchors_present",
+    "sorter.reach",
+    "sorter.endpoints",
+    "sorter.endpoint_pair",
+    "sorter.own_slots",
+    "sorter.peer_slots",
+    "game.inserter_data",
+    "game.slot_occupancy",
+    "game.inserter_paste",
+    "game.inserter_skew",
+    "game.addon_supply",
+    "game.addon_facing",
+    "game.addon_corner",
+    "game.belt_crossing",
+    "game.belt_collide",
+    "sorter.filter",
+    "sorter.output_filter",
+    "belt.continuity",
+    "junction.stack_support",
+    "junction.ports",
+    "junction.colocated",
+    "junction.port_pose",
+    "junction.records_no_links",
+    "piler.ports",
+    "belt.link_adjacent",
+    "belt.port_dock",
+    "belt.acyclic",
+    "belt.termination",
+    "power.coverage",
+    "game.power_too_close",
+    "power.connectivity",
+    "machine.recipe_valid",
+    "machine.group_resolved",
+    "machine.inputs_supplied",
+    "flow.lane_sourced",
+    "flow.external_entry_reachable",
+    "flow.external_entry_points",
+    "machine.output_removed",
+    "flow.coproduct_buffer",
+    "flow.self_loop_primed",
+    "spec.machine_counts",
+    "spec.proliferator_input",
+    "prolif.belt_required_edges_not_direct_inserted",
+    "prolif.coaters_are_supplied",
+    "prolif.coater_rides_one_run",
+    "prolif.coater_supply_is_fed",
+    "prolif.sprayed_cargo_reaches_machines",
+    "flow.conservation",
+    "flow.belt_capacity",
+    "piler.input_rate",
+    "flow.stack_pickable",
+    "flow.sorter_capacity",
+    "belt.tier_allowed",
+    "sorter.tier_allowed",
+    "piler.tier_allowed",
+    "flow.lane_attribution",
+    "flow.lane_single_item",
+    "flow.headroom"
+  ],
+  "skipped": []
+}

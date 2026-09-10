@@ -1,0 +1,73 @@
+{
+  "groups": [
+    {
+      "recipe_id": "universe-matrix",
+      "machine_item_id": "matrix-lab",
+      "count": 1,
+      "proliferator_mode": "products",
+      "inputs_per_machine": {
+        "antimatter": "1/15",
+        "electromagnetic-matrix": "1/15",
+        "energy-matrix": "1/15",
+        "gravity-matrix": "1/15",
+        "information-matrix": "1/15",
+        "structure-matrix": "1/15"
+      },
+      "outputs_per_machine": {
+        "universe-matrix": "1/12"
+      }
+    }
+  ],
+  "external_inputs": {
+    "antimatter": "1/15",
+    "electromagnetic-matrix": "1/15",
+    "energy-matrix": "1/15",
+    "gravity-matrix": "1/15",
+    "information-matrix": "1/15",
+    "structure-matrix": "1/15",
+    "proliferator-3": "1/150"
+  },
+  "outputs": {
+    "universe-matrix": "1/12"
+  },
+  "surplus_outputs": {},
+  "belt_item_id": "conveyor-belt-3",
+  "belt_items_per_second": "30",
+  "belt_upgrades": [],
+  "sorter_item_ids": [
+    "sorter-1",
+    "sorter-2",
+    "sorter-3",
+    "sorter-4"
+  ],
+  "machine_rank": "exact",
+  "machine_moves": [],
+  "power_tower_item_id": "tesla-tower",
+  "belt_stack": 1,
+  "sorter_pick_stacks": [
+    1,
+    1,
+    1,
+    4
+  ],
+  "sorter_place_stacks": [
+    1,
+    1,
+    1,
+    4
+  ],
+  "piler_unlocked": true,
+  "label": "local-service:universe-matrix#block0",
+  "belt_required_edges": [],
+  "spray_lanes": {
+    "antimatter": true,
+    "electromagnetic-matrix": true,
+    "energy-matrix": true,
+    "gravity-matrix": true,
+    "information-matrix": true,
+    "structure-matrix": true
+  },
+  "lanes_requiring_split": [],
+  "coproduct_buffer_proofs": [],
+  "self_loop_seeds": []
+}

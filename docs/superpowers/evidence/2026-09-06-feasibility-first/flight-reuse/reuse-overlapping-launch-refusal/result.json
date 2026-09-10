@@ -1,0 +1,78 @@
+{
+  "case": "three-output",
+  "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+  "budget_s": 30.0,
+  "original_factory_gate": false,
+  "global_router_calls": 0,
+  "obligations": 27,
+  "flights_required": 24,
+  "flights_available": 24,
+  "held_out": false,
+  "assigned_rates": {
+    "0": "5/3",
+    "1": "5/3",
+    "2": "20/3",
+    "3": "15",
+    "4": "10/3",
+    "5": "10/3",
+    "6": "10/3",
+    "7": "0",
+    "8": "15/2",
+    "9": "20/3",
+    "10": "20/3",
+    "11": "50/3",
+    "12": "40/3",
+    "13": "20",
+    "14": "40/3",
+    "15": "10/3",
+    "16": "20/3",
+    "17": "30",
+    "18": "20/3",
+    "19": "15",
+    "20": "20/3",
+    "21": "35/6",
+    "22": "15",
+    "23": "15",
+    "24": "10/3",
+    "25": "10/3",
+    "26": "25/3"
+  },
+  "outcome": "constructive-control-refused",
+  "reason": "no legal reused level on fixed flight: hydrogen, local-source",
+  "flight_allocation": [
+    {
+      "item": "graphene",
+      "role": "local-source",
+      "level": 1,
+      "exclusive_level": 1,
+      "rejected": []
+    },
+    {
+      "item": "hydrogen",
+      "role": "local-source",
+      "level": null,
+      "exclusive_level": 2,
+      "rejected": [
+        {
+          "level": 2,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        }
+      ]
+    }
+  ],
+  "elapsed_s": 0.36008918518200517,
+  "constructed_links": 1,
+  "junctions": [
+    2924,
+    2938
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "scope": "Experiment implementation and reciprocal read-only integration review; not production promotion",
+  "reviewers": ["PathSelectors", "PhysicalAudit"],
+  "resolved_before_freeze": [
+    "Explicit exact blocked-endpoint provenance, including verified co-located junction attachments",
+    "Deadline and post-selection emission refusal classification",
+    "Preserve substantive portfolio outcome when other orders are duplicate topologies",
+    "Freeze complete manifest and experiment source identity with admission evidence",
+    "Stable captured-first endpoint ordering and exact reverse ordering",
+    "Exterior corridor extents include fixed and blocked geometry"
+  ],
+  "remaining_review_blockers": [],
+  "experiment_outcome": "POLICY_BOUND",
+  "decision": "NO-GO under frozen policy",
+  "interpretation": "Predicate-budget interruption; neither template-family exhaustion nor physical infeasibility. No complete geometry or rated factory claim.",
+  "policy_tuned_after_outcome": false,
+  "production_promoted": false
+}

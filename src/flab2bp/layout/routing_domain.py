@@ -994,6 +994,13 @@ class Strip:
             return self.first_row_below_band + drain_offset + k
         return self.machine_row + self._output_attachment_plan(k).lane_y
 
+    @property
+    def output_lane_start(self) -> int:
+        """First drain column carrying product from the selected attachment geometry."""
+        # Flanked product enters at the first machine's east gap. Everything
+        # west of that inlet is unused and would add a spurious second feeder.
+        return self.pw - 1 if self.flank_outputs else 0
+
     def input_lane_tiles(self, lane: tuple[str, ...]) -> int:
         """Belt tiles an input lane needs through its last planned attachment."""
         if self.takes_belt_ports:
@@ -3404,13 +3411,10 @@ def _emit_strip(
     # label external input belts later: the knowledge is unrecoverable once
     # emission drops it.
     lane_item_of: dict[int, str] = {}
-    #: Row -> belt tiles that row's lane actually needs.  Input lanes stop at
-    #: their last sorter (see ``Strip.input_lane_tiles``); output lanes run the
-    #: full width because their port is the east end.
+    #: Row -> exclusive east end of the lane's emitted belt span.
     lane_tiles_of: dict[int, int] = {}
-    #: Rows whose lane starts one tile WEST of the strip, in the reserved
-    #: ``WEST_CHANNEL`` column.  See the comment at the assignment below.
-    lane_starts_west: set[int] = set()
+    #: Inputs may prepend a coater approach; flanked drains start at their inlet.
+    lane_starts: dict[int, int] = {}
     for lane in s.in_above + s.in_below:
         row = s.row_of_input(lane[0])
         lane_item_of[row] = lane[0]
@@ -3457,11 +3461,12 @@ def _emit_strip(
         # rules seat the coater on its own object instead.
         if need and s.cargo_domain is CargoDomain.REQUIRES_SPRAY and not coater_mode().is_node:
             need = min(max(need, 2), width)
-            lane_starts_west.add(row)
+            lane_starts[row] = -s.west_channel
         lane_tiles_of[row] = need
     for k, (item, _dest, _cargo_domain) in enumerate(s.out_lanes):
         lane_item_of[s.row_of_output(k)] = item
         lane_tiles_of[s.row_of_output(k)] = width
+        lane_starts[s.row_of_output(k)] = s.output_lane_start
 
     lane_idx: dict[int, list[int]] = {}
     for row in range(s.height):
@@ -3471,7 +3476,7 @@ def _emit_strip(
         if row not in lane_tiles_of:
             continue  # collider-pitch padding is reserved, not a belt lane
         indices = []
-        start = -s.west_channel if row in lane_starts_west else 0
+        start = lane_starts.get(row, 0)
         for k in range(start, lane_tiles_of.get(row, width)):
             indices.append(
                 canvas.add(

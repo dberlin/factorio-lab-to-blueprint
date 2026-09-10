@@ -1,0 +1,1920 @@
+{
+  "candidates": [
+    {
+      "belt_item_id": "conveyor-belt-2",
+      "belt_items_per_second": "12",
+      "belt_required_edges": [],
+      "belt_stack": 1,
+      "belt_upgrades": [
+        {
+          "item_id": "conveyor-belt-3",
+          "items_per_second": "30"
+        }
+      ],
+      "coproduct_buffer_proofs": [],
+      "external_inputs": {
+        "copper-ore": "103/16",
+        "crude-oil": "1/6",
+        "deuterium": "2/3",
+        "fire-ice": "221/24",
+        "hydrogen": "727/48",
+        "iron-ore": "383/24",
+        "kimberlite-ore": "2/3",
+        "optical-grating-crystal": "137/24",
+        "silicon-ore": "83/6",
+        "stone": "8/3",
+        "sulfuric-acid": "11/2",
+        "titanium-ingot": "79/12",
+        "unipolar-magnet": "20/3",
+        "water": "4/3"
+      },
+      "groups": [
+        {
+          "count": 5,
+          "inputs_per_machine": {
+            "graphene": "3/2",
+            "titanium-ingot": "1/2"
+          },
+          "machine_item_id": "quantum-chemical-plant",
+          "outputs_per_machine": {
+            "carbon-nanotube": "1"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "carbon-nanotube"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "graphene": "4/3",
+            "hydrogen": "8",
+            "optical-grating-crystal": "16/3"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "casimir-crystal": "2/3"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "casimir-crystal-advanced"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "copper-ingot": "77/48",
+            "iron-ingot": "77/24"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "circuit-board": "77/24"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "circuit-board"
+        },
+        {
+          "count": 3,
+          "inputs_per_machine": {
+            "copper-ore": "103/48"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "copper-ingot": "103/48"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "copper-ingot"
+        },
+        {
+          "count": 3,
+          "inputs_per_machine": {
+            "hydrogen": "4"
+          },
+          "machine_item_id": "miniature-particle-collider",
+          "outputs_per_machine": {
+            "deuterium": "2"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "deuterium"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "deuterium": "10/3",
+            "super-magnetic-ring": "1/6",
+            "titanium-alloy": "1/6"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "deuteron-fuel-rod": "1/3"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "deuteron-fuel-rod"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "kimberlite-ore": "2/3"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "diamond": "4/3"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "diamond-advanced"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "frame-material": "3/4",
+            "processor": "3/4",
+            "solar-sail": "3/4"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "dyson-sphere-component": "1/4"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "dyson-sphere-component"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "gear": "2/3",
+            "iron-ingot": "4/3",
+            "magnetic-coil": "2/3"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "electric-motor": "2/3"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "electric-motor"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "electric-motor": "2/3",
+            "magnetic-coil": "2/3"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "electromagnetic-turbine": "1/3"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "electromagnetic-turbine"
+        },
+        {
+          "count": 3,
+          "inputs_per_machine": {
+            "carbon-nanotube": "5/3",
+            "high-purity-silicon": "5/12",
+            "titanium-alloy": "5/12"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "frame-material": "5/12"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "frame-material"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "iron-ingot": "2/3"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "gear": "2/3"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "gear"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "stone": "8/3"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "glass": "4/3"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "glass"
+        },
+        {
+          "count": 5,
+          "inputs_per_machine": {
+            "fire-ice": "221/120"
+          },
+          "machine_item_id": "quantum-chemical-plant",
+          "outputs_per_machine": {
+            "graphene": "221/120",
+            "hydrogen": "221/240"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "graphene-advanced"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "diamond": "4/3",
+            "strange-matter": "1/3"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "graviton-lens": "1/3"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "graviton-lens"
+        },
+        {
+          "count": 5,
+          "inputs_per_machine": {
+            "silicon-ore": "83/30"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "high-purity-silicon": "83/60"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "high-purity-silicon"
+        },
+        {
+          "count": 5,
+          "inputs_per_machine": {
+            "iron-ore": "113/40"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "iron-ingot": "113/40"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "iron-ingot"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "iron-ore": "11/6"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "magnet": "11/6"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "magnet"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "copper-ingot": "2/3",
+            "magnet": "4/3"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "magnetic-coil": "4/3"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "magnetic-coil"
+        },
+        {
+          "count": 2,
+          "inputs_per_machine": {
+            "copper-ingot": "17/12",
+            "high-purity-silicon": "17/6"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "microcrystalline-component": "17/12"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "microcrystalline-component"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "copper-ingot": "4/3",
+            "unipolar-magnet": "20/3"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "particle-container": "2/3"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "particle-container-advanced"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "circuit-board": "3/8",
+            "optical-grating-crystal": "3/8"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "photon-combiner": "3/8"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "photon-combiner-advanced"
+        },
+        {
+          "count": 3,
+          "inputs_per_machine": {
+            "casimir-crystal": "2/9",
+            "titanium-glass": "4/9"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "plane-filter": "2/9"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "plane-filter"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "crude-oil": "1/6"
+          },
+          "machine_item_id": "oil-refinery",
+          "outputs_per_machine": {
+            "hydrogen": "1/12",
+            "refined-oil": "1/6"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "plasma-refining"
+        },
+        {
+          "count": 2,
+          "inputs_per_machine": {
+            "circuit-board": "17/12",
+            "microcrystalline-component": "17/12"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "processor": "17/24"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "processor"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "plane-filter": "2/3",
+            "processor": "2/3"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "quantum-chip": "1/3"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "quantum-chip"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "deuteron-fuel-rod": "1/3",
+            "dyson-sphere-component": "1/6",
+            "quantum-chip": "1/6"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "small-carrier-rocket": "1/12"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "small-carrier-rocket"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "graphene": "3/8",
+            "photon-combiner": "3/8"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "solar-sail": "3/4"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "solar-sail"
+        },
+        {
+          "count": 3,
+          "inputs_per_machine": {
+            "iron-ingot": "11/4"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "steel": "11/12"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "steel"
+        },
+        {
+          "count": 3,
+          "inputs_per_machine": {
+            "deuterium": "10/9",
+            "iron-ingot": "2/9",
+            "particle-container": "2/9"
+          },
+          "machine_item_id": "miniature-particle-collider",
+          "outputs_per_machine": {
+            "strange-matter": "1/9"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "strange-matter"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "electromagnetic-turbine": "1/3",
+            "energetic-graphite": "1/6",
+            "magnet": "1/2"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "super-magnetic-ring": "1/6"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "super-magnetic-ring"
+        },
+        {
+          "count": 3,
+          "inputs_per_machine": {
+            "steel": "11/12",
+            "sulfuric-acid": "11/6",
+            "titanium-ingot": "11/12"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "titanium-alloy": "11/12"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "titanium-alloy"
+        },
+        {
+          "count": 2,
+          "inputs_per_machine": {
+            "glass": "2/3",
+            "titanium-ingot": "2/3",
+            "water": "2/3"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "titanium-glass": "2/3"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "titanium-glass"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "frame-material": "1/2",
+            "graviton-lens": "1/3",
+            "quantum-chip": "1/6",
+            "titanium-alloy": "4/3"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "vertical-launching-silo": "1/60"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "vertical-launching-silo"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "hydrogen": "1/3",
+            "refined-oil": "1/6"
+          },
+          "machine_item_id": "oil-refinery",
+          "outputs_per_machine": {
+            "energetic-graphite": "1/6",
+            "hydrogen": "1/2"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "x-ray-cracking"
+        }
+      ],
+      "label": "no-proliferator",
+      "lanes_requiring_split": [],
+      "machine_moves": [],
+      "machine_rank": "exact",
+      "outputs": {
+        "dyson-sphere-component": "1/12",
+        "small-carrier-rocket": "1/12",
+        "vertical-launching-silo": "1/60"
+      },
+      "piler_unlocked": true,
+      "power_tower_item_id": "tesla-tower",
+      "self_loop_seeds": [
+        {
+          "consumed_per_craft": "2",
+          "item_id": "hydrogen",
+          "machine_item_id": "oil-refinery",
+          "machines": 1,
+          "net_per_craft": "1",
+          "produced_per_craft": "3",
+          "recipe_id": "x-ray-cracking",
+          "seed_items": 2
+        }
+      ],
+      "sorter_item_ids": [
+        "sorter-1",
+        "sorter-2",
+        "sorter-3",
+        "sorter-4"
+      ],
+      "sorter_pick_stacks": [
+        1,
+        1,
+        1,
+        4
+      ],
+      "sorter_place_stacks": [
+        1,
+        1,
+        1,
+        4
+      ],
+      "spray_lanes": {},
+      "surplus_outputs": {}
+    },
+    {
+      "belt_item_id": "conveyor-belt-2",
+      "belt_items_per_second": "12",
+      "belt_required_edges": [
+        [
+          "iron-ingot",
+          "electric-motor"
+        ],
+        [
+          "processor",
+          "dyson-sphere-component"
+        ],
+        [
+          "gear",
+          "electric-motor"
+        ],
+        [
+          "titanium-alloy",
+          "frame-material"
+        ],
+        [
+          "deuteron-fuel-rod",
+          "small-carrier-rocket"
+        ],
+        [
+          "iron-ingot",
+          "steel"
+        ],
+        [
+          "deuterium",
+          "strange-matter"
+        ],
+        [
+          "graphene-advanced",
+          "carbon-nanotube"
+        ],
+        [
+          "high-purity-silicon",
+          "frame-material"
+        ],
+        [
+          "copper-ingot",
+          "microcrystalline-component"
+        ],
+        [
+          "high-purity-silicon",
+          "microcrystalline-component"
+        ],
+        [
+          "processor",
+          "quantum-chip"
+        ],
+        [
+          "x-ray-cracking",
+          "super-magnetic-ring"
+        ],
+        [
+          "titanium-glass",
+          "plane-filter"
+        ],
+        [
+          "circuit-board",
+          "processor"
+        ],
+        [
+          "graviton-lens",
+          "vertical-launching-silo"
+        ],
+        [
+          "photon-combiner-advanced",
+          "solar-sail"
+        ],
+        [
+          "strange-matter",
+          "graviton-lens"
+        ],
+        [
+          "plane-filter",
+          "quantum-chip"
+        ],
+        [
+          "super-magnetic-ring",
+          "deuteron-fuel-rod"
+        ],
+        [
+          "solar-sail",
+          "dyson-sphere-component"
+        ],
+        [
+          "dyson-sphere-component",
+          "small-carrier-rocket"
+        ],
+        [
+          "circuit-board",
+          "photon-combiner-advanced"
+        ],
+        [
+          "magnetic-coil",
+          "electromagnetic-turbine"
+        ],
+        [
+          "electromagnetic-turbine",
+          "particle-container"
+        ],
+        [
+          "particle-container",
+          "strange-matter"
+        ],
+        [
+          "iron-ingot",
+          "circuit-board"
+        ],
+        [
+          "copper-ingot",
+          "circuit-board"
+        ],
+        [
+          "graphene-advanced",
+          "solar-sail"
+        ],
+        [
+          "electromagnetic-turbine",
+          "super-magnetic-ring"
+        ],
+        [
+          "frame-material",
+          "vertical-launching-silo"
+        ],
+        [
+          "graphene-advanced",
+          "casimir-crystal-advanced"
+        ],
+        [
+          "magnetic-coil",
+          "electric-motor"
+        ],
+        [
+          "electric-motor",
+          "electromagnetic-turbine"
+        ],
+        [
+          "frame-material",
+          "dyson-sphere-component"
+        ],
+        [
+          "magnet",
+          "super-magnetic-ring"
+        ],
+        [
+          "titanium-alloy",
+          "vertical-launching-silo"
+        ],
+        [
+          "steel",
+          "titanium-alloy"
+        ],
+        [
+          "graphene-advanced",
+          "particle-container"
+        ],
+        [
+          "diamond",
+          "graviton-lens"
+        ],
+        [
+          "copper-ingot",
+          "particle-container"
+        ],
+        [
+          "casimir-crystal-advanced",
+          "plane-filter"
+        ],
+        [
+          "glass",
+          "titanium-glass"
+        ],
+        [
+          "x-ray-cracking",
+          "diamond"
+        ],
+        [
+          "microcrystalline-component",
+          "processor"
+        ],
+        [
+          "copper-ingot",
+          "magnetic-coil"
+        ],
+        [
+          "iron-ingot",
+          "gear"
+        ],
+        [
+          "titanium-alloy",
+          "deuteron-fuel-rod"
+        ],
+        [
+          "magnet",
+          "magnetic-coil"
+        ],
+        [
+          "deuterium",
+          "deuteron-fuel-rod"
+        ],
+        [
+          "carbon-nanotube",
+          "frame-material"
+        ],
+        [
+          "quantum-chip",
+          "vertical-launching-silo"
+        ],
+        [
+          "quantum-chip",
+          "small-carrier-rocket"
+        ],
+        [
+          "iron-ingot",
+          "strange-matter"
+        ]
+      ],
+      "belt_stack": 1,
+      "belt_upgrades": [
+        {
+          "item_id": "conveyor-belt-3",
+          "items_per_second": "30"
+        }
+      ],
+      "coproduct_buffer_proofs": [],
+      "external_inputs": {
+        "copper-ore": "3052544/1171875",
+        "crude-oil": "384/625",
+        "deuterium": "376111/1706250",
+        "fire-ice": "36248/9375",
+        "hydrogen": "1975668/284375",
+        "iron-ore": "9214336/1171875",
+        "optical-grating-crystal": "4408/1875",
+        "proliferator-3": "18868201/14062500",
+        "silicon-ore": "47392/9375",
+        "stone": "8192/9375",
+        "sulfuric-acid": "5728/1875",
+        "titanium-ingot": "2032/625",
+        "water": "1024/1875"
+      },
+      "groups": [
+        {
+          "count": 3,
+          "inputs_per_machine": {
+            "graphene": "736/625",
+            "titanium-ingot": "736/1875"
+          },
+          "machine_item_id": "quantum-chemical-plant",
+          "outputs_per_machine": {
+            "carbon-nanotube": "368/375"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "carbon-nanotube"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "graphene": "1024/1875",
+            "hydrogen": "2048/625",
+            "optical-grating-crystal": "4096/1875"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "casimir-crystal": "128/375"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "casimir-crystal-advanced"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "copper-ingot": "6304/9375",
+            "iron-ingot": "12608/9375"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "circuit-board": "3152/1875"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "circuit-board"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "copper-ore": "3052544/1171875"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "copper-ingot": "763136/234375"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "copper-ingot"
+        },
+        {
+          "count": 2,
+          "inputs_per_machine": {
+            "hydrogen": "6175889/1706250"
+          },
+          "machine_item_id": "miniature-particle-collider",
+          "outputs_per_machine": {
+            "deuterium": "6175889/3412500"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "deuterium"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "deuterium": "32/15",
+            "super-magnetic-ring": "8/75",
+            "titanium-alloy": "8/75"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "deuteron-fuel-rod": "4/15"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "deuteron-fuel-rod"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "energetic-graphite": "256/375"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "diamond": "64/75"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "diamond"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "frame-material": "13/25",
+            "processor": "13/25",
+            "solar-sail": "13/25"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "dyson-sphere-component": "13/60"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "dyson-sphere-component"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "gear": "14336/15625",
+            "iron-ingot": "28672/15625",
+            "magnetic-coil": "14336/15625"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "electric-motor": "3584/3125"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "electric-motor"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "electric-motor": "3584/3125",
+            "magnetic-coil": "3584/3125"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "electromagnetic-turbine": "448/625"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "electromagnetic-turbine"
+        },
+        {
+          "count": 2,
+          "inputs_per_machine": {
+            "carbon-nanotube": "184/125",
+            "high-purity-silicon": "46/125",
+            "titanium-alloy": "46/125"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "frame-material": "23/50"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "frame-material"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "iron-ingot": "57344/78125"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "gear": "14336/15625"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "gear"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "stone": "8192/9375"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "glass": "1024/1875"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "glass"
+        },
+        {
+          "count": 2,
+          "inputs_per_machine": {
+            "fire-ice": "18124/9375"
+          },
+          "machine_item_id": "quantum-chemical-plant",
+          "outputs_per_machine": {
+            "graphene": "4531/1875",
+            "hydrogen": "4531/3750"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "graphene-advanced"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "diamond": "64/75",
+            "strange-matter": "16/75"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "graviton-lens": "4/15"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "graviton-lens"
+        },
+        {
+          "count": 2,
+          "inputs_per_machine": {
+            "silicon-ore": "23696/9375"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "high-purity-silicon": "2962/1875"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "high-purity-silicon"
+        },
+        {
+          "count": 3,
+          "inputs_per_machine": {
+            "iron-ore": "7426048/3515625"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "iron-ingot": "1856512/703125"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "iron-ingot"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "iron-ore": "596096/390625"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "magnet": "149024/78125"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "magnet"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "copper-ingot": "64512/78125",
+            "magnet": "129024/78125"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "magnetic-coil": "32256/15625"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "magnetic-coil"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "copper-ingot": "2272/1875",
+            "high-purity-silicon": "4544/1875"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "microcrystalline-component": "568/375"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "microcrystalline-component"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "copper-ingot": "1024/1875",
+            "electromagnetic-turbine": "1024/1875",
+            "graphene": "1024/1875"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "particle-container": "128/375"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "particle-container"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "circuit-board": "104/625",
+            "optical-grating-crystal": "104/625"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "photon-combiner": "26/125"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "photon-combiner-advanced"
+        },
+        {
+          "count": 2,
+          "inputs_per_machine": {
+            "casimir-crystal": "64/375",
+            "titanium-glass": "128/375"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "plane-filter": "16/75"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "plane-filter"
+        },
+        {
+          "count": 2,
+          "inputs_per_machine": {
+            "crude-oil": "192/625"
+          },
+          "machine_item_id": "oil-refinery",
+          "outputs_per_machine": {
+            "hydrogen": "24/125",
+            "refined-oil": "48/125"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "plasma-refining"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "circuit-board": "568/375",
+            "microcrystalline-component": "568/375"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "processor": "71/75"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "processor"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "plane-filter": "32/75",
+            "processor": "32/75"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "quantum-chip": "4/15"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "quantum-chip"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "deuteron-fuel-rod": "4/15",
+            "dyson-sphere-component": "2/15",
+            "quantum-chip": "2/15"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "small-carrier-rocket": "1/12"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "small-carrier-rocket"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "graphene": "26/125",
+            "photon-combiner": "26/125"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "solar-sail": "13/25"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "solar-sail"
+        },
+        {
+          "count": 2,
+          "inputs_per_machine": {
+            "iron-ingot": "5728/3125"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "steel": "1432/1875"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "steel"
+        },
+        {
+          "count": 2,
+          "inputs_per_machine": {
+            "deuterium": "64/75",
+            "iron-ingot": "64/375",
+            "particle-container": "64/375"
+          },
+          "machine_item_id": "miniature-particle-collider",
+          "outputs_per_machine": {
+            "strange-matter": "8/75"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "strange-matter"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "electromagnetic-turbine": "64/375",
+            "energetic-graphite": "32/375",
+            "magnet": "32/125"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "super-magnetic-ring": "8/75"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "super-magnetic-ring"
+        },
+        {
+          "count": 2,
+          "inputs_per_machine": {
+            "steel": "1432/1875",
+            "sulfuric-acid": "2864/1875",
+            "titanium-ingot": "1432/1875"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "titanium-alloy": "358/375"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "titanium-alloy"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "glass": "1024/1875",
+            "titanium-ingot": "1024/1875",
+            "water": "1024/1875"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "titanium-glass": "256/375"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "titanium-glass"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "frame-material": "2/5",
+            "graviton-lens": "4/15",
+            "quantum-chip": "2/15",
+            "titanium-alloy": "16/15"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "vertical-launching-silo": "1/60"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "vertical-launching-silo"
+        },
+        {
+          "count": 4,
+          "inputs_per_machine": {
+            "hydrogen": "48/125",
+            "refined-oil": "24/125"
+          },
+          "machine_item_id": "oil-refinery",
+          "outputs_per_machine": {
+            "energetic-graphite": "24/125",
+            "hydrogen": "72/125"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "x-ray-cracking"
+        }
+      ],
+      "label": "all-products",
+      "lanes_requiring_split": [
+        "hydrogen"
+      ],
+      "machine_moves": [],
+      "machine_rank": "exact",
+      "outputs": {
+        "dyson-sphere-component": "1/12",
+        "small-carrier-rocket": "1/12",
+        "vertical-launching-silo": "1/60"
+      },
+      "piler_unlocked": true,
+      "power_tower_item_id": "tesla-tower",
+      "self_loop_seeds": [
+        {
+          "consumed_per_craft": "2",
+          "item_id": "hydrogen",
+          "machine_item_id": "oil-refinery",
+          "machines": 4,
+          "net_per_craft": "1",
+          "produced_per_craft": "3",
+          "recipe_id": "x-ray-cracking",
+          "seed_items": 8
+        }
+      ],
+      "sorter_item_ids": [
+        "sorter-1",
+        "sorter-2",
+        "sorter-3",
+        "sorter-4"
+      ],
+      "sorter_pick_stacks": [
+        1,
+        1,
+        1,
+        4
+      ],
+      "sorter_place_stacks": [
+        1,
+        1,
+        1,
+        4
+      ],
+      "spray_lanes": {
+        "carbon-nanotube": false,
+        "casimir-crystal": false,
+        "circuit-board": false,
+        "copper-ingot": false,
+        "copper-ore": true,
+        "crude-oil": true,
+        "deuterium": false,
+        "deuteron-fuel-rod": false,
+        "diamond": false,
+        "dyson-sphere-component": false,
+        "electric-motor": false,
+        "electromagnetic-turbine": false,
+        "energetic-graphite": false,
+        "fire-ice": true,
+        "frame-material": false,
+        "gear": false,
+        "glass": false,
+        "graphene": false,
+        "graviton-lens": false,
+        "high-purity-silicon": false,
+        "hydrogen": false,
+        "iron-ingot": false,
+        "iron-ore": true,
+        "magnet": false,
+        "magnetic-coil": false,
+        "microcrystalline-component": false,
+        "optical-grating-crystal": true,
+        "particle-container": false,
+        "photon-combiner": false,
+        "plane-filter": false,
+        "processor": false,
+        "quantum-chip": false,
+        "silicon-ore": true,
+        "solar-sail": false,
+        "steel": false,
+        "stone": true,
+        "strange-matter": false,
+        "sulfuric-acid": true,
+        "super-magnetic-ring": false,
+        "titanium-alloy": false,
+        "titanium-glass": false,
+        "titanium-ingot": true,
+        "water": true
+      },
+      "surplus_outputs": {}
+    },
+    {
+      "belt_item_id": "conveyor-belt-2",
+      "belt_items_per_second": "12",
+      "belt_required_edges": [
+        [
+          "processor",
+          "dyson-sphere-component"
+        ],
+        [
+          "frame-material",
+          "vertical-launching-silo"
+        ],
+        [
+          "deuteron-fuel-rod",
+          "small-carrier-rocket"
+        ],
+        [
+          "graviton-lens",
+          "vertical-launching-silo"
+        ],
+        [
+          "titanium-alloy",
+          "vertical-launching-silo"
+        ],
+        [
+          "frame-material",
+          "dyson-sphere-component"
+        ],
+        [
+          "solar-sail",
+          "dyson-sphere-component"
+        ],
+        [
+          "dyson-sphere-component",
+          "small-carrier-rocket"
+        ],
+        [
+          "quantum-chip",
+          "vertical-launching-silo"
+        ],
+        [
+          "quantum-chip",
+          "small-carrier-rocket"
+        ]
+      ],
+      "belt_stack": 1,
+      "belt_upgrades": [
+        {
+          "item_id": "conveyor-belt-3",
+          "items_per_second": "30"
+        }
+      ],
+      "coproduct_buffer_proofs": [],
+      "external_inputs": {
+        "copper-ore": "489/100",
+        "crude-oil": "2/15",
+        "deuterium": "22069/54600",
+        "fire-ice": "1027/150",
+        "hydrogen": "57489/4550",
+        "iron-ore": "1849/150",
+        "kimberlite-ore": "8/15",
+        "optical-grating-crystal": "679/150",
+        "proliferator-3": "33/500",
+        "silicon-ore": "154/15",
+        "stone": "32/15",
+        "sulfuric-acid": "106/25",
+        "titanium-ingot": "377/75",
+        "unipolar-magnet": "16/3",
+        "water": "16/15"
+      },
+      "groups": [
+        {
+          "count": 4,
+          "inputs_per_machine": {
+            "graphene": "69/50",
+            "titanium-ingot": "23/50"
+          },
+          "machine_item_id": "quantum-chemical-plant",
+          "outputs_per_machine": {
+            "carbon-nanotube": "23/25"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "carbon-nanotube"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "graphene": "16/15",
+            "hydrogen": "32/5",
+            "optical-grating-crystal": "64/15"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "casimir-crystal": "8/15"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "casimir-crystal-advanced"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "copper-ingot": "71/60",
+            "iron-ingot": "71/30"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "circuit-board": "71/30"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "circuit-board"
+        },
+        {
+          "count": 2,
+          "inputs_per_machine": {
+            "copper-ore": "489/200"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "copper-ingot": "489/200"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "copper-ingot"
+        },
+        {
+          "count": 3,
+          "inputs_per_machine": {
+            "hydrogen": "269131/81900"
+          },
+          "machine_item_id": "miniature-particle-collider",
+          "outputs_per_machine": {
+            "deuterium": "269131/163800"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "deuterium"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "deuterium": "8/3",
+            "super-magnetic-ring": "2/15",
+            "titanium-alloy": "2/15"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "deuteron-fuel-rod": "4/15"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "deuteron-fuel-rod"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "kimberlite-ore": "8/15"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "diamond": "16/15"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "diamond-advanced"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "frame-material": "13/25",
+            "processor": "13/25",
+            "solar-sail": "13/25"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "dyson-sphere-component": "13/60"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "dyson-sphere-component"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "gear": "8/15",
+            "iron-ingot": "16/15",
+            "magnetic-coil": "8/15"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "electric-motor": "8/15"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "electric-motor"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "electric-motor": "8/15",
+            "magnetic-coil": "8/15"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "electromagnetic-turbine": "4/15"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "electromagnetic-turbine"
+        },
+        {
+          "count": 2,
+          "inputs_per_machine": {
+            "carbon-nanotube": "46/25",
+            "high-purity-silicon": "23/50",
+            "titanium-alloy": "23/50"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "frame-material": "23/50"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "frame-material"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "iron-ingot": "8/15"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "gear": "8/15"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "gear"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "stone": "32/15"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "glass": "16/15"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "glass"
+        },
+        {
+          "count": 4,
+          "inputs_per_machine": {
+            "fire-ice": "1027/600"
+          },
+          "machine_item_id": "quantum-chemical-plant",
+          "outputs_per_machine": {
+            "graphene": "1027/600",
+            "hydrogen": "1027/1200"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "graphene-advanced"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "diamond": "16/15",
+            "strange-matter": "4/15"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "graviton-lens": "4/15"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "graviton-lens"
+        },
+        {
+          "count": 4,
+          "inputs_per_machine": {
+            "silicon-ore": "77/30"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "high-purity-silicon": "77/60"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "high-purity-silicon"
+        },
+        {
+          "count": 4,
+          "inputs_per_machine": {
+            "iron-ore": "543/200"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "iron-ingot": "543/200"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "iron-ingot"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "iron-ore": "22/15"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "magnet": "22/15"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "magnet"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "copper-ingot": "8/15",
+            "magnet": "16/15"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "magnetic-coil": "16/15"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "magnetic-coil"
+        },
+        {
+          "count": 2,
+          "inputs_per_machine": {
+            "copper-ingot": "79/75",
+            "high-purity-silicon": "158/75"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "microcrystalline-component": "79/75"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "microcrystalline-component"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "copper-ingot": "16/15",
+            "unipolar-magnet": "16/3"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "particle-container": "8/15"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "particle-container-advanced"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "circuit-board": "13/50",
+            "optical-grating-crystal": "13/50"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "photon-combiner": "13/50"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "photon-combiner-advanced"
+        },
+        {
+          "count": 3,
+          "inputs_per_machine": {
+            "casimir-crystal": "8/45",
+            "titanium-glass": "16/45"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "plane-filter": "8/45"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "plane-filter"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "crude-oil": "2/15"
+          },
+          "machine_item_id": "oil-refinery",
+          "outputs_per_machine": {
+            "hydrogen": "1/15",
+            "refined-oil": "2/15"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "plasma-refining"
+        },
+        {
+          "count": 2,
+          "inputs_per_machine": {
+            "circuit-board": "79/75",
+            "microcrystalline-component": "79/75"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "processor": "79/150"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "processor"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "plane-filter": "8/15",
+            "processor": "8/15"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "quantum-chip": "4/15"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "quantum-chip"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "deuteron-fuel-rod": "4/15",
+            "dyson-sphere-component": "2/15",
+            "quantum-chip": "2/15"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "small-carrier-rocket": "1/12"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "small-carrier-rocket"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "graphene": "13/50",
+            "photon-combiner": "13/50"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "solar-sail": "13/25"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "solar-sail"
+        },
+        {
+          "count": 3,
+          "inputs_per_machine": {
+            "iron-ingot": "53/25"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "steel": "53/75"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "steel"
+        },
+        {
+          "count": 3,
+          "inputs_per_machine": {
+            "deuterium": "8/9",
+            "iron-ingot": "8/45",
+            "particle-container": "8/45"
+          },
+          "machine_item_id": "miniature-particle-collider",
+          "outputs_per_machine": {
+            "strange-matter": "4/45"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "strange-matter"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "electromagnetic-turbine": "4/15",
+            "energetic-graphite": "2/15",
+            "magnet": "2/5"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "super-magnetic-ring": "2/15"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "super-magnetic-ring"
+        },
+        {
+          "count": 3,
+          "inputs_per_machine": {
+            "steel": "53/75",
+            "sulfuric-acid": "106/75",
+            "titanium-ingot": "53/75"
+          },
+          "machine_item_id": "negentropy-smelter",
+          "outputs_per_machine": {
+            "titanium-alloy": "53/75"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "titanium-alloy"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "glass": "16/15",
+            "titanium-ingot": "16/15",
+            "water": "16/15"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "titanium-glass": "16/15"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "titanium-glass"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "frame-material": "2/5",
+            "graviton-lens": "4/15",
+            "quantum-chip": "2/15",
+            "titanium-alloy": "16/15"
+          },
+          "machine_item_id": "re-composing-assembler",
+          "outputs_per_machine": {
+            "vertical-launching-silo": "1/60"
+          },
+          "proliferator_mode": "products",
+          "recipe_id": "vertical-launching-silo"
+        },
+        {
+          "count": 1,
+          "inputs_per_machine": {
+            "hydrogen": "4/15",
+            "refined-oil": "2/15"
+          },
+          "machine_item_id": "oil-refinery",
+          "outputs_per_machine": {
+            "energetic-graphite": "2/15",
+            "hydrogen": "2/5"
+          },
+          "proliferator_mode": "none",
+          "recipe_id": "x-ray-cracking"
+        }
+      ],
+      "label": "output-products",
+      "lanes_requiring_split": [
+        "processor",
+        "titanium-alloy"
+      ],
+      "machine_moves": [],
+      "machine_rank": "exact",
+      "outputs": {
+        "dyson-sphere-component": "1/12",
+        "small-carrier-rocket": "1/12",
+        "vertical-launching-silo": "1/60"
+      },
+      "piler_unlocked": true,
+      "power_tower_item_id": "tesla-tower",
+      "self_loop_seeds": [
+        {
+          "consumed_per_craft": "2",
+          "item_id": "hydrogen",
+          "machine_item_id": "oil-refinery",
+          "machines": 1,
+          "net_per_craft": "1",
+          "produced_per_craft": "3",
+          "recipe_id": "x-ray-cracking",
+          "seed_items": 2
+        }
+      ],
+      "sorter_item_ids": [
+        "sorter-1",
+        "sorter-2",
+        "sorter-3",
+        "sorter-4"
+      ],
+      "sorter_pick_stacks": [
+        1,
+        1,
+        1,
+        4
+      ],
+      "sorter_place_stacks": [
+        1,
+        1,
+        1,
+        4
+      ],
+      "spray_lanes": {
+        "deuteron-fuel-rod": false,
+        "dyson-sphere-component": false,
+        "frame-material": false,
+        "graviton-lens": false,
+        "processor": false,
+        "quantum-chip": false,
+        "solar-sail": false,
+        "titanium-alloy": false
+      },
+      "surplus_outputs": {}
+    }
+  ]
+}

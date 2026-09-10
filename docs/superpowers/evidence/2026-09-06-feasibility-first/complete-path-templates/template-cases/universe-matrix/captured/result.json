@@ -1,0 +1,18 @@
+{
+  "case": "universe-matrix",
+  "spec_sha256": "8eb481d486228dfaed052af14cb8d8c9aeca8c1c3d35bf07fc6679cfe9bcb101",
+  "budget_s": 60.0,
+  "original_factory_gate": false,
+  "global_router_calls": 0,
+  "mode": "GEOMETRY_ONLY",
+  "topology_order": "captured",
+  "rate_status": "RATE_REALIZATION_UNPROVED",
+  "outcome": "UNSUPPORTED_INTERFACE",
+  "reason": "sprayed/prelinked interfaces are not compiled",
+  "work": {},
+  "flight_allocation": [],
+  "elapsed_s": 0.5419352268800139,
+  "constructed_links": 0,
+  "junctions": [],
+  "junction_cells": []
+}

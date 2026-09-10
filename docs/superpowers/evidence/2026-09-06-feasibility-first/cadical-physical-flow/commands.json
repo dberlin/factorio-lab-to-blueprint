@@ -1,0 +1,23 @@
+{
+  "workspace": "Extract reproduction.zip into a new directory; paths below are relative to that directory.",
+  "runtime": "Recorded existing Python 3.14 runtime; package versions are captured by restoration-checks.json. Native extensions in the archive are Linux x86_64 CPython 3.14 binaries.",
+  "dependencies": [
+    "uv sync --locked",
+    "uv pip install --python .venv/bin/python --target .superpowers/sdd/2026-09-09-cadical-feasibility/deps python-sat",
+    "uv pip install --python .venv/bin/python --target .superpowers/sdd/2026-09-10-physical-flow/deps z3-solver==5.1.0"
+  ],
+  "PYTHONPATH": "src:.superpowers/sdd:.:.superpowers/sdd/2026-09-09-cadical-feasibility/deps:.superpowers/sdd/2026-09-10-physical-flow/deps",
+  "factory_modules": [
+    "2026-09-10-integer-audit-grid.gate three-output",
+    "2026-09-10-integer-audit-grid.gate unsprayed-mall"
+  ],
+  "proof_modules": [
+    "2026-09-10-integer-audit-grid.grid_cells_witness",
+    "2026-09-10-integer-audit-grid.decoded_bounds_witness",
+    "2026-09-10-integer-audit-grid.geometry_loop_witness",
+    "2026-09-10-physical-flow.certificate_oracle"
+  ],
+  "comparison": "2026-09-10-physical-flow.compare_solvers uses the preserved common inputs; recapturing under a different validator is not the same benchmark.",
+  "prior_sources": "Earlier gate project manifests match the current snapshot except splitter_ports.py; its pre-correction copy is preserved under .superpowers/sdd/2026-09-10-port-longitude/baseline-src/flab2bp/dsp/splitter_ports.py.",
+  "prior_checkpoint_sha256": "57e53c79aea8b7b07be0ff7fe01ab5258e89a12d224401892d9801316b10299c"
+}

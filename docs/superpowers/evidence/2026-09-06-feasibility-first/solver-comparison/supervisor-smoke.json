@@ -1,0 +1,18 @@
+{
+  "exit": 0,
+  "result": {
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+      "/tmp/.ctx-mode-KlQAql/solver-supervisor-smoke-ht9_qcbn/probe.py",
+      "/tmp/.ctx-mode-KlQAql/solver-supervisor-smoke-ht9_qcbn/unused.zip",
+      "/tmp/.ctx-mode-KlQAql/solver-supervisor-smoke-ht9_qcbn/output"
+    ],
+    "exit": -15,
+    "elapsed_seconds_including_bootstrap": 0.24041043687611818,
+    "terminated_at_deadline": "feasibility hard process deadline",
+    "deadline_phase": "feasibility",
+    "recovered_from_checkpoint": true,
+    "outcome": "UNKNOWN"
+  },
+  "stderr": ""
+}

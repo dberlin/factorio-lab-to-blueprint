@@ -1,0 +1,942 @@
+{
+  "strips": 10,
+  "demands": 27,
+  "roles": {
+    "internal": 11,
+    "external": 13,
+    "output": 3
+  },
+  "shared_roots": 0,
+  "prelinked": 0,
+  "shared_groups": [],
+  "module_area": 7058,
+  "banks": 1,
+  "access_columns": 104,
+  "trunk_rows": 6,
+  "levels": 27,
+  "frame": [
+    270,
+    154
+  ],
+  "area": 41580,
+  "fits_band": true,
+  "plan": {
+    "origins": [
+      [
+        66,
+        83
+      ],
+      [
+        66,
+        96
+      ],
+      [
+        66,
+        109
+      ],
+      [
+        66,
+        26
+      ],
+      [
+        66,
+        36
+      ],
+      [
+        66,
+        61
+      ],
+      [
+        66,
+        49
+      ],
+      [
+        66,
+        0
+      ],
+      [
+        66,
+        71
+      ],
+      [
+        66,
+        12
+      ]
+    ],
+    "banks": [
+      [
+        7,
+        9,
+        3,
+        4,
+        6,
+        5,
+        8,
+        0,
+        1,
+        2
+      ]
+    ],
+    "bays": [
+      {
+        "bank": 0,
+        "side": "west",
+        "left": 2,
+        "width": 64,
+        "ports": [
+          [
+            0,
+            4
+          ],
+          [
+            25,
+            7
+          ],
+          [
+            51,
+            10
+          ],
+          [
+            141,
+            13
+          ],
+          [
+            166,
+            16
+          ],
+          [
+            192,
+            19
+          ],
+          [
+            282,
+            22
+          ],
+          [
+            295,
+            25
+          ],
+          [
+            341,
+            28
+          ],
+          [
+            609,
+            31
+          ],
+          [
+            800,
+            34
+          ],
+          [
+            933,
+            37
+          ],
+          [
+            986,
+            40
+          ],
+          [
+            1152,
+            43
+          ],
+          [
+            1309,
+            46
+          ],
+          [
+            1787,
+            49
+          ],
+          [
+            1824,
+            52
+          ],
+          [
+            1942,
+            55
+          ],
+          [
+            2091,
+            58
+          ],
+          [
+            2241,
+            61
+          ]
+        ]
+      },
+      {
+        "bank": 0,
+        "side": "east",
+        "left": 228,
+        "width": 40,
+        "ports": [
+          [
+            105,
+            230
+          ],
+          [
+            246,
+            233
+          ],
+          [
+            324,
+            236
+          ],
+          [
+            518,
+            239
+          ],
+          [
+            715,
+            242
+          ],
+          [
+            771,
+            245
+          ],
+          [
+            887,
+            248
+          ],
+          [
+            1095,
+            251
+          ],
+          [
+            1626,
+            254
+          ],
+          [
+            1901,
+            257
+          ],
+          [
+            2543,
+            260
+          ],
+          [
+            2695,
+            263
+          ]
+        ]
+      }
+    ],
+    "tracks": [
+      {
+        "demand": 11,
+        "left": 2,
+        "right": 4,
+        "row": 148,
+        "level": 2,
+        "source_column": 2,
+        "sink_column": 4
+      },
+      {
+        "demand": 12,
+        "left": 2,
+        "right": 10,
+        "row": 148,
+        "level": 4,
+        "source_column": 2,
+        "sink_column": 10
+      },
+      {
+        "demand": 13,
+        "left": 2,
+        "right": 13,
+        "row": 148,
+        "level": 6,
+        "source_column": 2,
+        "sink_column": 13
+      },
+      {
+        "demand": 14,
+        "left": 2,
+        "right": 19,
+        "row": 148,
+        "level": 8,
+        "source_column": 2,
+        "sink_column": 19
+      },
+      {
+        "demand": 15,
+        "left": 2,
+        "right": 22,
+        "row": 148,
+        "level": 10,
+        "source_column": 2,
+        "sink_column": 22
+      },
+      {
+        "demand": 16,
+        "left": 2,
+        "right": 25,
+        "row": 148,
+        "level": 12,
+        "source_column": 2,
+        "sink_column": 25
+      },
+      {
+        "demand": 17,
+        "left": 2,
+        "right": 28,
+        "row": 148,
+        "level": 14,
+        "source_column": 2,
+        "sink_column": 28
+      },
+      {
+        "demand": 18,
+        "left": 2,
+        "right": 31,
+        "row": 148,
+        "level": 16,
+        "source_column": 2,
+        "sink_column": 31
+      },
+      {
+        "demand": 19,
+        "left": 2,
+        "right": 34,
+        "row": 148,
+        "level": 18,
+        "source_column": 2,
+        "sink_column": 34
+      },
+      {
+        "demand": 21,
+        "left": 2,
+        "right": 37,
+        "row": 148,
+        "level": 20,
+        "source_column": 2,
+        "sink_column": 37
+      },
+      {
+        "demand": 20,
+        "left": 2,
+        "right": 40,
+        "row": 148,
+        "level": 22,
+        "source_column": 2,
+        "sink_column": 40
+      },
+      {
+        "demand": 22,
+        "left": 2,
+        "right": 58,
+        "row": 148,
+        "level": 24,
+        "source_column": 2,
+        "sink_column": 58
+      },
+      {
+        "demand": 23,
+        "left": 2,
+        "right": 61,
+        "row": 151,
+        "level": 2,
+        "source_column": 2,
+        "sink_column": 61
+      },
+      {
+        "demand": 6,
+        "left": 4,
+        "right": 245,
+        "row": 151,
+        "level": 4,
+        "source_column": 245,
+        "sink_column": 4
+      },
+      {
+        "demand": 4,
+        "left": 7,
+        "right": 242,
+        "row": 148,
+        "level": 2,
+        "source_column": 242,
+        "sink_column": 7
+      },
+      {
+        "demand": 7,
+        "left": 13,
+        "right": 245,
+        "row": 148,
+        "level": 4,
+        "source_column": 245,
+        "sink_column": 13
+      },
+      {
+        "demand": 5,
+        "left": 16,
+        "right": 242,
+        "row": 148,
+        "level": 6,
+        "source_column": 242,
+        "sink_column": 16
+      },
+      {
+        "demand": 8,
+        "left": 37,
+        "right": 248,
+        "row": 148,
+        "level": 8,
+        "source_column": 248,
+        "sink_column": 37
+      },
+      {
+        "demand": 0,
+        "left": 43,
+        "right": 230,
+        "row": 148,
+        "level": 10,
+        "source_column": 230,
+        "sink_column": 43
+      },
+      {
+        "demand": 1,
+        "left": 43,
+        "right": 233,
+        "row": 148,
+        "level": 12,
+        "source_column": 233,
+        "sink_column": 43
+      },
+      {
+        "demand": 10,
+        "left": 46,
+        "right": 260,
+        "row": 148,
+        "level": 14,
+        "source_column": 260,
+        "sink_column": 46
+      },
+      {
+        "demand": 2,
+        "left": 49,
+        "right": 236,
+        "row": 148,
+        "level": 16,
+        "source_column": 236,
+        "sink_column": 49
+      },
+      {
+        "demand": 9,
+        "left": 52,
+        "right": 251,
+        "row": 148,
+        "level": 18,
+        "source_column": 251,
+        "sink_column": 52
+      },
+      {
+        "demand": 3,
+        "left": 55,
+        "right": 239,
+        "row": 148,
+        "level": 20,
+        "source_column": 239,
+        "sink_column": 55
+      },
+      {
+        "demand": 24,
+        "left": 254,
+        "right": 268,
+        "row": 148,
+        "level": 2,
+        "source_column": 254,
+        "sink_column": 268
+      },
+      {
+        "demand": 25,
+        "left": 257,
+        "right": 268,
+        "row": 148,
+        "level": 4,
+        "source_column": 257,
+        "sink_column": 268
+      },
+      {
+        "demand": 26,
+        "left": 263,
+        "right": 268,
+        "row": 148,
+        "level": 6,
+        "source_column": 263,
+        "sink_column": 268
+      }
+    ],
+    "machine_height": 146,
+    "track_rows": 6,
+    "width": 270,
+    "height": 154,
+    "levels": 27,
+    "fits_band": true,
+    "iterations": 2
+  },
+  "demands_detail": [
+    {
+      "ordinal": 0,
+      "item": "casimir-crystal",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 0,
+        "belt": 105,
+        "x": 28,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 7,
+        "belt": 1152,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 1,
+      "item": "casimir-crystal",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 1,
+        "belt": 246,
+        "x": 28,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 7,
+        "belt": 1152,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 2,
+      "item": "circuit-board",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 2,
+        "belt": 324,
+        "x": 16,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 8,
+        "belt": 1787,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 3,
+      "item": "glass",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 3,
+        "belt": 518,
+        "x": 90,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 9,
+        "belt": 1942,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 4,
+      "item": "graphene",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 4,
+        "belt": 715,
+        "x": 56,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 0,
+        "belt": 25,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 5,
+      "item": "graphene",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 4,
+        "belt": 715,
+        "x": 56,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 1,
+        "belt": 166,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 6,
+      "item": "hydrogen",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 4,
+        "belt": 771,
+        "x": 56,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 0,
+        "belt": 0,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 7,
+      "item": "hydrogen",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 4,
+        "belt": 771,
+        "x": 56,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 1,
+        "belt": 141,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 8,
+      "item": "high-purity-silicon",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 5,
+        "belt": 887,
+        "x": 45,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 6,
+        "belt": 933,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 9,
+      "item": "microcrystalline-component",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 6,
+        "belt": 1095,
+        "x": 56,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 8,
+        "belt": 1824,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 10,
+      "item": "titanium-glass",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 9,
+        "belt": 2543,
+        "x": 152,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 7,
+        "belt": 1309,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 11,
+      "item": "hydrogen",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 0,
+        "belt": 0,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 12,
+      "item": "optical-grating-crystal",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 0,
+        "belt": 51,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 13,
+      "item": "hydrogen",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 1,
+        "belt": 141,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 14,
+      "item": "optical-grating-crystal",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 1,
+        "belt": 192,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 15,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 2,
+        "belt": 282,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 16,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 2,
+        "belt": 295,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 17,
+      "item": "stone",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 3,
+        "belt": 341,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 18,
+      "item": "fire-ice",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 4,
+        "belt": 609,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 19,
+      "item": "silicon-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 5,
+        "belt": 800,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 20,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 6,
+        "belt": 986,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 21,
+      "item": "high-purity-silicon",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 6,
+        "belt": 933,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 22,
+      "item": "titanium-ingot",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 9,
+        "belt": 2091,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 23,
+      "item": "water",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 9,
+        "belt": 2241,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 24,
+      "item": "plane-filter",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 7,
+        "belt": 1626,
+        "x": 160,
+        "y": 8,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 25,
+      "item": "processor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 8,
+        "belt": 1901,
+        "x": 40,
+        "y": 8,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 26,
+      "item": "titanium-glass",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 9,
+        "belt": 2695,
+        "x": 152,
+        "y": 10,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    }
+  ],
+  "case": "three-output",
+  "held_out": false,
+  "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+  "outcome": "band-admitted-unverified",
+  "original_factory_gate": false,
+  "settlement": "not reached: primary physical integration refused",
+  "coater_service_demands": 0,
+  "original_spray_rate": "0",
+  "multiplexed_access_optimistic_price": {
+    "frame": [
+      183,
+      154
+    ],
+    "fits_band_cost_only": true,
+    "physical_status": "unproved cross-layer access and shared-column conflicts; not an admitted plan"
+  },
+  "elapsed_s": 0.2240620709490031
+}

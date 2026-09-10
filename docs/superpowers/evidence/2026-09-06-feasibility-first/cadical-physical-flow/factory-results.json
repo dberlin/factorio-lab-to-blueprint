@@ -1,0 +1,50 @@
+{
+  "three-output": {
+    "outcome": "VALIDATOR_COMPLETE_WITNESS",
+    "elapsed_s": 6.3523208778351545,
+    "within_deadline": true,
+    "checks_run": 67,
+    "errors": 0,
+    "skipped": [],
+    "buildings": 7850,
+    "bounds": [
+      0,
+      0,
+      261,
+      132
+    ],
+    "audits": {
+      "emitted_audit": true,
+      "projected_audit": true,
+      "decoded_audit": true
+    },
+    "rate_status": "RATE_REALIZATION_UNPROVED",
+    "official_acceptance": false,
+    "blueprint_exists": true,
+    "blueprint_sha256": "5936cf4612a7cd92da3276c40494f5d77cd9aa7c6fb8944755e9260bd2d7507d"
+  },
+  "unsprayed-mall": {
+    "outcome": "VALIDATOR_COMPLETE_WITNESS",
+    "elapsed_s": 57.9965343400836,
+    "within_deadline": true,
+    "checks_run": 67,
+    "errors": 0,
+    "skipped": [],
+    "buildings": 60489,
+    "bounds": [
+      0,
+      0,
+      896,
+      138
+    ],
+    "audits": {
+      "emitted_audit": true,
+      "projected_audit": true,
+      "decoded_audit": true
+    },
+    "rate_status": "RATE_REALIZATION_UNPROVED",
+    "official_acceptance": false,
+    "blueprint_exists": true,
+    "blueprint_sha256": "7b45239ba81a1e1ce0fe5c859fad7c448c43d0b72684b61dceebb99caa026690"
+  }
+}

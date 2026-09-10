@@ -1,0 +1,4536 @@
+{
+  "strips": 49,
+  "demands": 123,
+  "roles": {
+    "internal": 98,
+    "external": 18,
+    "output": 7
+  },
+  "shared_roots": 1,
+  "prelinked": 0,
+  "shared_groups": [
+    [
+      "iron-ore",
+      "unsprayed",
+      [
+        7561,
+        7899
+      ]
+    ]
+  ],
+  "module_area": 26970,
+  "banks": 5,
+  "access_columns": 577,
+  "trunk_rows": 12,
+  "levels": 27,
+  "frame": [
+    889,
+    154
+  ],
+  "area": 136906,
+  "fits_band": true,
+  "plan": {
+    "origins": [
+      [
+        57,
+        73
+      ],
+      [
+        564,
+        118
+      ],
+      [
+        739,
+        49
+      ],
+      [
+        739,
+        61
+      ],
+      [
+        739,
+        73
+      ],
+      [
+        739,
+        85
+      ],
+      [
+        332,
+        12
+      ],
+      [
+        332,
+        38
+      ],
+      [
+        57,
+        12
+      ],
+      [
+        57,
+        26
+      ],
+      [
+        564,
+        79
+      ],
+      [
+        57,
+        86
+      ],
+      [
+        564,
+        21
+      ],
+      [
+        564,
+        45
+      ],
+      [
+        57,
+        0
+      ],
+      [
+        564,
+        58
+      ],
+      [
+        332,
+        24
+      ],
+      [
+        332,
+        112
+      ],
+      [
+        57,
+        98
+      ],
+      [
+        57,
+        110
+      ],
+      [
+        57,
+        122
+      ],
+      [
+        332,
+        0
+      ],
+      [
+        332,
+        76
+      ],
+      [
+        332,
+        88
+      ],
+      [
+        564,
+        0
+      ],
+      [
+        858,
+        43
+      ],
+      [
+        57,
+        40
+      ],
+      [
+        57,
+        51
+      ],
+      [
+        57,
+        62
+      ],
+      [
+        332,
+        50
+      ],
+      [
+        332,
+        63
+      ],
+      [
+        739,
+        98
+      ],
+      [
+        332,
+        100
+      ],
+      [
+        858,
+        13
+      ],
+      [
+        739,
+        0
+      ],
+      [
+        858,
+        56
+      ],
+      [
+        739,
+        12
+      ],
+      [
+        739,
+        24
+      ],
+      [
+        564,
+        92
+      ],
+      [
+        858,
+        28
+      ],
+      [
+        739,
+        37
+      ],
+      [
+        739,
+        110
+      ],
+      [
+        739,
+        122
+      ],
+      [
+        858,
+        0
+      ],
+      [
+        564,
+        10
+      ],
+      [
+        564,
+        31
+      ],
+      [
+        332,
+        125
+      ],
+      [
+        564,
+        105
+      ],
+      [
+        564,
+        68
+      ]
+    ],
+    "banks": [
+      [
+        14,
+        8,
+        9,
+        26,
+        27,
+        28,
+        0,
+        11,
+        18,
+        19,
+        20
+      ],
+      [
+        21,
+        6,
+        16,
+        7,
+        29,
+        30,
+        22,
+        23,
+        32,
+        17,
+        46
+      ],
+      [
+        24,
+        44,
+        12,
+        45,
+        13,
+        15,
+        48,
+        10,
+        38,
+        47,
+        1
+      ],
+      [
+        34,
+        36,
+        37,
+        40,
+        2,
+        3,
+        4,
+        5,
+        31,
+        41,
+        42
+      ],
+      [
+        43,
+        33,
+        39,
+        25,
+        35
+      ]
+    ],
+    "bays": [
+      {
+        "bank": 0,
+        "side": "west",
+        "left": 2,
+        "width": 55,
+        "ports": [
+          [
+            0,
+            4
+          ],
+          [
+            115,
+            7
+          ],
+          [
+            1402,
+            10
+          ],
+          [
+            1543,
+            13
+          ],
+          [
+            1685,
+            16
+          ],
+          [
+            2332,
+            19
+          ],
+          [
+            2469,
+            22
+          ],
+          [
+            2607,
+            25
+          ],
+          [
+            3378,
+            28
+          ],
+          [
+            3483,
+            31
+          ],
+          [
+            4091,
+            34
+          ],
+          [
+            5259,
+            37
+          ],
+          [
+            5801,
+            40
+          ],
+          [
+            6275,
+            43
+          ],
+          [
+            8047,
+            46
+          ],
+          [
+            8643,
+            49
+          ],
+          [
+            9239,
+            52
+          ]
+        ]
+      },
+      {
+        "bank": 0,
+        "side": "east",
+        "left": 207,
+        "width": 73,
+        "ports": [
+          [
+            350,
+            209
+          ],
+          [
+            1971,
+            212
+          ],
+          [
+            2115,
+            215
+          ],
+          [
+            2885,
+            218
+          ],
+          [
+            3025,
+            221
+          ],
+          [
+            3696,
+            224
+          ],
+          [
+            4383,
+            227
+          ],
+          [
+            4531,
+            230
+          ],
+          [
+            5448,
+            233
+          ],
+          [
+            5544,
+            236
+          ],
+          [
+            5640,
+            239
+          ],
+          [
+            5966,
+            242
+          ],
+          [
+            6050,
+            245
+          ],
+          [
+            6134,
+            248
+          ],
+          [
+            6440,
+            251
+          ],
+          [
+            6524,
+            254
+          ],
+          [
+            6608,
+            257
+          ],
+          [
+            8320,
+            260
+          ],
+          [
+            8458,
+            263
+          ],
+          [
+            8916,
+            266
+          ],
+          [
+            9054,
+            269
+          ],
+          [
+            9506,
+            272
+          ],
+          [
+            9641,
+            275
+          ]
+        ]
+      },
+      {
+        "bank": 1,
+        "side": "west",
+        "left": 280,
+        "width": 52,
+        "ports": [
+          [
+            607,
+            282
+          ],
+          [
+            1013,
+            285
+          ],
+          [
+            4768,
+            288
+          ],
+          [
+            5096,
+            291
+          ],
+          [
+            6749,
+            294
+          ],
+          [
+            7206,
+            297
+          ],
+          [
+            7561,
+            300
+          ],
+          [
+            9822,
+            303
+          ],
+          [
+            9887,
+            306
+          ],
+          [
+            10174,
+            309
+          ],
+          [
+            10239,
+            312
+          ],
+          [
+            10553,
+            315
+          ],
+          [
+            10602,
+            318
+          ],
+          [
+            11691,
+            321
+          ],
+          [
+            11736,
+            324
+          ],
+          [
+            11782,
+            327
+          ]
+        ]
+      },
+      {
+        "bank": 1,
+        "side": "east",
+        "left": 415,
+        "width": 85,
+        "ports": [
+          [
+            748,
+            417
+          ],
+          [
+            820,
+            420
+          ],
+          [
+            892,
+            423
+          ],
+          [
+            1148,
+            426
+          ],
+          [
+            1217,
+            429
+          ],
+          [
+            1286,
+            432
+          ],
+          [
+            4906,
+            435
+          ],
+          [
+            4978,
+            438
+          ],
+          [
+            5050,
+            441
+          ],
+          [
+            5186,
+            444
+          ],
+          [
+            5234,
+            447
+          ],
+          [
+            6908,
+            450
+          ],
+          [
+            6989,
+            453
+          ],
+          [
+            7070,
+            456
+          ],
+          [
+            7329,
+            459
+          ],
+          [
+            7392,
+            462
+          ],
+          [
+            7455,
+            465
+          ],
+          [
+            7678,
+            468
+          ],
+          [
+            7738,
+            471
+          ],
+          [
+            7798,
+            474
+          ],
+          [
+            10020,
+            477
+          ],
+          [
+            10088,
+            480
+          ],
+          [
+            10372,
+            483
+          ],
+          [
+            10440,
+            486
+          ],
+          [
+            10703,
+            489
+          ],
+          [
+            11876,
+            492
+          ],
+          [
+            11924,
+            495
+          ]
+        ]
+      },
+      {
+        "bank": 2,
+        "side": "west",
+        "left": 500,
+        "width": 64,
+        "ports": [
+          [
+            411,
+            502
+          ],
+          [
+            424,
+            505
+          ],
+          [
+            3236,
+            508
+          ],
+          [
+            3261,
+            511
+          ],
+          [
+            3805,
+            514
+          ],
+          [
+            3929,
+            517
+          ],
+          [
+            3958,
+            520
+          ],
+          [
+            3988,
+            523
+          ],
+          [
+            4680,
+            526
+          ],
+          [
+            7899,
+            529
+          ],
+          [
+            10991,
+            532
+          ],
+          [
+            11012,
+            535
+          ],
+          [
+            11270,
+            538
+          ],
+          [
+            11463,
+            541
+          ],
+          [
+            11496,
+            544
+          ],
+          [
+            11530,
+            547
+          ],
+          [
+            11997,
+            550
+          ],
+          [
+            12019,
+            553
+          ],
+          [
+            12042,
+            556
+          ],
+          [
+            12162,
+            559
+          ]
+        ]
+      },
+      {
+        "bank": 2,
+        "side": "east",
+        "left": 611,
+        "width": 58,
+        "ports": [
+          [
+            453,
+            613
+          ],
+          [
+            469,
+            616
+          ],
+          [
+            3314,
+            619
+          ],
+          [
+            3342,
+            622
+          ],
+          [
+            3886,
+            625
+          ],
+          [
+            4050,
+            628
+          ],
+          [
+            4737,
+            631
+          ],
+          [
+            7986,
+            634
+          ],
+          [
+            11057,
+            637
+          ],
+          [
+            11081,
+            640
+          ],
+          [
+            11357,
+            643
+          ],
+          [
+            11402,
+            646
+          ],
+          [
+            11600,
+            649
+          ],
+          [
+            11636,
+            652
+          ],
+          [
+            12089,
+            655
+          ],
+          [
+            12113,
+            658
+          ],
+          [
+            12219,
+            661
+          ],
+          [
+            12249,
+            664
+          ]
+        ]
+      },
+      {
+        "bank": 3,
+        "side": "west",
+        "left": 669,
+        "width": 70,
+        "ports": [
+          [
+            490,
+            671
+          ],
+          [
+            495,
+            674
+          ],
+          [
+            517,
+            677
+          ],
+          [
+            522,
+            680
+          ],
+          [
+            544,
+            683
+          ],
+          [
+            549,
+            686
+          ],
+          [
+            571,
+            689
+          ],
+          [
+            576,
+            692
+          ],
+          [
+            582,
+            695
+          ],
+          [
+            10526,
+            698
+          ],
+          [
+            10531,
+            701
+          ],
+          [
+            10781,
+            704
+          ],
+          [
+            10794,
+            707
+          ],
+          [
+            10851,
+            710
+          ],
+          [
+            10912,
+            713
+          ],
+          [
+            10925,
+            716
+          ],
+          [
+            11137,
+            719
+          ],
+          [
+            11146,
+            722
+          ],
+          [
+            11180,
+            725
+          ],
+          [
+            11185,
+            728
+          ],
+          [
+            11207,
+            731
+          ],
+          [
+            11212,
+            734
+          ]
+        ]
+      },
+      {
+        "bank": 3,
+        "side": "east",
+        "left": 757,
+        "width": 43,
+        "ports": [
+          [
+            508,
+            759
+          ],
+          [
+            535,
+            762
+          ],
+          [
+            562,
+            765
+          ],
+          [
+            596,
+            768
+          ],
+          [
+            10544,
+            771
+          ],
+          [
+            10823,
+            774
+          ],
+          [
+            10879,
+            777
+          ],
+          [
+            10895,
+            780
+          ],
+          [
+            10954,
+            783
+          ],
+          [
+            10970,
+            786
+          ],
+          [
+            11167,
+            789
+          ],
+          [
+            11198,
+            792
+          ],
+          [
+            11225,
+            795
+          ]
+        ]
+      },
+      {
+        "bank": 4,
+        "side": "west",
+        "left": 800,
+        "width": 58,
+        "ports": [
+          [
+            8032,
+            802
+          ],
+          [
+            8033,
+            805
+          ],
+          [
+            8035,
+            808
+          ],
+          [
+            10756,
+            811
+          ],
+          [
+            10757,
+            814
+          ],
+          [
+            10759,
+            817
+          ],
+          [
+            10762,
+            820
+          ],
+          [
+            10763,
+            823
+          ],
+          [
+            10840,
+            826
+          ],
+          [
+            10841,
+            829
+          ],
+          [
+            11112,
+            832
+          ],
+          [
+            11113,
+            835
+          ],
+          [
+            11115,
+            838
+          ],
+          [
+            11118,
+            841
+          ],
+          [
+            11119,
+            844
+          ],
+          [
+            11234,
+            847
+          ],
+          [
+            11239,
+            850
+          ],
+          [
+            11245,
+            853
+          ]
+        ]
+      },
+      {
+        "bank": 4,
+        "side": "east",
+        "left": 868,
+        "width": 19,
+        "ports": [
+          [
+            8041,
+            870
+          ],
+          [
+            10769,
+            873
+          ],
+          [
+            10846,
+            876
+          ],
+          [
+            11125,
+            879
+          ],
+          [
+            11259,
+            882
+          ]
+        ]
+      }
+    ],
+    "tracks": [
+      {
+        "demand": 110,
+        "left": 2,
+        "right": 37,
+        "row": 142,
+        "level": 2,
+        "source_column": 2,
+        "sink_column": 37
+      },
+      {
+        "demand": 103,
+        "left": 2,
+        "right": 40,
+        "row": 142,
+        "level": 4,
+        "source_column": 2,
+        "sink_column": 40
+      },
+      {
+        "demand": 104,
+        "left": 2,
+        "right": 43,
+        "row": 142,
+        "level": 6,
+        "source_column": 2,
+        "sink_column": 43
+      },
+      {
+        "demand": 107,
+        "left": 2,
+        "right": 46,
+        "row": 142,
+        "level": 8,
+        "source_column": 2,
+        "sink_column": 46
+      },
+      {
+        "demand": 108,
+        "left": 2,
+        "right": 49,
+        "row": 142,
+        "level": 10,
+        "source_column": 2,
+        "sink_column": 49
+      },
+      {
+        "demand": 109,
+        "left": 2,
+        "right": 52,
+        "row": 142,
+        "level": 12,
+        "source_column": 2,
+        "sink_column": 52
+      },
+      {
+        "demand": 99,
+        "left": 2,
+        "right": 282,
+        "row": 142,
+        "level": 14,
+        "source_column": 2,
+        "sink_column": 282
+      },
+      {
+        "demand": 100,
+        "left": 2,
+        "right": 285,
+        "row": 142,
+        "level": 16,
+        "source_column": 2,
+        "sink_column": 285
+      },
+      {
+        "demand": 101,
+        "left": 2,
+        "right": 288,
+        "row": 142,
+        "level": 18,
+        "source_column": 2,
+        "sink_column": 288
+      },
+      {
+        "demand": 102,
+        "left": 2,
+        "right": 291,
+        "row": 142,
+        "level": 20,
+        "source_column": 2,
+        "sink_column": 291
+      },
+      {
+        "demand": 105,
+        "left": 2,
+        "right": 294,
+        "row": 142,
+        "level": 22,
+        "source_column": 2,
+        "sink_column": 294
+      },
+      {
+        "demand": 106,
+        "left": 2,
+        "right": 297,
+        "row": 142,
+        "level": 24,
+        "source_column": 2,
+        "sink_column": 297
+      },
+      {
+        "demand": 114,
+        "left": 2,
+        "right": 300,
+        "row": 145,
+        "level": 2,
+        "source_column": 2,
+        "sink_column": 300
+      },
+      {
+        "demand": 98,
+        "left": 2,
+        "right": 514,
+        "row": 145,
+        "level": 4,
+        "source_column": 2,
+        "sink_column": 514
+      },
+      {
+        "demand": 111,
+        "left": 2,
+        "right": 526,
+        "row": 145,
+        "level": 6,
+        "source_column": 2,
+        "sink_column": 526
+      },
+      {
+        "demand": 115,
+        "left": 2,
+        "right": 529,
+        "row": 145,
+        "level": 8,
+        "source_column": 2,
+        "sink_column": 529
+      },
+      {
+        "demand": 112,
+        "left": 2,
+        "right": 553,
+        "row": 145,
+        "level": 10,
+        "source_column": 2,
+        "sink_column": 553
+      },
+      {
+        "demand": 113,
+        "left": 2,
+        "right": 559,
+        "row": 145,
+        "level": 12,
+        "source_column": 2,
+        "sink_column": 559
+      },
+      {
+        "demand": 30,
+        "left": 4,
+        "right": 435,
+        "row": 145,
+        "level": 14,
+        "source_column": 435,
+        "sink_column": 4
+      },
+      {
+        "demand": 91,
+        "left": 4,
+        "right": 444,
+        "row": 145,
+        "level": 16,
+        "source_column": 444,
+        "sink_column": 4
+      },
+      {
+        "demand": 87,
+        "left": 7,
+        "right": 661,
+        "row": 145,
+        "level": 18,
+        "source_column": 661,
+        "sink_column": 7
+      },
+      {
+        "demand": 27,
+        "left": 10,
+        "right": 230,
+        "row": 145,
+        "level": 20,
+        "source_column": 230,
+        "sink_column": 10
+      },
+      {
+        "demand": 42,
+        "left": 13,
+        "right": 248,
+        "row": 145,
+        "level": 22,
+        "source_column": 248,
+        "sink_column": 13
+      },
+      {
+        "demand": 44,
+        "left": 13,
+        "right": 456,
+        "row": 145,
+        "level": 24,
+        "source_column": 456,
+        "sink_column": 13
+      },
+      {
+        "demand": 61,
+        "left": 16,
+        "right": 477,
+        "row": 148,
+        "level": 2,
+        "source_column": 477,
+        "sink_column": 16
+      },
+      {
+        "demand": 28,
+        "left": 19,
+        "right": 230,
+        "row": 148,
+        "level": 4,
+        "source_column": 230,
+        "sink_column": 19
+      },
+      {
+        "demand": 45,
+        "left": 22,
+        "right": 248,
+        "row": 148,
+        "level": 6,
+        "source_column": 248,
+        "sink_column": 22
+      },
+      {
+        "demand": 43,
+        "left": 22,
+        "right": 257,
+        "row": 148,
+        "level": 8,
+        "source_column": 257,
+        "sink_column": 22
+      },
+      {
+        "demand": 94,
+        "left": 25,
+        "right": 477,
+        "row": 148,
+        "level": 10,
+        "source_column": 477,
+        "sink_column": 25
+      },
+      {
+        "demand": 62,
+        "left": 25,
+        "right": 483,
+        "row": 148,
+        "level": 12,
+        "source_column": 483,
+        "sink_column": 25
+      },
+      {
+        "demand": 16,
+        "left": 28,
+        "right": 212,
+        "row": 148,
+        "level": 14,
+        "source_column": 212,
+        "sink_column": 28
+      },
+      {
+        "demand": 15,
+        "left": 28,
+        "right": 218,
+        "row": 148,
+        "level": 16,
+        "source_column": 218,
+        "sink_column": 28
+      },
+      {
+        "demand": 64,
+        "left": 31,
+        "right": 486,
+        "row": 148,
+        "level": 18,
+        "source_column": 486,
+        "sink_column": 31
+      },
+      {
+        "demand": 95,
+        "left": 31,
+        "right": 771,
+        "row": 148,
+        "level": 20,
+        "source_column": 771,
+        "sink_column": 31
+      },
+      {
+        "demand": 46,
+        "left": 34,
+        "right": 459,
+        "row": 148,
+        "level": 22,
+        "source_column": 459,
+        "sink_column": 34
+      },
+      {
+        "demand": 47,
+        "left": 34,
+        "right": 468,
+        "row": 148,
+        "level": 24,
+        "source_column": 468,
+        "sink_column": 34
+      },
+      {
+        "demand": 0,
+        "left": 209,
+        "right": 517,
+        "row": 142,
+        "level": 2,
+        "source_column": 209,
+        "sink_column": 517
+      },
+      {
+        "demand": 14,
+        "left": 212,
+        "right": 508,
+        "row": 142,
+        "level": 4,
+        "source_column": 212,
+        "sink_column": 508
+      },
+      {
+        "demand": 17,
+        "left": 215,
+        "right": 725,
+        "row": 142,
+        "level": 6,
+        "source_column": 215,
+        "sink_column": 725
+      },
+      {
+        "demand": 18,
+        "left": 221,
+        "right": 725,
+        "row": 142,
+        "level": 8,
+        "source_column": 221,
+        "sink_column": 725
+      },
+      {
+        "demand": 22,
+        "left": 224,
+        "right": 321,
+        "row": 142,
+        "level": 10,
+        "source_column": 224,
+        "sink_column": 321
+      },
+      {
+        "demand": 21,
+        "left": 224,
+        "right": 541,
+        "row": 142,
+        "level": 12,
+        "source_column": 224,
+        "sink_column": 541
+      },
+      {
+        "demand": 26,
+        "left": 227,
+        "right": 677,
+        "row": 148,
+        "level": 14,
+        "source_column": 227,
+        "sink_column": 677
+      },
+      {
+        "demand": 33,
+        "left": 233,
+        "right": 520,
+        "row": 145,
+        "level": 20,
+        "source_column": 233,
+        "sink_column": 520
+      },
+      {
+        "demand": 34,
+        "left": 236,
+        "right": 318,
+        "row": 148,
+        "level": 4,
+        "source_column": 236,
+        "sink_column": 318
+      },
+      {
+        "demand": 35,
+        "left": 239,
+        "right": 832,
+        "row": 148,
+        "level": 16,
+        "source_column": 239,
+        "sink_column": 832
+      },
+      {
+        "demand": 36,
+        "left": 242,
+        "right": 505,
+        "row": 151,
+        "level": 2,
+        "source_column": 242,
+        "sink_column": 505
+      },
+      {
+        "demand": 39,
+        "left": 245,
+        "right": 680,
+        "row": 151,
+        "level": 4,
+        "source_column": 245,
+        "sink_column": 680
+      },
+      {
+        "demand": 37,
+        "left": 251,
+        "right": 674,
+        "row": 145,
+        "level": 22,
+        "source_column": 251,
+        "sink_column": 674
+      },
+      {
+        "demand": 40,
+        "left": 254,
+        "right": 680,
+        "row": 148,
+        "level": 6,
+        "source_column": 254,
+        "sink_column": 680
+      },
+      {
+        "demand": 53,
+        "left": 260,
+        "right": 306,
+        "row": 148,
+        "level": 8,
+        "source_column": 260,
+        "sink_column": 306
+      },
+      {
+        "demand": 57,
+        "left": 260,
+        "right": 312,
+        "row": 151,
+        "level": 6,
+        "source_column": 260,
+        "sink_column": 312
+      },
+      {
+        "demand": 58,
+        "left": 263,
+        "right": 547,
+        "row": 151,
+        "level": 8,
+        "source_column": 263,
+        "sink_column": 547
+      },
+      {
+        "demand": 54,
+        "left": 266,
+        "right": 312,
+        "row": 151,
+        "level": 10,
+        "source_column": 266,
+        "sink_column": 312
+      },
+      {
+        "demand": 59,
+        "left": 269,
+        "right": 327,
+        "row": 151,
+        "level": 12,
+        "source_column": 269,
+        "sink_column": 327
+      },
+      {
+        "demand": 56,
+        "left": 272,
+        "right": 306,
+        "row": 151,
+        "level": 14,
+        "source_column": 272,
+        "sink_column": 306
+      },
+      {
+        "demand": 55,
+        "left": 272,
+        "right": 701,
+        "row": 151,
+        "level": 16,
+        "source_column": 272,
+        "sink_column": 701
+      },
+      {
+        "demand": 60,
+        "left": 275,
+        "right": 547,
+        "row": 151,
+        "level": 18,
+        "source_column": 275,
+        "sink_column": 547
+      },
+      {
+        "demand": 9,
+        "left": 303,
+        "right": 420,
+        "row": 142,
+        "level": 14,
+        "source_column": 420,
+        "sink_column": 303
+      },
+      {
+        "demand": 10,
+        "left": 309,
+        "right": 429,
+        "row": 142,
+        "level": 16,
+        "source_column": 429,
+        "sink_column": 309
+      },
+      {
+        "demand": 12,
+        "left": 315,
+        "right": 423,
+        "row": 142,
+        "level": 18,
+        "source_column": 423,
+        "sink_column": 315
+      },
+      {
+        "demand": 13,
+        "left": 315,
+        "right": 432,
+        "row": 142,
+        "level": 20,
+        "source_column": 432,
+        "sink_column": 315
+      },
+      {
+        "demand": 24,
+        "left": 324,
+        "right": 625,
+        "row": 142,
+        "level": 10,
+        "source_column": 625,
+        "sink_column": 324
+      },
+      {
+        "demand": 7,
+        "left": 417,
+        "right": 502,
+        "row": 142,
+        "level": 22,
+        "source_column": 417,
+        "sink_column": 502
+      },
+      {
+        "demand": 11,
+        "left": 420,
+        "right": 698,
+        "row": 142,
+        "level": 24,
+        "source_column": 420,
+        "sink_column": 698
+      },
+      {
+        "demand": 8,
+        "left": 426,
+        "right": 671,
+        "row": 142,
+        "level": 14,
+        "source_column": 426,
+        "sink_column": 671
+      },
+      {
+        "demand": 31,
+        "left": 438,
+        "right": 692,
+        "row": 142,
+        "level": 16,
+        "source_column": 438,
+        "sink_column": 692
+      },
+      {
+        "demand": 117,
+        "left": 441,
+        "right": 887,
+        "row": 142,
+        "level": 18,
+        "source_column": 441,
+        "sink_column": 887
+      },
+      {
+        "demand": 32,
+        "left": 444,
+        "right": 814,
+        "row": 142,
+        "level": 20,
+        "source_column": 444,
+        "sink_column": 814
+      },
+      {
+        "demand": 118,
+        "left": 447,
+        "right": 887,
+        "row": 145,
+        "level": 2,
+        "source_column": 447,
+        "sink_column": 887
+      },
+      {
+        "demand": 38,
+        "left": 450,
+        "right": 505,
+        "row": 145,
+        "level": 14,
+        "source_column": 450,
+        "sink_column": 505
+      },
+      {
+        "demand": 41,
+        "left": 453,
+        "right": 680,
+        "row": 145,
+        "level": 16,
+        "source_column": 453,
+        "sink_column": 680
+      },
+      {
+        "demand": 93,
+        "left": 462,
+        "right": 505,
+        "row": 145,
+        "level": 24,
+        "source_column": 462,
+        "sink_column": 505
+      },
+      {
+        "demand": 48,
+        "left": 462,
+        "right": 802,
+        "row": 148,
+        "level": 4,
+        "source_column": 462,
+        "sink_column": 802
+      },
+      {
+        "demand": 50,
+        "left": 465,
+        "right": 722,
+        "row": 148,
+        "level": 8,
+        "source_column": 465,
+        "sink_column": 722
+      },
+      {
+        "demand": 49,
+        "left": 471,
+        "right": 802,
+        "row": 148,
+        "level": 22,
+        "source_column": 471,
+        "sink_column": 802
+      },
+      {
+        "demand": 51,
+        "left": 474,
+        "right": 722,
+        "row": 148,
+        "level": 24,
+        "source_column": 474,
+        "sink_column": 722
+      },
+      {
+        "demand": 63,
+        "left": 480,
+        "right": 511,
+        "row": 148,
+        "level": 2,
+        "source_column": 480,
+        "sink_column": 511
+      },
+      {
+        "demand": 67,
+        "left": 489,
+        "right": 535,
+        "row": 148,
+        "level": 10,
+        "source_column": 489,
+        "sink_column": 535
+      },
+      {
+        "demand": 66,
+        "left": 489,
+        "right": 716,
+        "row": 148,
+        "level": 12,
+        "source_column": 489,
+        "sink_column": 716
+      },
+      {
+        "demand": 97,
+        "left": 492,
+        "right": 695,
+        "row": 148,
+        "level": 18,
+        "source_column": 492,
+        "sink_column": 695
+      },
+      {
+        "demand": 83,
+        "left": 492,
+        "right": 844,
+        "row": 151,
+        "level": 6,
+        "source_column": 492,
+        "sink_column": 844
+      },
+      {
+        "demand": 84,
+        "left": 495,
+        "right": 853,
+        "row": 151,
+        "level": 10,
+        "source_column": 495,
+        "sink_column": 853
+      },
+      {
+        "demand": 85,
+        "left": 523,
+        "right": 655,
+        "row": 142,
+        "level": 2,
+        "source_column": 655,
+        "sink_column": 523
+      },
+      {
+        "demand": 3,
+        "left": 532,
+        "right": 616,
+        "row": 142,
+        "level": 4,
+        "source_column": 616,
+        "sink_column": 532
+      },
+      {
+        "demand": 52,
+        "left": 538,
+        "right": 634,
+        "row": 142,
+        "level": 22,
+        "source_column": 634,
+        "sink_column": 538
+      },
+      {
+        "demand": 90,
+        "left": 541,
+        "right": 619,
+        "row": 145,
+        "level": 4,
+        "source_column": 619,
+        "sink_column": 541
+      },
+      {
+        "demand": 23,
+        "left": 544,
+        "right": 625,
+        "row": 142,
+        "level": 12,
+        "source_column": 625,
+        "sink_column": 544
+      },
+      {
+        "demand": 80,
+        "left": 550,
+        "right": 646,
+        "row": 145,
+        "level": 6,
+        "source_column": 646,
+        "sink_column": 550
+      },
+      {
+        "demand": 88,
+        "left": 556,
+        "right": 664,
+        "row": 145,
+        "level": 8,
+        "source_column": 664,
+        "sink_column": 556
+      },
+      {
+        "demand": 1,
+        "left": 613,
+        "right": 704,
+        "row": 145,
+        "level": 10,
+        "source_column": 613,
+        "sink_column": 704
+      },
+      {
+        "demand": 2,
+        "left": 616,
+        "right": 713,
+        "row": 145,
+        "level": 12,
+        "source_column": 616,
+        "sink_column": 713
+      },
+      {
+        "demand": 19,
+        "left": 619,
+        "right": 686,
+        "row": 142,
+        "level": 4,
+        "source_column": 619,
+        "sink_column": 686
+      },
+      {
+        "demand": 20,
+        "left": 622,
+        "right": 731,
+        "row": 145,
+        "level": 4,
+        "source_column": 622,
+        "sink_column": 731
+      },
+      {
+        "demand": 25,
+        "left": 628,
+        "right": 811,
+        "row": 142,
+        "level": 10,
+        "source_column": 628,
+        "sink_column": 811
+      },
+      {
+        "demand": 29,
+        "left": 631,
+        "right": 710,
+        "row": 142,
+        "level": 12,
+        "source_column": 631,
+        "sink_column": 710
+      },
+      {
+        "demand": 92,
+        "left": 634,
+        "right": 674,
+        "row": 145,
+        "level": 14,
+        "source_column": 634,
+        "sink_column": 674
+      },
+      {
+        "demand": 74,
+        "left": 637,
+        "right": 838,
+        "row": 142,
+        "level": 22,
+        "source_column": 637,
+        "sink_column": 838
+      },
+      {
+        "demand": 75,
+        "left": 640,
+        "right": 847,
+        "row": 145,
+        "level": 20,
+        "source_column": 640,
+        "sink_column": 847
+      },
+      {
+        "demand": 79,
+        "left": 643,
+        "right": 841,
+        "row": 145,
+        "level": 24,
+        "source_column": 643,
+        "sink_column": 841
+      },
+      {
+        "demand": 81,
+        "left": 649,
+        "right": 695,
+        "row": 145,
+        "level": 6,
+        "source_column": 649,
+        "sink_column": 695
+      },
+      {
+        "demand": 82,
+        "left": 652,
+        "right": 820,
+        "row": 148,
+        "level": 2,
+        "source_column": 652,
+        "sink_column": 820
+      },
+      {
+        "demand": 86,
+        "left": 658,
+        "right": 823,
+        "row": 142,
+        "level": 2,
+        "source_column": 658,
+        "sink_column": 823
+      },
+      {
+        "demand": 5,
+        "left": 683,
+        "right": 762,
+        "row": 142,
+        "level": 14,
+        "source_column": 762,
+        "sink_column": 683
+      },
+      {
+        "demand": 6,
+        "left": 689,
+        "right": 765,
+        "row": 142,
+        "level": 4,
+        "source_column": 765,
+        "sink_column": 689
+      },
+      {
+        "demand": 89,
+        "left": 704,
+        "right": 759,
+        "row": 142,
+        "level": 16,
+        "source_column": 759,
+        "sink_column": 704
+      },
+      {
+        "demand": 70,
+        "left": 707,
+        "right": 777,
+        "row": 142,
+        "level": 24,
+        "source_column": 777,
+        "sink_column": 707
+      },
+      {
+        "demand": 4,
+        "left": 719,
+        "right": 759,
+        "row": 142,
+        "level": 12,
+        "source_column": 759,
+        "sink_column": 719
+      },
+      {
+        "demand": 76,
+        "left": 728,
+        "right": 789,
+        "row": 142,
+        "level": 6,
+        "source_column": 789,
+        "sink_column": 728
+      },
+      {
+        "demand": 77,
+        "left": 734,
+        "right": 792,
+        "row": 142,
+        "level": 8,
+        "source_column": 792,
+        "sink_column": 734
+      },
+      {
+        "demand": 116,
+        "left": 768,
+        "right": 887,
+        "row": 142,
+        "level": 4,
+        "source_column": 768,
+        "sink_column": 887
+      },
+      {
+        "demand": 65,
+        "left": 771,
+        "right": 826,
+        "row": 142,
+        "level": 12,
+        "source_column": 771,
+        "sink_column": 826
+      },
+      {
+        "demand": 68,
+        "left": 774,
+        "right": 835,
+        "row": 142,
+        "level": 14,
+        "source_column": 774,
+        "sink_column": 835
+      },
+      {
+        "demand": 71,
+        "left": 780,
+        "right": 829,
+        "row": 142,
+        "level": 16,
+        "source_column": 780,
+        "sink_column": 829
+      },
+      {
+        "demand": 72,
+        "left": 783,
+        "right": 808,
+        "row": 142,
+        "level": 24,
+        "source_column": 783,
+        "sink_column": 808
+      },
+      {
+        "demand": 96,
+        "left": 783,
+        "right": 838,
+        "row": 145,
+        "level": 4,
+        "source_column": 783,
+        "sink_column": 838
+      },
+      {
+        "demand": 73,
+        "left": 786,
+        "right": 817,
+        "row": 145,
+        "level": 6,
+        "source_column": 786,
+        "sink_column": 817
+      },
+      {
+        "demand": 78,
+        "left": 795,
+        "right": 850,
+        "row": 142,
+        "level": 6,
+        "source_column": 795,
+        "sink_column": 850
+      },
+      {
+        "demand": 69,
+        "left": 805,
+        "right": 876,
+        "row": 142,
+        "level": 8,
+        "source_column": 876,
+        "sink_column": 805
+      },
+      {
+        "demand": 119,
+        "left": 870,
+        "right": 887,
+        "row": 142,
+        "level": 2,
+        "source_column": 870,
+        "sink_column": 887
+      },
+      {
+        "demand": 120,
+        "left": 873,
+        "right": 887,
+        "row": 142,
+        "level": 6,
+        "source_column": 873,
+        "sink_column": 887
+      },
+      {
+        "demand": 121,
+        "left": 879,
+        "right": 887,
+        "row": 142,
+        "level": 8,
+        "source_column": 879,
+        "sink_column": 887
+      },
+      {
+        "demand": 122,
+        "left": 882,
+        "right": 887,
+        "row": 142,
+        "level": 10,
+        "source_column": 882,
+        "sink_column": 887
+      }
+    ],
+    "machine_height": 140,
+    "track_rows": 12,
+    "width": 889,
+    "height": 154,
+    "levels": 27,
+    "fits_band": true,
+    "iterations": 2
+  },
+  "demands_detail": [
+    {
+      "ordinal": 0,
+      "item": "carbon-nanotube",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 0,
+        "belt": 350,
+        "x": 120,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 13,
+        "belt": 3929,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 1,
+      "item": "circuit-board",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 1,
+        "belt": 453,
+        "x": 16,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 34,
+        "belt": 10781,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 2,
+      "item": "circuit-board",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 1,
+        "belt": 469,
+        "x": 16,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 37,
+        "belt": 10912,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 3,
+      "item": "circuit-board",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 1,
+        "belt": 469,
+        "x": 16,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 38,
+        "belt": 10991,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 4,
+      "item": "circuit-board",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 2,
+        "belt": 508,
+        "x": 8,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 40,
+        "belt": 11137,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 5,
+      "item": "conveyor-belt-1",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 3,
+        "belt": 535,
+        "x": 8,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 4,
+        "belt": 544,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 6,
+      "item": "conveyor-belt-2",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 4,
+        "belt": 562,
+        "x": 8,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 5,
+        "belt": 571,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 7,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 6,
+        "belt": 748,
+        "x": 72,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 1,
+        "belt": 411,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 8,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 7,
+        "belt": 1148,
+        "x": 69,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 2,
+        "belt": 490,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 9,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 6,
+        "belt": 820,
+        "x": 72,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 29,
+        "belt": 9822,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 10,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 7,
+        "belt": 1217,
+        "x": 69,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 30,
+        "belt": 10174,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 11,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 6,
+        "belt": 820,
+        "x": 72,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 31,
+        "belt": 10526,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 12,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 6,
+        "belt": 892,
+        "x": 72,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 32,
+        "belt": 10553,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 13,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 7,
+        "belt": 1286,
+        "x": 69,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 32,
+        "belt": 10553,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 14,
+      "item": "electric-motor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 8,
+        "belt": 1971,
+        "x": 144,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 10,
+        "belt": 3236,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 15,
+      "item": "electric-motor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 9,
+        "belt": 2885,
+        "x": 140,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 11,
+        "belt": 3378,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 16,
+      "item": "electric-motor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 8,
+        "belt": 1971,
+        "x": 144,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 11,
+        "belt": 3378,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 17,
+      "item": "electric-motor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 8,
+        "belt": 2115,
+        "x": 144,
+        "y": 10,
+        "z": 0
+      },
+      "sink": {
+        "strip": 41,
+        "belt": 11180,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 18,
+      "item": "electric-motor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 9,
+        "belt": 3025,
+        "x": 140,
+        "y": 10,
+        "z": 0
+      },
+      "sink": {
+        "strip": 41,
+        "belt": 11180,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 19,
+      "item": "electromagnetic-turbine",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 10,
+        "belt": 3314,
+        "x": 28,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 4,
+        "belt": 549,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 20,
+      "item": "electromagnetic-turbine",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 10,
+        "belt": 3342,
+        "x": 28,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 42,
+        "belt": 11207,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 21,
+      "item": "electromagnetic-turbine",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 11,
+        "belt": 3696,
+        "x": 108,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 45,
+        "belt": 11463,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 22,
+      "item": "electromagnetic-turbine",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 11,
+        "belt": 3696,
+        "x": 108,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 46,
+        "belt": 11691,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 23,
+      "item": "energetic-graphite",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 12,
+        "belt": 3886,
+        "x": 42,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 45,
+        "belt": 11496,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 24,
+      "item": "energetic-graphite",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 12,
+        "belt": 3886,
+        "x": 42,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 46,
+        "belt": 11736,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 25,
+      "item": "frame-material",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 13,
+        "belt": 4050,
+        "x": 32,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 33,
+        "belt": 10756,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 26,
+      "item": "gear",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 14,
+        "belt": 4383,
+        "x": 148,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 3,
+        "belt": 517,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 27,
+      "item": "gear",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 14,
+        "belt": 4531,
+        "x": 148,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 8,
+        "belt": 1402,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 28,
+      "item": "gear",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 14,
+        "belt": 4531,
+        "x": 148,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 9,
+        "belt": 2332,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 29,
+      "item": "glass",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 15,
+        "belt": 4737,
+        "x": 30,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 36,
+        "belt": 10851,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 30,
+      "item": "graphene",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 16,
+        "belt": 4906,
+        "x": 72,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 0,
+        "belt": 0,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 31,
+      "item": "graphene",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 16,
+        "belt": 4978,
+        "x": 72,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 5,
+        "belt": 576,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 32,
+      "item": "graphene",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 17,
+        "belt": 5186,
+        "x": 48,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 33,
+        "belt": 10757,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 33,
+      "item": "high-purity-silicon",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 18,
+        "belt": 5448,
+        "x": 96,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 13,
+        "belt": 3958,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 34,
+      "item": "high-purity-silicon",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 18,
+        "belt": 5544,
+        "x": 96,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 32,
+        "belt": 10602,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 35,
+      "item": "high-purity-silicon",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 18,
+        "belt": 5640,
+        "x": 96,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 39,
+        "belt": 11112,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 36,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 19,
+        "belt": 5966,
+        "x": 84,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 1,
+        "belt": 424,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 37,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 20,
+        "belt": 6440,
+        "x": 84,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 2,
+        "belt": 495,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 38,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 21,
+        "belt": 6908,
+        "x": 81,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 1,
+        "belt": 424,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 39,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 19,
+        "belt": 6050,
+        "x": 84,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 3,
+        "belt": 522,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 40,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 20,
+        "belt": 6524,
+        "x": 84,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 3,
+        "belt": 522,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 41,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 21,
+        "belt": 6989,
+        "x": 81,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 3,
+        "belt": 522,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 42,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 19,
+        "belt": 6134,
+        "x": 84,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 8,
+        "belt": 1543,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 43,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 20,
+        "belt": 6608,
+        "x": 84,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 9,
+        "belt": 2469,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 44,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 21,
+        "belt": 7070,
+        "x": 81,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 8,
+        "belt": 1543,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 45,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 19,
+        "belt": 6134,
+        "x": 84,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 9,
+        "belt": 2469,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 46,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 22,
+        "belt": 7329,
+        "x": 63,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 14,
+        "belt": 4091,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 47,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 23,
+        "belt": 7678,
+        "x": 60,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 14,
+        "belt": 4091,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 48,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 22,
+        "belt": 7392,
+        "x": 63,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 25,
+        "belt": 8032,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 49,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 23,
+        "belt": 7738,
+        "x": 60,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 25,
+        "belt": 8032,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 50,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 22,
+        "belt": 7455,
+        "x": 63,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 40,
+        "belt": 11146,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 51,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 23,
+        "belt": 7798,
+        "x": 60,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 40,
+        "belt": 11146,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 52,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 24,
+        "belt": 7986,
+        "x": 45,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 44,
+        "belt": 11270,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 53,
+      "item": "magnet",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 26,
+        "belt": 8320,
+        "x": 138,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 29,
+        "belt": 9887,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 54,
+      "item": "magnet",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 27,
+        "belt": 8916,
+        "x": 138,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 30,
+        "belt": 10239,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 55,
+      "item": "magnet",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 28,
+        "belt": 9506,
+        "x": 135,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 31,
+        "belt": 10531,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 56,
+      "item": "magnet",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 28,
+        "belt": 9506,
+        "x": 135,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 29,
+        "belt": 9887,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 57,
+      "item": "magnet",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 26,
+        "belt": 8320,
+        "x": 138,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 30,
+        "belt": 10239,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 58,
+      "item": "magnet",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 26,
+        "belt": 8458,
+        "x": 138,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 45,
+        "belt": 11530,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 59,
+      "item": "magnet",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 27,
+        "belt": 9054,
+        "x": 138,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 46,
+        "belt": 11782,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 60,
+      "item": "magnet",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 28,
+        "belt": 9641,
+        "x": 135,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 45,
+        "belt": 11530,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 61,
+      "item": "magnetic-coil",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 29,
+        "belt": 10020,
+        "x": 68,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 8,
+        "belt": 1685,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 62,
+      "item": "magnetic-coil",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 30,
+        "belt": 10372,
+        "x": 68,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 9,
+        "belt": 2607,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 63,
+      "item": "magnetic-coil",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 29,
+        "belt": 10088,
+        "x": 68,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 10,
+        "belt": 3261,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 64,
+      "item": "magnetic-coil",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 30,
+        "belt": 10440,
+        "x": 68,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 11,
+        "belt": 3483,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 65,
+      "item": "magnetic-coil",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 31,
+        "belt": 10544,
+        "x": 8,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 35,
+        "belt": 10840,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 66,
+      "item": "microcrystalline-component",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 32,
+        "belt": 10703,
+        "x": 52,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 37,
+        "belt": 10925,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 67,
+      "item": "microcrystalline-component",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 32,
+        "belt": 10703,
+        "x": 52,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 38,
+        "belt": 11012,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 68,
+      "item": "photon-combiner",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 34,
+        "belt": 10823,
+        "x": 16,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 39,
+        "belt": 11113,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 69,
+      "item": "plasma-exciter",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 35,
+        "belt": 10846,
+        "x": 4,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 25,
+        "belt": 8033,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 70,
+      "item": "prism",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 36,
+        "belt": 10879,
+        "x": 16,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 34,
+        "belt": 10794,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 71,
+      "item": "prism",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 36,
+        "belt": 10895,
+        "x": 16,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 35,
+        "belt": 10841,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 72,
+      "item": "processor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 37,
+        "belt": 10954,
+        "x": 16,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 25,
+        "belt": 8035,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 73,
+      "item": "processor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 37,
+        "belt": 10970,
+        "x": 16,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 33,
+        "belt": 10759,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 74,
+      "item": "processor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 38,
+        "belt": 11057,
+        "x": 24,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 39,
+        "belt": 11115,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 75,
+      "item": "processor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 38,
+        "belt": 11081,
+        "x": 24,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 43,
+        "belt": 11234,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 76,
+      "item": "sorter-1",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 40,
+        "belt": 11167,
+        "x": 12,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 41,
+        "belt": 11185,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 77,
+      "item": "sorter-2",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 41,
+        "belt": 11198,
+        "x": 8,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 42,
+        "belt": 11212,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 78,
+      "item": "sorter-3",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 42,
+        "belt": 11225,
+        "x": 8,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 43,
+        "belt": 11239,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 79,
+      "item": "steel",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 44,
+        "belt": 11357,
+        "x": 45,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 39,
+        "belt": 11118,
+        "x": 1,
+        "y": 9,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 80,
+      "item": "steel",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 44,
+        "belt": 11402,
+        "x": 45,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 47,
+        "belt": 11997,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 81,
+      "item": "super-magnetic-ring",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 45,
+        "belt": 11600,
+        "x": 36,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 5,
+        "belt": 582,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 82,
+      "item": "super-magnetic-ring",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 45,
+        "belt": 11636,
+        "x": 36,
+        "y": 10,
+        "z": 0
+      },
+      "sink": {
+        "strip": 33,
+        "belt": 10762,
+        "x": 1,
+        "y": 9,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 83,
+      "item": "super-magnetic-ring",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 46,
+        "belt": 11876,
+        "x": 48,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 39,
+        "belt": 11119,
+        "x": 1,
+        "y": 10,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 84,
+      "item": "super-magnetic-ring",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 46,
+        "belt": 11924,
+        "x": 48,
+        "y": 10,
+        "z": 0
+      },
+      "sink": {
+        "strip": 43,
+        "belt": 11245,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 85,
+      "item": "titanium-alloy",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 47,
+        "belt": 12089,
+        "x": 24,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 13,
+        "belt": 3988,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 86,
+      "item": "titanium-alloy",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 47,
+        "belt": 12113,
+        "x": 24,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 33,
+        "belt": 10763,
+        "x": 1,
+        "y": 10,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 87,
+      "item": "titanium-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 48,
+        "belt": 12219,
+        "x": 30,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 0,
+        "belt": 115,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 88,
+      "item": "titanium-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 48,
+        "belt": 12249,
+        "x": 30,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 47,
+        "belt": 12042,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 89,
+      "item": "circuit-board",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 2,
+        "belt": 508,
+        "x": 8,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 34,
+        "belt": 10781,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 90,
+      "item": "electromagnetic-turbine",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 10,
+        "belt": 3314,
+        "x": 28,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 45,
+        "belt": 11463,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 91,
+      "item": "graphene",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 17,
+        "belt": 5186,
+        "x": 48,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 0,
+        "belt": 0,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 92,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 24,
+        "belt": 7986,
+        "x": 45,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 2,
+        "belt": 495,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 93,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 22,
+        "belt": 7392,
+        "x": 63,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 1,
+        "belt": 424,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 94,
+      "item": "magnetic-coil",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 29,
+        "belt": 10020,
+        "x": 68,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 9,
+        "belt": 2607,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 95,
+      "item": "magnetic-coil",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 31,
+        "belt": 10544,
+        "x": 8,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 11,
+        "belt": 3483,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 96,
+      "item": "processor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 37,
+        "belt": 10954,
+        "x": 16,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 39,
+        "belt": 11115,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 97,
+      "item": "super-magnetic-ring",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 46,
+        "belt": 11876,
+        "x": 48,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 5,
+        "belt": 582,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 98,
+      "item": "coal",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 12,
+        "belt": 3805,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 99,
+      "item": "copper-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 6,
+        "belt": 607,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 100,
+      "item": "copper-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 7,
+        "belt": 1013,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 101,
+      "item": "fire-ice",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 16,
+        "belt": 4768,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 102,
+      "item": "fire-ice",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 17,
+        "belt": 5096,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 103,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 19,
+        "belt": 5801,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 104,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 20,
+        "belt": 6275,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 105,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 21,
+        "belt": 6749,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 106,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 22,
+        "belt": 7206,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 107,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 26,
+        "belt": 8047,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 108,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 27,
+        "belt": 8643,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 109,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 28,
+        "belt": 9239,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 110,
+      "item": "silicon-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 18,
+        "belt": 5259,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 111,
+      "item": "stone",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 15,
+        "belt": 4680,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 112,
+      "item": "sulfuric-acid",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 47,
+        "belt": 12019,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 113,
+      "item": "titanium-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 48,
+        "belt": 12162,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 114,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 23,
+        "belt": 7561,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 115,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 24,
+        "belt": 7899,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 116,
+      "item": "conveyor-belt-3",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 5,
+        "belt": 596,
+        "x": 8,
+        "y": 9,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 117,
+      "item": "hydrogen",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 16,
+        "belt": 5050,
+        "x": 72,
+        "y": 10,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 118,
+      "item": "hydrogen",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 17,
+        "belt": 5234,
+        "x": 48,
+        "y": 9,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 119,
+      "item": "logistics-distributor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 25,
+        "belt": 8041,
+        "x": 4,
+        "y": 9,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 120,
+      "item": "miniature-particle-collider",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 33,
+        "belt": 10769,
+        "x": 5,
+        "y": 11,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 121,
+      "item": "ray-receiver",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 39,
+        "belt": 11125,
+        "x": 5,
+        "y": 11,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 122,
+      "item": "sorter-4",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 43,
+        "belt": 11259,
+        "x": 8,
+        "y": 9,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    }
+  ],
+  "case": "unsprayed-mall-075",
+  "held_out": true,
+  "spec_sha256": "d6aade99fcafb5bdb4603a3cdde32115632305d3cf0bbec5a74f6fd53588e54c",
+  "outcome": "band-admitted-unverified",
+  "original_factory_gate": false,
+  "settlement": "not reached: primary physical integration refused",
+  "coater_service_demands": 0,
+  "original_spray_rate": "0",
+  "multiplexed_access_optimistic_price": {
+    "frame": [
+      412,
+      154
+    ],
+    "fits_band_cost_only": true,
+    "physical_status": "unproved cross-layer access and shared-column conflicts; not an admitted plan"
+  },
+  "elapsed_s": 0.680691545130685
+}

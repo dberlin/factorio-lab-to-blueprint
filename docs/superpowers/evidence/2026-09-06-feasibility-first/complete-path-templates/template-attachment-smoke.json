@@ -1,0 +1,11 @@
+{
+  "shared_actual_junction_accepted": true,
+  "foreign_owner_rejected": true,
+  "cell": [
+    129,
+    38,
+    0
+  ],
+  "port": 2933,
+  "other_port": 2940
+}

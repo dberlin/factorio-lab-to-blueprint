@@ -1,0 +1,17 @@
+{
+  "command": [
+    "uv",
+    "run",
+    "--frozen",
+    "python",
+    "capture_replay.py",
+    "web",
+    "60"
+  ],
+  "elapsed_s": 65.48768363008276,
+  "returncode": 3,
+  "capture_env": {
+    "FLAB_DIAGNOSTIC_DEST": "/tmp/flab-url-refusal-27483797/evidence/replay-v2-web-60s"
+  },
+  "overlap_note": "May overlap serial CLI baselines; 128 CPUs available; at most two 16-worker requests."
+}

@@ -1,0 +1,5 @@
+{
+  "exit": 0,
+  "stdout": "{\"budget\": {\"caps_exercised\": [\"arcs\", \"augmentations\", \"candidates\", \"audit_cells\", \"predicates\", \"assignments\"], \"before_exceeding\": true, \"exact_deadline\": true}, \"flow\": [{\"case\": \"unsprayed-mall\", \"orders\": [\"captured\", \"nearest-bank\", \"reverse\"], \"positive_arcs\": [141, 141, 141], \"exact_ledgers\": true, \"deterministic\": true, \"shared_work\": {\"arcs\": 1545, \"augmentations\": 423}, \"captured_capacity_cut_verified\": true, \"changed_machine_contract_rejected\": true}, {\"case\": \"three-output\", \"orders\": [\"captured\", \"nearest-bank\", \"reverse\"], \"positive_arcs\": [26, 26, 26], \"exact_ledgers\": true, \"deterministic\": true, \"shared_work\": {\"arcs\": 84, \"augmentations\": 78}, \"changed_machine_contract_rejected\": true}], \"original_factory_gate\": false}\n",
+  "stderr": ""
+}

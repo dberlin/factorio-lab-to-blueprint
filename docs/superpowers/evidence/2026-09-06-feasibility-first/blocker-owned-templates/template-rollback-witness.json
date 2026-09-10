@@ -1,0 +1,84 @@
+{
+  "scope": "real complete-path geometry on finite enumerated inputs; no factory claim",
+  "bounded_sibling_rollback_work": {
+    "assignments": 6,
+    "candidates": 33,
+    "predicates": 1421
+  },
+  "candidate_cap": 40,
+  "exhaustive_cases": 12,
+  "static_rejection_ancestor_reassignment_and_sibling_lifetimes": [
+    {
+      "ancestor_can_change": false,
+      "sibling_can_succeed": false,
+      "target": "mixed",
+      "feasible": false
+    },
+    {
+      "ancestor_can_change": false,
+      "sibling_can_succeed": false,
+      "target": "direct",
+      "feasible": false
+    },
+    {
+      "ancestor_can_change": false,
+      "sibling_can_succeed": false,
+      "target": "detour",
+      "feasible": false
+    },
+    {
+      "ancestor_can_change": false,
+      "sibling_can_succeed": true,
+      "target": "mixed",
+      "feasible": true
+    },
+    {
+      "ancestor_can_change": false,
+      "sibling_can_succeed": true,
+      "target": "direct",
+      "feasible": true
+    },
+    {
+      "ancestor_can_change": false,
+      "sibling_can_succeed": true,
+      "target": "detour",
+      "feasible": false
+    },
+    {
+      "ancestor_can_change": true,
+      "sibling_can_succeed": false,
+      "target": "mixed",
+      "feasible": true
+    },
+    {
+      "ancestor_can_change": true,
+      "sibling_can_succeed": false,
+      "target": "direct",
+      "feasible": false
+    },
+    {
+      "ancestor_can_change": true,
+      "sibling_can_succeed": false,
+      "target": "detour",
+      "feasible": true
+    },
+    {
+      "ancestor_can_change": true,
+      "sibling_can_succeed": true,
+      "target": "mixed",
+      "feasible": true
+    },
+    {
+      "ancestor_can_change": true,
+      "sibling_can_succeed": true,
+      "target": "direct",
+      "feasible": true
+    },
+    {
+      "ancestor_can_change": true,
+      "sibling_can_succeed": true,
+      "target": "detour",
+      "feasible": true
+    }
+  ]
+}

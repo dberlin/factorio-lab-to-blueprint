@@ -1,0 +1,24 @@
+{
+  "outcome": "expected-physical-cycle-refusal",
+  "reason": "fixed paths contain a cyclic plane/riser height dependency",
+  "certificate": [
+    {
+      "precedence_cycle": [
+        {
+          "id": 0,
+          "item": "iron-ingot",
+          "predecessors": [
+            1
+          ]
+        },
+        {
+          "id": 1,
+          "item": "copper-ingot",
+          "predecessors": [
+            0
+          ]
+        }
+      ]
+    }
+  ]
+}

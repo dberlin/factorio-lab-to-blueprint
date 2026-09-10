@@ -1,0 +1,17 @@
+{
+  "include": [
+    "constructive_control.py",
+    "capacity_topology.py",
+    "junction_tree.py",
+    "capacity_junction_witness.py",
+    "capacity_geometry_audit.py"
+  ],
+  "exclude": [],
+  "ignore": [],
+  "pythonVersion": "3.14",
+  "pythonPlatform": "Linux",
+  "extraPaths": ["../../../src", ".."],
+  "venvPath": "../../..",
+  "venv": ".venv",
+  "typeCheckingMode": "standard"
+}

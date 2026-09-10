@@ -1,0 +1,456 @@
+{
+  "demands": [
+    {
+      "ordinal": 0,
+      "item": "casimir-crystal",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 0,
+        "belt": 105,
+        "x": 28,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 7,
+        "belt": 1152,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 1,
+      "item": "casimir-crystal",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 1,
+        "belt": 246,
+        "x": 28,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 7,
+        "belt": 1152,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 2,
+      "item": "circuit-board",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 2,
+        "belt": 324,
+        "x": 16,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 8,
+        "belt": 1787,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 3,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 2,
+        "belt": 282,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 4,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 6,
+        "belt": 986,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 5,
+      "item": "fire-ice",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 4,
+        "belt": 609,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 6,
+      "item": "glass",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 3,
+        "belt": 518,
+        "x": 90,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 9,
+        "belt": 1942,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 7,
+      "item": "graphene",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 4,
+        "belt": 715,
+        "x": 56,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 0,
+        "belt": 25,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 8,
+      "item": "graphene",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 4,
+        "belt": 715,
+        "x": 56,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 1,
+        "belt": 166,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 9,
+      "item": "high-purity-silicon",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 6,
+        "belt": 933,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 10,
+      "item": "high-purity-silicon",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 5,
+        "belt": 887,
+        "x": 45,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 6,
+        "belt": 933,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 11,
+      "item": "hydrogen",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 0,
+        "belt": 0,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 12,
+      "item": "hydrogen",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 1,
+        "belt": 141,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 13,
+      "item": "hydrogen",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 4,
+        "belt": 771,
+        "x": 56,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 0,
+        "belt": 0,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 14,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 2,
+        "belt": 295,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 15,
+      "item": "microcrystalline-component",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 6,
+        "belt": 1095,
+        "x": 56,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 8,
+        "belt": 1824,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 16,
+      "item": "optical-grating-crystal",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 0,
+        "belt": 51,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 17,
+      "item": "optical-grating-crystal",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 1,
+        "belt": 192,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 18,
+      "item": "plane-filter",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 7,
+        "belt": 1626,
+        "x": 160,
+        "y": 8,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 19,
+      "item": "processor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 8,
+        "belt": 1901,
+        "x": 40,
+        "y": 8,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 20,
+      "item": "silicon-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 5,
+        "belt": 800,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 21,
+      "item": "stone",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 3,
+        "belt": 341,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 22,
+      "item": "titanium-glass",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 9,
+        "belt": 2543,
+        "x": 152,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 7,
+        "belt": 1309,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 23,
+      "item": "titanium-glass",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 9,
+        "belt": 2695,
+        "x": 152,
+        "y": 10,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 24,
+      "item": "titanium-ingot",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 9,
+        "belt": 2091,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 25,
+      "item": "water",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 9,
+        "belt": 2241,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "external"
+    }
+  ],
+  "rates": {
+    "0": "5/3",
+    "1": "5/3",
+    "2": "20/3",
+    "3": "10/3",
+    "4": "20/3",
+    "5": "20/3",
+    "6": "15",
+    "7": "10/3",
+    "8": "10/3",
+    "9": "35/6",
+    "10": "15/2",
+    "11": "50/3",
+    "12": "20",
+    "13": "10/3",
+    "14": "20/3",
+    "15": "20/3",
+    "16": "40/3",
+    "17": "40/3",
+    "18": "10/3",
+    "19": "10/3",
+    "20": "15",
+    "21": "30",
+    "22": "20/3",
+    "23": "25/3",
+    "24": "15",
+    "25": "15"
+  }
+}

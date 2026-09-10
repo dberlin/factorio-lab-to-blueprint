@@ -1,0 +1,33 @@
+{
+  "case": "unsprayed-mall",
+  "original_factory_gate": false,
+  "audited_links": 30,
+  "full_segment_intersections": [],
+  "partial_geometry_only": true,
+  "impossible_height_cycle": [
+    {
+      "higher": 61,
+      "higher_item": "magnet",
+      "lower": 114,
+      "lower_item": "hydrogen",
+      "plane_crosses_ground_riser_at": [
+        [
+          604,
+          83
+        ]
+      ]
+    },
+    {
+      "higher": 114,
+      "higher_item": "hydrogen",
+      "lower": 61,
+      "lower_item": "magnet",
+      "plane_crosses_ground_riser_at": [
+        [
+          967,
+          83
+        ]
+      ]
+    }
+  ]
+}

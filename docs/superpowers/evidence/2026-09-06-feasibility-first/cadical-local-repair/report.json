@@ -1,0 +1,146 @@
+{
+  "decision": "NO_GO_EAGER_LOCAL_COMPILER",
+  "scope": "Diagnostic only, no original gate or production promotion",
+  "result": {
+    "scope": "Optimistic local-only diagnostic; capture cost excluded, not original gate",
+    "outcome": "POLICY_BOUND",
+    "reason": "CaDiCaL cumulative collision prohibition cap",
+    "elapsed_s": 3.440498165320605,
+    "budget_s": 60,
+    "work": {
+      "predicates": 4656119,
+      "candidates": 116
+    },
+    "initial_paths": 141,
+    "initial_retained": 116,
+    "initial_conflicts": 81,
+    "ledger": {
+      "stage": "retained-boundary",
+      "clauses": 45529,
+      "collision_cuts": 20000,
+      "boundary_relations": 21469,
+      "boundary_cuts": 20000,
+      "boundary_domains_complete": 7,
+      "mutual_relations": 0,
+      "mutual_pairs_complete": 0,
+      "unary_candidates_complete": 0,
+      "unary_rejections": 0,
+      "broadphase_probes": 567081,
+      "native_calls": 0,
+      "rebuilds": 1,
+      "released": [],
+      "phases": [
+        {},
+        {
+          "predicates": 345479,
+          "candidates": 116
+        },
+        {
+          "predicates": 715535,
+          "candidates": 116
+        }
+      ],
+      "phase_names": [
+        "domains-and-retained-audit",
+        "factor-and-primitive-construction",
+        "retained-boundary"
+      ]
+    },
+    "selected": null,
+    "original_factory_gate": false
+  },
+  "capture_audit": {
+    "result": {
+      "paths": 141,
+      "canonical_conflicts": 81,
+      "retained": 116,
+      "free": 25,
+      "canonical_graph_agrees": true,
+      "all_paths_self_and_static_valid": true,
+      "retained_pairwise_compatible": true
+    },
+    "work": {
+      "predicates": 506004,
+      "candidates": 141
+    }
+  },
+  "verification": [
+    {
+      "command": [
+        "uv",
+        "run",
+        "ruff",
+        "format",
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.superpowers/sdd/2026-09-10-cadical-local-repair/capture_repair.py",
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.superpowers/sdd/2026-09-10-cadical-local-repair/local_repair.py",
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.superpowers/sdd/2026-09-10-cadical-local-repair/local_repair_witness.py",
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.superpowers/sdd/2026-09-10-cadical-local-repair/verify_capture.py"
+      ],
+      "exit": 0,
+      "stdout": "4 files reformatted\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "uv",
+        "run",
+        "ruff",
+        "check",
+        "--fix",
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.superpowers/sdd/2026-09-10-cadical-local-repair/capture_repair.py",
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.superpowers/sdd/2026-09-10-cadical-local-repair/local_repair.py",
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.superpowers/sdd/2026-09-10-cadical-local-repair/local_repair_witness.py",
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.superpowers/sdd/2026-09-10-cadical-local-repair/verify_capture.py"
+      ],
+      "exit": 0,
+      "stdout": "Found 2 errors (2 fixed, 0 remaining).\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "uv",
+        "run",
+        "basedpyright",
+        "--project",
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.superpowers/sdd/2026-09-10-cadical-local-repair/local-pyrightconfig.json"
+      ],
+      "exit": 0,
+      "stdout": "0 errors, 0 warnings, 0 notes\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+        "-m",
+        "2026-09-10-cadical-local-repair.verify_capture"
+      ],
+      "exit": 0,
+      "stdout": "{\"all_paths_self_and_static_valid\": true, \"canonical_conflicts\": 81, \"canonical_graph_agrees\": true, \"free\": 25, \"paths\": 141, \"retained\": 116, \"retained_pairwise_compatible\": true}\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+        "-m",
+        "2026-09-10-cadical-local-repair.local_repair_witness"
+      ],
+      "exit": 0,
+      "stdout": "{\"actual_geometric_core_widening\": true, \"boundary_candidate_projections\": 600, \"full_domain_unsat_preserved\": true, \"inactive_boundary_preserves_every_choice\": true, \"mutual_candidate_projections\": 20000, \"zero_allowance_refuses\": true}\n",
+      "stderr": ""
+    }
+  ],
+  "frozen_identities_verified": 27,
+  "archive": {
+    "sha256": "3a2b643befdb1d914bd75c0fcb815b81df8129e1e448f905a84464597a7b278e",
+    "members": 100,
+    "bytes": 455720,
+    "crc_verified": true,
+    "member_hashes_verified": true
+  },
+  "reproduction": {
+    "python": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+    "worktree": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current",
+    "dependencies": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.superpowers/sdd/2026-09-09-cadical-feasibility/deps",
+    "instructions": "Extract into a fresh directory. Set PYTHONPATH to extraction directory plus dependencies and use recorded Python/worktree. Run -m 2026-09-10-cadical-local-repair.verify_capture, then .local_repair_witness, then .local_repair. Existing project installation and native dependency directory are required. local_repair rewrites only extracted local-result.json."
+  }
+}

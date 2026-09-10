@@ -1,0 +1,14 @@
+{
+  "command": [
+    "uv",
+    "run",
+    "--frozen",
+    "python",
+    "-c",
+    "import json; from diagnose_url import URL, encode; from flab2bp.web.jobs import Options,parse_options; from flab2bp import pipeline; print(json.dumps({\"admission\":[{\"budget\":b,\"matches_run\":parse_options({\"url\":URL,\"budget_s\":b})==Options(url=URL,budget_s=b),\"warning\":parse_options({\"url\":URL,\"budget_s\":b}).warning} for b in (15,30,60)],\"candidate_shares\":pipeline._worker_allocations(16,3),\"splits\":[pipeline.strategy_race.race_worker_split(n) for n in (6,5,5)],\"islands\":[pipeline.resolve_sequence_islands(\"best\",n,None) for n in (6,5,5)]}))"
+  ],
+  "elapsed_s": 2.0312809399329126,
+  "returncode": 0,
+  "stdout": "{\"admission\": [{\"budget\": 15, \"matches_run\": true, \"warning\": null}, {\"budget\": 30, \"matches_run\": true, \"warning\": null}, {\"budget\": 60, \"matches_run\": true, \"warning\": \"3 candidate(s) x best at 60s per layout is up to 396s of solving -- 6 layout(s) x (60s budget + 6s completion grace) -- over the 300s mark. It will still run.\"}], \"candidate_shares\": [6, 5, 5], \"splits\": [[4, 2], [3, 2], [3, 2]], \"islands\": [2, 2, 2]}\n",
+  "stderr": "warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead\n"
+}

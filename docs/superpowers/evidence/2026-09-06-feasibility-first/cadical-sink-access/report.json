@@ -1,0 +1,10 @@
+{
+  "control": "VALIDATOR_COMPLETE_WITNESS",
+  "control_seconds": 13.920777613762766,
+  "mall": "UNKNOWN",
+  "captured_topology": "TEMPLATE_FAMILY_EXHAUSTED",
+  "mandatory_approach_collisions": 2,
+  "rated_acceptance": false,
+  "members": 112,
+  "sha256": "d6b2aaf28e68cb0c83489dda32fe0731bb775d4baa1285ddf789468724c9c5bd"
+}

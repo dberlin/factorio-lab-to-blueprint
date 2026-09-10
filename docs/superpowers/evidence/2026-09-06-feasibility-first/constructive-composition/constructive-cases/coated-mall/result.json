@@ -1,0 +1,16 @@
+{
+  "case": "coated-mall",
+  "spec_sha256": "2ac9f763d8bca40a93e11f6e6c45ca41ec3fb763a501aefa97a323d18cd0f68e",
+  "budget_s": 60.0,
+  "original_factory_gate": false,
+  "global_router_calls": 0,
+  "obligations": 271,
+  "flights_required": 264,
+  "flights_available": 24,
+  "held_out": false,
+  "outcome": "constructive-control-refused",
+  "reason": "fixed one-level-per-flight construction needs 264 flight levels; original technology provides 24",
+  "elapsed_s": 0.6107503331732005,
+  "constructed_links": 0,
+  "junctions": []
+}

@@ -1,0 +1,76 @@
+{
+  "origin": [
+    9,
+    2
+  ],
+  "width": 17,
+  "height": 20,
+  "service_sites": [
+    {
+      "item": "antimatter",
+      "head": [
+        9,
+        2
+      ],
+      "node": [
+        1,
+        2
+      ]
+    },
+    {
+      "item": "electromagnetic-matrix",
+      "head": [
+        9,
+        3
+      ],
+      "node": [
+        1,
+        5
+      ]
+    },
+    {
+      "item": "energy-matrix",
+      "head": [
+        9,
+        4
+      ],
+      "node": [
+        1,
+        8
+      ]
+    },
+    {
+      "item": "gravity-matrix",
+      "head": [
+        9,
+        10
+      ],
+      "node": [
+        1,
+        11
+      ]
+    },
+    {
+      "item": "information-matrix",
+      "head": [
+        9,
+        11
+      ],
+      "node": [
+        1,
+        14
+      ]
+    },
+    {
+      "item": "structure-matrix",
+      "head": [
+        9,
+        12
+      ],
+      "node": [
+        1,
+        17
+      ]
+    }
+  ]
+}

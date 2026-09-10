@@ -1,0 +1,22 @@
+{
+  "include": [
+    "constructive_control.py",
+    "template_budget.py",
+    "template_flow.py",
+    "template_runtime.py",
+    "template_experiment.py",
+    "template_contract_witness.py",
+    "template_paths.py",
+    "template_paths_witness.py",
+    "template_audit.py",
+    "template_audit_witness.py"
+  ],
+  "exclude": [],
+  "ignore": [],
+  "pythonVersion": "3.14",
+  "pythonPlatform": "Linux",
+  "extraPaths": ["../../../src", ".."],
+  "venvPath": "../../..",
+  "venv": ".venv",
+  "typeCheckingMode": "standard"
+}

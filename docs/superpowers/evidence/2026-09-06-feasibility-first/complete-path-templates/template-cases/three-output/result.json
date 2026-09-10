@@ -1,0 +1,111 @@
+{
+  "case": "three-output",
+  "mode": "GEOMETRY_ONLY",
+  "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+  "outcome": "POLICY_BOUND",
+  "reason": "predicates work limit reached at 5000000",
+  "attempts": [
+    {
+      "case": "three-output",
+      "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+      "budget_s": 30.0,
+      "original_factory_gate": false,
+      "global_router_calls": 0,
+      "mode": "GEOMETRY_ONLY",
+      "topology_order": "captured",
+      "rate_status": "RATE_REALIZATION_UNPROVED",
+      "topology": {
+        "candidate_arcs": 28,
+        "selected_arcs": 26,
+        "added": 0,
+        "removed": 1
+      },
+      "obligations": 26,
+      "flights_required": 26,
+      "flights_available": 24,
+      "held_out": false,
+      "assigned_rates": {
+        "0": "5/3",
+        "1": "5/3",
+        "2": "20/3",
+        "3": "10/3",
+        "4": "20/3",
+        "5": "20/3",
+        "6": "15",
+        "7": "10/3",
+        "8": "10/3",
+        "9": "35/6",
+        "10": "15/2",
+        "11": "50/3",
+        "12": "20",
+        "13": "10/3",
+        "14": "20/3",
+        "15": "20/3",
+        "16": "40/3",
+        "17": "40/3",
+        "18": "10/3",
+        "19": "10/3",
+        "20": "15",
+        "21": "30",
+        "22": "20/3",
+        "23": "25/3",
+        "24": "15",
+        "25": "15"
+      },
+      "outcome": "POLICY_BOUND",
+      "reason": "predicates work limit reached at 5000000",
+      "work": {
+        "arcs": 28,
+        "augmentations": 26,
+        "audit_cells": 39,
+        "predicates": 5000000,
+        "assignments": 15,
+        "candidates": 39518
+      },
+      "flight_allocation": [],
+      "elapsed_s": 6.380981108173728,
+      "constructed_links": 6,
+      "junctions": [
+        2924,
+        2932,
+        2941,
+        2950
+      ],
+      "junction_cells": [
+        [
+          70,
+          79,
+          0
+        ],
+        [
+          129,
+          38,
+          0
+        ],
+        [
+          129,
+          24,
+          0
+        ],
+        [
+          5,
+          12,
+          0
+        ]
+      ]
+    }
+  ],
+  "elapsed_s": 6.415536195971072,
+  "budget_s": 30.0,
+  "work": {
+    "arcs": 28,
+    "augmentations": 26,
+    "audit_cells": 39,
+    "predicates": 5000000,
+    "assignments": 15,
+    "candidates": 39518
+  },
+  "original_factory_gate": false,
+  "rule_sha256": "0004c2846e2d9da69a2738d2a976b3b6d1abad0ff67903a0ef23e35b237e4e75",
+  "global_router_calls": 0
+}

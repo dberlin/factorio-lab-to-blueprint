@@ -1,0 +1,316 @@
+{
+  "decision": "NO_GO_ORIGINAL_MALL",
+  "rule_sha256": "676297ef2ba608b799265b12e8a393d1f77d3a3fb58a1fd00be41f6a3b46c2b6",
+  "frozen_revisions_verified": 22,
+  "verification_commands_passed": 14,
+  "replacement_model_progress_witness": "failed before; passes after with67 families and1608 prohibitions",
+  "control": {
+    "case": "three-output",
+    "outcome": "VALIDATOR_COMPLETE_WITNESS",
+    "reason": null,
+    "elapsed_s": 9.116619145032018,
+    "budget_s": 30.0,
+    "mode": "GEOMETRY_ONLY",
+    "original_factory_gate": false,
+    "global_router_calls": 0,
+    "supervisor": {
+      "command": [
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+        "-m",
+        "2026-09-09-cadical-disjoint-refinement.template_experiment",
+        "run",
+        "three-output"
+      ],
+      "exit": 0,
+      "hard_deadline_terminated": false,
+      "bootstrap_inclusive_seconds": 14.517441901378334,
+      "original_budget_s": 30.0,
+      "progress": {
+        "case": "three-output",
+        "started_monotonic": 2167737.258242507,
+        "deadline": 2167767.258242507,
+        "budget_s": 30.0,
+        "outcome": "UNKNOWN"
+      },
+      "final_report_written": true
+    },
+    "solver": {
+      "started": 2167737.258486902,
+      "preparation_seconds": 0.608747152145952,
+      "logical_candidates": 140400,
+      "primary_variables": 6474,
+      "auxiliary_variables": 2654,
+      "guard_variables": 80,
+      "primitive_occurrences": 44330,
+      "primitive_descriptors": 5497,
+      "families": 73,
+      "clauses": 36803,
+      "rounds": 17,
+      "native_calls": 17,
+      "solver_seconds": 0.010972766671329737,
+      "collision_cuts": 1752,
+      "static_cuts": 0,
+      "entry_rejected_candidates": 15120,
+      "static_rejected_candidates": 16010,
+      "self_rejections": 0,
+      "selected_candidate_ids": {
+        "4": 21,
+        "5": 192,
+        "6": 22,
+        "7": 1728,
+        "8": 3612,
+        "9": 1115,
+        "10": 20,
+        "11": 375,
+        "12": 471,
+        "13": 1099,
+        "14": 25,
+        "15": 1089,
+        "16": 205,
+        "17": 182,
+        "18": 214,
+        "19": 3,
+        "20": 8,
+        "21": 21,
+        "22": 23,
+        "23": 22,
+        "24": 20,
+        "25": 47,
+        "26": 26,
+        "27": 21,
+        "28": 21,
+        "29": 1463
+      }
+    },
+    "work": {
+      "arcs": 12014,
+      "augmentations": 533,
+      "audit_cells": 317101,
+      "predicates": 1200021,
+      "candidates": 140842,
+      "assignments": 17
+    },
+    "registered_checks": 67
+  },
+  "mall": {
+    "case": "unsprayed-mall",
+    "outcome": "POLICY_BOUND",
+    "reason": "predicates work limit reached at 5000000",
+    "elapsed_s": 4.955467701423913,
+    "budget_s": 60.0,
+    "mode": "GEOMETRY_ONLY",
+    "original_factory_gate": false,
+    "global_router_calls": 0,
+    "supervisor": {
+      "command": [
+        "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+        "-m",
+        "2026-09-09-cadical-disjoint-refinement.template_experiment",
+        "run",
+        "unsprayed-mall"
+      ],
+      "exit": 0,
+      "hard_deadline_terminated": false,
+      "bootstrap_inclusive_seconds": 11.473690540995449,
+      "original_budget_s": 60.0,
+      "progress": {
+        "case": "unsprayed-mall",
+        "started_monotonic": 2167769.30766146,
+        "deadline": 2167829.30766146,
+        "budget_s": 60.0,
+        "outcome": "UNKNOWN"
+      },
+      "final_report_written": true
+    },
+    "solver": {
+      "started": 2167769.307949868,
+      "preparation_seconds": 3.7691082768142223,
+      "logical_candidates": 846000,
+      "primary_variables": 38634,
+      "auxiliary_variables": 14890,
+      "guard_variables": 367,
+      "primitive_occurrences": 267900,
+      "primitive_descriptors": 31444,
+      "families": 413,
+      "clauses": 227614,
+      "rounds": 8,
+      "native_calls": 8,
+      "solver_seconds": 0.05406866269186139,
+      "collision_cuts": 9889,
+      "static_cuts": 0,
+      "entry_rejected_candidates": 96000,
+      "static_rejected_candidates": 107653,
+      "self_rejections": 0,
+      "selected_candidate_ids": {}
+    },
+    "work": {
+      "arcs": 515,
+      "augmentations": 141,
+      "audit_cells": 409530,
+      "predicates": 5000000,
+      "candidates": 847128,
+      "assignments": 8
+    }
+  },
+  "cold_repeats": "NOT_REACHED",
+  "held_outs": "NOT_REACHED",
+  "production_promotion": false,
+  "diagnostic_ledger": {
+    "scope": "saved actual geometry,60s diagnostic; excludes emitter/settlement; not original acceptance",
+    "revision": "2026-09-09-cadical-disjoint-refinement",
+    "outcome": "POLICY_BOUND",
+    "reason": "predicates work limit reached at 5000000",
+    "phases": {
+      "domains_and_static_geometry": {
+        "seconds": 0.9900469086132944,
+        "work": {
+          "predicates": 584598,
+          "audit_cells": 8187,
+          "candidates": 846000
+        }
+      },
+      "primitive_membership_preparation": {
+        "seconds": 0.9955077362246811,
+        "work": {
+          "predicates": 1250388,
+          "audit_cells": 0,
+          "candidates": 0
+        }
+      },
+      "factor_cardinality_threshold_cnf": {
+        "seconds": 0.1396127650514245,
+        "work": {
+          "predicates": 824145,
+          "audit_cells": 0,
+          "candidates": 0
+        }
+      },
+      "static_exclusion_cnf": {
+        "seconds": 0.20453159185126424,
+        "work": {
+          "predicates": 430612,
+          "audit_cells": 0,
+          "candidates": 0
+        }
+      },
+      "native_solve": {
+        "seconds": 0.049340785946697,
+        "work": {
+          "predicates": 0,
+          "audit_cells": 0,
+          "candidates": 0,
+          "assignments": 8
+        }
+      },
+      "selected_model_decode": {
+        "seconds": 0.0369838522747159,
+        "work": {
+          "predicates": 736168,
+          "audit_cells": 0,
+          "candidates": 0,
+          "assignments": 0
+        }
+      },
+      "selected_path_checks": {
+        "seconds": 0.3290073350071907,
+        "work": {
+          "predicates": 104526,
+          "audit_cells": 400206,
+          "candidates": 1128,
+          "assignments": 0
+        }
+      },
+      "selected_pair_checks": {
+        "seconds": 0.37447205651551485,
+        "work": {
+          "predicates": 152238,
+          "audit_cells": 0,
+          "candidates": 0,
+          "assignments": 0
+        }
+      },
+      "family_compilation": {
+        "seconds": 0.3074821191839874,
+        "work": {
+          "predicates": 917325,
+          "audit_cells": 0,
+          "candidates": 0,
+          "assignments": 0
+        }
+      }
+    },
+    "work": {
+      "predicates": 5000000,
+      "audit_cells": 408393,
+      "candidates": 847128,
+      "assignments": 8
+    },
+    "stats": {
+      "started": 2167812.593048082,
+      "preparation_seconds": 2.329718004912138,
+      "logical_candidates": 846000,
+      "primary_variables": 38634,
+      "auxiliary_variables": 14890,
+      "guard_variables": 367,
+      "primitive_occurrences": 267900,
+      "primitive_descriptors": 31444,
+      "families": 413,
+      "clauses": 227614,
+      "rounds": 8,
+      "native_calls": 8,
+      "solver_seconds": 0.04925127932801843,
+      "collision_cuts": 9889,
+      "static_cuts": 0,
+      "entry_rejected_candidates": 96000,
+      "static_rejected_candidates": 107653,
+      "self_rejections": 0,
+      "selected_candidate_ids": {}
+    }
+  },
+  "family_census": {
+    "scope": "diagnostic event census, not acceptance",
+    "revision": "2026-09-09-cadical-binary-clauses",
+    "outcome": "POLICY_BOUND",
+    "reason": "CaDiCaL collision prohibition cap",
+    "stats": {
+      "started": 2167577.151741069,
+      "preparation_seconds": 2.487801761366427,
+      "logical_candidates": 846000,
+      "primary_variables": 38634,
+      "auxiliary_variables": 14791,
+      "guard_variables": 268,
+      "primitive_occurrences": 267900,
+      "primitive_descriptors": 31444,
+      "families": 833,
+      "clauses": 234728,
+      "rounds": 1,
+      "native_calls": 1,
+      "solver_seconds": 0.013080365024507046,
+      "collision_cuts": 20000,
+      "static_cuts": 0,
+      "entry_rejected_candidates": 96000,
+      "static_rejected_candidates": 107653,
+      "self_rejections": 0,
+      "selected_candidate_ids": {}
+    },
+    "work": {
+      "predicates": 4766907,
+      "audit_cells": 93693,
+      "candidates": 846141,
+      "assignments": 1
+    },
+    "rectangle_counts": {
+      "24": 834
+    },
+    "diagonal_relations": 738,
+    "prefix_disjoint_families": 22,
+    "prefix_disjoint_rectangles": 528,
+    "event_count": 834,
+    "events_archive_member": "2026-09-09-cadical-cut-probe/2026-09-09-cadical-binary-clauses.json"
+  },
+  "environment": "Existing project checkout, Python .venv and cadical-feasibility/deps; see retained command records.",
+  "interpretation": "Disjoint refinement passes full control and advances original mall through eight model assignments with9889 cuts, then reaches5000000 predicates. Exact geometry and all numerical limits unchanged. Not factory infeasibility; no tuning or budget relaxation.",
+  "archive_sha256": "106b8cee0fedb472797b021c3288eb0abafde5b211b17e385ca91041ca00f5b9",
+  "archive_members": 102,
+  "member_hashes_verified": true
+}

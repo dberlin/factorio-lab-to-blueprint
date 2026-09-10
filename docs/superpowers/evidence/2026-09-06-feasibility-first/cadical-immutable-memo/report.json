@@ -1,0 +1,35 @@
+{
+  "control": "VALIDATOR_COMPLETE_WITNESS",
+  "control_seconds": 10.672019540332258,
+  "mall": "UNKNOWN",
+  "mall_budget_seconds": 60,
+  "progress": {
+    "phase": "native-call",
+    "work": {
+      "arcs": 515,
+      "augmentations": 141,
+      "audit_cells": 2087128,
+      "predicates": 4754949,
+      "candidates": 857421,
+      "assignments": 82
+    },
+    "stats": {
+      "started": 2153227.955044494,
+      "preparation_seconds": 4.122128575108945,
+      "candidate_variables": 846000,
+      "auxiliary_variables": 161397,
+      "occupancy_variables": 39611,
+      "clauses": 5118153,
+      "rounds": 82,
+      "native_calls": 674,
+      "solver_seconds": 14.021650044247508,
+      "collision_cuts": 7473,
+      "static_cuts": 295,
+      "self_rejections": 1,
+      "selected_candidate_ids": {}
+    }
+  },
+  "rated_acceptance": false,
+  "members": 81,
+  "sha256": "9f66872670e63e2a87bc7305f0469ba87982d19328fa76a6a1327d641e77619d"
+}

@@ -1,0 +1,23 @@
+{
+  "command": [
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+    "-m",
+    "2026-09-09-cadical-occupancy.template_experiment",
+    "run",
+    "three-output"
+  ],
+  "exit": -15,
+  "hard_deadline_terminated": true,
+  "bootstrap_inclusive_seconds": 35.209648882970214,
+  "original_budget_s": 30.0,
+  "progress": {
+    "case": "three-output",
+    "started_monotonic": 2149087.139935414,
+    "deadline": 2149117.139935414,
+    "budget_s": 30.0,
+    "outcome": "UNKNOWN"
+  },
+  "final_report_written": false,
+  "outcome": "UNKNOWN",
+  "reason": "hard deadline or missing final report; not infeasibility or acceptance"
+}

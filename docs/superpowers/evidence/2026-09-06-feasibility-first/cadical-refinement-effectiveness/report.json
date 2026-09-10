@@ -1,0 +1,84 @@
+{
+  "decision": "STRUCTURAL_REFINEMENT_REDESIGN_RECOMMENDED",
+  "scope": "investigation only; no production or frozen solver implementation change",
+  "original_gate": "NO_GO_ORIGINAL_MALL unchanged",
+  "baseline": {
+    "models": 16,
+    "initial_conflict_pairs": 1673,
+    "final_conflict_pairs": 107,
+    "last_transition_removed": 58,
+    "last_transition_created": 58,
+    "all_prior_families_satisfied": true,
+    "completed_matching_batches_cover_all_edges": true,
+    "edge_level_fairness": "Not guaranteed:79 final pairs never directly learned; pair79/128 conflicted in all16 models without selection."
+  },
+  "height_counterfactual": {
+    "xy_unchanged": true,
+    "initial_conflict_pairs": 1673,
+    "after": 117,
+    "unavoidable_fixed_xy_pairs": 29,
+    "whole_graph_canonical_audit_matches": true,
+    "integration_status": "Not integrated; greedy proposal and oracle costs are diagnostic, not gate costs"
+  },
+  "phase_hint_probe": {
+    "outcome": "POLICY_BOUND",
+    "adopted_proposal": false,
+    "rounds": 16,
+    "cuts": 17113
+  },
+  "adopted_proposal_probe": {
+    "outcome": "POLICY_BOUND",
+    "adopted_proposal": true,
+    "rounds": 17,
+    "cuts": 13971,
+    "predicates_excluding_proposal": 5000000,
+    "caveat": "Proposal supplied externally for free; still fails. Never original acceptance."
+  },
+  "joint_explanations": {
+    "two_relation_events": 60,
+    "already_full_single_explanation": 3,
+    "missed_full_height_events": 57,
+    "missed_unique_xy_pairs": 42,
+    "independently_verified_proofs": 45,
+    "independent_height_pair_checks": 25920,
+    "guard_intersections_required": true,
+    "caveat": "Joint guard intersections are narrower than individual guards. Not a globally equivalent replacement of two original families."
+  },
+  "next_experiment": {
+    "recommendation": "incumbent-preserving geometric neighborhood refinement",
+    "steps": [
+      "Build the complete current collision graph and retain a mutually compatible subset.",
+      "Use temporary assumptions for retained paths; repair the conflicting neighborhood against that geometry.",
+      "Release retained paths from UNSAT cores, widening to the unrestricted original problem if needed.",
+      "Keep learned exclusions geometry-sound and correctly guarded; never globally exclude a path merely because it conflicts with a temporarily retained route.",
+      "Evaluate exact joint geometric explanations as a separate controlled addition, not a substitute for convergence evidence."
+    ],
+    "acceptance": "Original full control then original mall, same budgets and all validators. More rounds or fewer raw conflicts are not acceptance."
+  },
+  "diagnostic_commands": [
+    "capture.py",
+    "analyze.py",
+    "height_probe.py",
+    "strength.py",
+    "closure.py",
+    "phase_probe.py",
+    "phase_probe.py --assume",
+    "verify_closure.py",
+    "fairness_probe.py"
+  ],
+  "frozen_source_files_verified": 39,
+  "production_promotion": false,
+  "archive_members": 64,
+  "archive_sha256": "5ffb1dd725a313776e1961a887babb27bff6c8faf334d5366ca24edd801748f4",
+  "member_hashes_verified": true,
+  "restored_archive_closure_proof_passed": true,
+  "oldest_conflict_first_probe": {
+    "outcome": "POLICY_BOUND",
+    "last_audited_conflicts": 129,
+    "rounds": 17,
+    "cuts": 17265,
+    "solver_predicates": 4968861,
+    "external_graph_predicates": 162232,
+    "caveat": "Scheduling graph and sort cost excluded; still fails. Not acceptance."
+  }
+}

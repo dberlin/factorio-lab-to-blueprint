@@ -1,0 +1,15 @@
+{
+  "command": [
+    "uv",
+    "run",
+    "--frozen",
+    "python",
+    "diagnose_url.py",
+    "cli",
+    "30"
+  ],
+  "cwd": "/tmp/flab-url-refusal-27483797",
+  "started_unix_s": 1789052350.6039164,
+  "elapsed_s": 185.6934566181153,
+  "returncode": 3
+}

@@ -1,0 +1,10 @@
+{
+  "control": "VALIDATOR_COMPLETE_WITNESS",
+  "control_seconds": 10.218892509117723,
+  "mall": "UNKNOWN",
+  "mall_budget_seconds": 60,
+  "reason": "hard deadline during native call",
+  "rated_acceptance": false,
+  "members": 81,
+  "sha256": "42207c1ad6c7adbc7b5ff473fff3dd69726d09023800648408913ac149842e86"
+}

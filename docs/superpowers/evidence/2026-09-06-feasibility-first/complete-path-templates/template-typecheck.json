@@ -1,0 +1,5 @@
+{
+  "exit": 0,
+  "stdout": "\n{\n    \"version\": \"1.39.10\",\n    \"time\": \"1788955804386\",\n    \"generalDiagnostics\": [],\n    \"summary\": {\n        \"filesAnalyzed\": 10,\n        \"errorCount\": 0,\n        \"warningCount\": 0,\n        \"informationCount\": 0,\n        \"timeInSec\": 4.449\n    }\n}\n",
+  "stderr": ""
+}

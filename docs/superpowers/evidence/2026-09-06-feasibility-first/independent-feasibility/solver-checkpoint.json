@@ -1,0 +1,6965 @@
+{
+  "outcome": "UNKNOWN",
+  "diagnostic_only": true,
+  "policy": {
+    "scope": "Diagnostic-only feasibility of the unchanged captured three-output topology and complete template domains. Not an original-budget control result.",
+    "solver": "OR-Tools CP-SAT, exactly one Boolean per distinct statically legal complete path, lazy exact cell-occupancy exclusions",
+    "wall_seconds_including_preparation": 180,
+    "audit_wall_seconds": 60,
+    "solver_workers": 1,
+    "solver_random_seed": 0,
+    "maximum_rounds": 2000,
+    "maximum_collision_cuts": 20000,
+    "maximum_expanded_candidate_cells": 40000000,
+    "diagnostic_predicate_limit": 100000000,
+    "diagnostic_candidate_limit": 200000,
+    "invariants": [
+      "Enumerate every frozen domain candidate; do not shorten domains or change geometry.",
+      "Collapse only identical normalized complete paths belonging to the same obligation, retaining a representative frozen candidate ID.",
+      "Cross-check static rejection against independent expanded-cell geometry; disagreement invalidates the diagnostic, never proves infeasibility.",
+      "Collision cuts exclude only simultaneous selections occupying a cell they cannot legally share under exact endpoint ownership.",
+      "A relaxed-model witness is not accepted until all selected paths pass independent complete geometry checks.",
+      "Only CP-SAT INFEASIBLE after complete domain enumeration and sound exclusions proves frozen-family infeasibility. Any diagnostic limit is UNKNOWN.",
+      "Any witness is separately replayed through the existing construction/audit path with exact problem equality, in a temporary extracted archive. It cannot open production or downstream experiment gates."
+    ]
+  },
+  "policy_sha256": "53a13ca462e41c72072bc3b6c66ab37d2628b5f1c6b409d08e93013ecbb250d0",
+  "ortools_version": "9.15.6755",
+  "archive_sha256": "47494cee11af2fc46fd597181bd147dc6234c76d5fc068f3c02a37ab2a063393",
+  "started_monotonic": 2144301.002736214,
+  "frozen_rule_sha256": "109b02d2830cd5c6f490242fad67fc86c3f30dca8ed45bf316d43b996e6c3e8f",
+  "problem_sha256": "fc0288585c67647540b36b69e0f33979f0b8bab6a15cedad53d9065aa39faf11",
+  "actual_frozen_problem_equality": true,
+  "phase": "solving",
+  "elapsed_seconds": 179.50291937869042,
+  "geometry_work": {
+    "predicates": 21024798,
+    "candidates": 140400
+  },
+  "domains": [
+    {
+      "ordinal": 1,
+      "enumerated": 5400,
+      "static_rejected": 10,
+      "exact_duplicates": 360,
+      "retained": 5030
+    },
+    {
+      "ordinal": 2,
+      "enumerated": 5400,
+      "static_rejected": 29,
+      "exact_duplicates": 360,
+      "retained": 5011
+    },
+    {
+      "ordinal": 3,
+      "enumerated": 5400,
+      "static_rejected": 58,
+      "exact_duplicates": 768,
+      "retained": 4574
+    },
+    {
+      "ordinal": 4,
+      "enumerated": 5400,
+      "static_rejected": 30,
+      "exact_duplicates": 0,
+      "retained": 5370
+    },
+    {
+      "ordinal": 5,
+      "enumerated": 5400,
+      "static_rejected": 1085,
+      "exact_duplicates": 0,
+      "retained": 4315
+    },
+    {
+      "ordinal": 6,
+      "enumerated": 5400,
+      "static_rejected": 20,
+      "exact_duplicates": 0,
+      "retained": 5380
+    },
+    {
+      "ordinal": 7,
+      "enumerated": 5400,
+      "static_rejected": 0,
+      "exact_duplicates": 240,
+      "retained": 5160
+    },
+    {
+      "ordinal": 8,
+      "enumerated": 5400,
+      "static_rejected": 1095,
+      "exact_duplicates": 0,
+      "retained": 4305
+    },
+    {
+      "ordinal": 9,
+      "enumerated": 5400,
+      "static_rejected": 35,
+      "exact_duplicates": 0,
+      "retained": 5365
+    },
+    {
+      "ordinal": 10,
+      "enumerated": 5400,
+      "static_rejected": 5,
+      "exact_duplicates": 0,
+      "retained": 5395
+    },
+    {
+      "ordinal": 11,
+      "enumerated": 5400,
+      "static_rejected": 112,
+      "exact_duplicates": 0,
+      "retained": 5288
+    },
+    {
+      "ordinal": 12,
+      "enumerated": 5400,
+      "static_rejected": 0,
+      "exact_duplicates": 0,
+      "retained": 5400
+    },
+    {
+      "ordinal": 13,
+      "enumerated": 5400,
+      "static_rejected": 15,
+      "exact_duplicates": 0,
+      "retained": 5385
+    },
+    {
+      "ordinal": 14,
+      "enumerated": 5400,
+      "static_rejected": 35,
+      "exact_duplicates": 0,
+      "retained": 5365
+    },
+    {
+      "ordinal": 15,
+      "enumerated": 5400,
+      "static_rejected": 15,
+      "exact_duplicates": 0,
+      "retained": 5385
+    },
+    {
+      "ordinal": 16,
+      "enumerated": 5400,
+      "static_rejected": 101,
+      "exact_duplicates": 0,
+      "retained": 5299
+    },
+    {
+      "ordinal": 17,
+      "enumerated": 5400,
+      "static_rejected": 1090,
+      "exact_duplicates": 0,
+      "retained": 4310
+    },
+    {
+      "ordinal": 18,
+      "enumerated": 5400,
+      "static_rejected": 15,
+      "exact_duplicates": 0,
+      "retained": 5385
+    },
+    {
+      "ordinal": 19,
+      "enumerated": 5400,
+      "static_rejected": 30,
+      "exact_duplicates": 720,
+      "retained": 4650
+    },
+    {
+      "ordinal": 20,
+      "enumerated": 5400,
+      "static_rejected": 114,
+      "exact_duplicates": 0,
+      "retained": 5286
+    },
+    {
+      "ordinal": 21,
+      "enumerated": 5400,
+      "static_rejected": 0,
+      "exact_duplicates": 0,
+      "retained": 5400
+    },
+    {
+      "ordinal": 22,
+      "enumerated": 5400,
+      "static_rejected": 20,
+      "exact_duplicates": 0,
+      "retained": 5380
+    },
+    {
+      "ordinal": 23,
+      "enumerated": 5400,
+      "static_rejected": 2001,
+      "exact_duplicates": 0,
+      "retained": 3399
+    },
+    {
+      "ordinal": 24,
+      "enumerated": 5400,
+      "static_rejected": 47,
+      "exact_duplicates": 120,
+      "retained": 5233
+    },
+    {
+      "ordinal": 25,
+      "enumerated": 5400,
+      "static_rejected": 25,
+      "exact_duplicates": 0,
+      "retained": 5375
+    },
+    {
+      "ordinal": 26,
+      "enumerated": 5400,
+      "static_rejected": 25,
+      "exact_duplicates": 0,
+      "retained": 5375
+    }
+  ],
+  "expanded_candidate_cells": 30141240,
+  "complete_domain_enumeration": true,
+  "rounds": [
+    {
+      "round": 0,
+      "status": "OPTIMAL",
+      "wall_seconds": 0.392781064,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 0
+    },
+    {
+      "round": 1,
+      "status": "OPTIMAL",
+      "wall_seconds": 0.35811713100000003,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 29
+    },
+    {
+      "round": 2,
+      "status": "OPTIMAL",
+      "wall_seconds": 0.864785777,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 67
+    },
+    {
+      "round": 3,
+      "status": "OPTIMAL",
+      "wall_seconds": 1.498091316,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 99
+    },
+    {
+      "round": 4,
+      "status": "OPTIMAL",
+      "wall_seconds": 1.309561615,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 118
+    },
+    {
+      "round": 5,
+      "status": "OPTIMAL",
+      "wall_seconds": 0.90600818,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 144
+    },
+    {
+      "round": 6,
+      "status": "OPTIMAL",
+      "wall_seconds": 1.019836804,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 163
+    },
+    {
+      "round": 7,
+      "status": "OPTIMAL",
+      "wall_seconds": 1.773719172,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 178
+    },
+    {
+      "round": 8,
+      "status": "OPTIMAL",
+      "wall_seconds": 2.654005569,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 196
+    },
+    {
+      "round": 9,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.1415635500000003,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 208
+    },
+    {
+      "round": 10,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.2697707250000003,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 223
+    },
+    {
+      "round": 11,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.528306038,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 242
+    },
+    {
+      "round": 12,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.530000518,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 264
+    },
+    {
+      "round": 13,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.539749429,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 276
+    },
+    {
+      "round": 14,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.227821382,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 289
+    },
+    {
+      "round": 15,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.3117877890000003,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 296
+    },
+    {
+      "round": 16,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.5480104910000003,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 309
+    },
+    {
+      "round": 17,
+      "status": "OPTIMAL",
+      "wall_seconds": 4.191092530000001,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 315
+    },
+    {
+      "round": 18,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.5286374950000003,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 318
+    },
+    {
+      "round": 19,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.73900338,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 324
+    },
+    {
+      "round": 20,
+      "status": "OPTIMAL",
+      "wall_seconds": 5.146960488,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 326
+    },
+    {
+      "round": 21,
+      "status": "OPTIMAL",
+      "wall_seconds": 5.075778227000001,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 328
+    },
+    {
+      "round": 22,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.623599275,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 335
+    },
+    {
+      "round": 23,
+      "status": "OPTIMAL",
+      "wall_seconds": 4.767491221,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 339
+    },
+    {
+      "round": 24,
+      "status": "OPTIMAL",
+      "wall_seconds": 5.281312115,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 340
+    },
+    {
+      "round": 25,
+      "status": "OPTIMAL",
+      "wall_seconds": 5.343104971000001,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 341
+    },
+    {
+      "round": 26,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.510119356,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 343
+    },
+    {
+      "round": 27,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.39200339,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 350
+    },
+    {
+      "round": 28,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.4151923170000003,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 353
+    },
+    {
+      "round": 29,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.410397387,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 356
+    },
+    {
+      "round": 30,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.3791685200000003,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 358
+    },
+    {
+      "round": 31,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.623266853,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 360
+    },
+    {
+      "round": 32,
+      "status": "OPTIMAL",
+      "wall_seconds": 4.790344168000001,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 362
+    },
+    {
+      "round": 33,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.3606703560000004,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 364
+    },
+    {
+      "round": 34,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.319409571,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 366
+    },
+    {
+      "round": 35,
+      "status": "OPTIMAL",
+      "wall_seconds": 3.3091275610000004,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 368
+    },
+    {
+      "round": 36,
+      "status": "UNKNOWN",
+      "wall_seconds": 3.049499882,
+      "conflicts": 0,
+      "branches": 0,
+      "cuts_before": 370
+    }
+  ],
+  "cuts": [
+    {
+      "cell": [
+        127,
+        34,
+        3
+      ],
+      "ordinals": [
+        1,
+        2,
+        5,
+        10,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 219
+    },
+    {
+      "cell": [
+        127,
+        19,
+        3
+      ],
+      "ordinals": [
+        1,
+        10,
+        11
+      ],
+      "candidate_terms": 44
+    },
+    {
+      "cell": [
+        133,
+        48,
+        3
+      ],
+      "ordinals": [
+        3,
+        7,
+        16,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 303
+    },
+    {
+      "cell": [
+        9,
+        -4,
+        3
+      ],
+      "ordinals": [
+        4,
+        6,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 119
+    },
+    {
+      "cell": [
+        9,
+        13,
+        3
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        13,
+        15,
+        17,
+        18,
+        20,
+        22
+      ],
+      "candidate_terms": 1232
+    },
+    {
+      "cell": [
+        9,
+        28,
+        3
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 1417
+    },
+    {
+      "cell": [
+        3,
+        -4,
+        3
+      ],
+      "ordinals": [
+        4,
+        12
+      ],
+      "candidate_terms": 34
+    },
+    {
+      "cell": [
+        9,
+        -7,
+        3
+      ],
+      "ordinals": [
+        5,
+        6,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 128
+    },
+    {
+      "cell": [
+        127,
+        -7,
+        3
+      ],
+      "ordinals": [
+        5,
+        10
+      ],
+      "candidate_terms": 36
+    },
+    {
+      "cell": [
+        133,
+        16,
+        3
+      ],
+      "ordinals": [
+        5,
+        11,
+        21,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 130
+    },
+    {
+      "cell": [
+        3,
+        -7,
+        3
+      ],
+      "ordinals": [
+        5,
+        12
+      ],
+      "candidate_terms": 34
+    },
+    {
+      "cell": [
+        133,
+        -7,
+        3
+      ],
+      "ordinals": [
+        5,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 77
+    },
+    {
+      "cell": [
+        3,
+        -10,
+        3
+      ],
+      "ordinals": [
+        6,
+        12
+      ],
+      "candidate_terms": 38
+    },
+    {
+      "cell": [
+        9,
+        -10,
+        3
+      ],
+      "ordinals": [
+        6,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 116
+    },
+    {
+      "cell": [
+        133,
+        60,
+        3
+      ],
+      "ordinals": [
+        3,
+        7,
+        20,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 253
+    },
+    {
+      "cell": [
+        9,
+        75,
+        3
+      ],
+      "ordinals": [
+        8,
+        9,
+        14
+      ],
+      "candidate_terms": 55
+    },
+    {
+      "cell": [
+        3,
+        -13,
+        3
+      ],
+      "ordinals": [
+        10,
+        12
+      ],
+      "candidate_terms": 39
+    },
+    {
+      "cell": [
+        9,
+        -13,
+        3
+      ],
+      "ordinals": [
+        10,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 122
+    },
+    {
+      "cell": [
+        9,
+        -19,
+        3
+      ],
+      "ordinals": [
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 98
+    },
+    {
+      "cell": [
+        9,
+        -22,
+        3
+      ],
+      "ordinals": [
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 83
+    },
+    {
+      "cell": [
+        133,
+        39,
+        3
+      ],
+      "ordinals": [
+        3,
+        16,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 1068
+    },
+    {
+      "cell": [
+        133,
+        30,
+        3
+      ],
+      "ordinals": [
+        5,
+        11,
+        16,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 160
+    },
+    {
+      "cell": [
+        9,
+        -25,
+        3
+      ],
+      "ordinals": [
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 66
+    },
+    {
+      "cell": [
+        9,
+        -28,
+        3
+      ],
+      "ordinals": [
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 58
+    },
+    {
+      "cell": [
+        298,
+        13,
+        3
+      ],
+      "ordinals": [
+        8,
+        19,
+        20
+      ],
+      "candidate_terms": 1157
+    },
+    {
+      "cell": [
+        298,
+        16,
+        3
+      ],
+      "ordinals": [
+        11,
+        19,
+        20,
+        24
+      ],
+      "candidate_terms": 1195
+    },
+    {
+      "cell": [
+        9,
+        -31,
+        3
+      ],
+      "ordinals": [
+        17,
+        21,
+        22
+      ],
+      "candidate_terms": 70
+    },
+    {
+      "cell": [
+        133,
+        -31,
+        3
+      ],
+      "ordinals": [
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 72
+    },
+    {
+      "cell": [
+        133,
+        -37,
+        3
+      ],
+      "ordinals": [
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 54
+    },
+    {
+      "cell": [
+        40,
+        34,
+        3
+      ],
+      "ordinals": [
+        1,
+        2,
+        5,
+        8,
+        9,
+        10,
+        14,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 1219
+    },
+    {
+      "cell": [
+        40,
+        25,
+        3
+      ],
+      "ordinals": [
+        1,
+        2,
+        5,
+        13
+      ],
+      "candidate_terms": 91
+    },
+    {
+      "cell": [
+        40,
+        20,
+        3
+      ],
+      "ordinals": [
+        1,
+        5,
+        8,
+        10,
+        14,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 214
+    },
+    {
+      "cell": [
+        40,
+        24,
+        3
+      ],
+      "ordinals": [
+        1,
+        2,
+        10
+      ],
+      "candidate_terms": 81
+    },
+    {
+      "cell": [
+        70,
+        38,
+        3
+      ],
+      "ordinals": [
+        1,
+        2,
+        3,
+        5,
+        8,
+        9,
+        10,
+        14,
+        25,
+        26
+      ],
+      "candidate_terms": 331
+    },
+    {
+      "cell": [
+        72,
+        40,
+        3
+      ],
+      "ordinals": [
+        1,
+        2,
+        4,
+        8,
+        9,
+        14
+      ],
+      "candidate_terms": 136
+    },
+    {
+      "cell": [
+        70,
+        40,
+        3
+      ],
+      "ordinals": [
+        1,
+        2,
+        4,
+        9,
+        14
+      ],
+      "candidate_terms": 155
+    },
+    {
+      "cell": [
+        72,
+        52,
+        3
+      ],
+      "ordinals": [
+        3,
+        8,
+        9,
+        14
+      ],
+      "candidate_terms": 142
+    },
+    {
+      "cell": [
+        70,
+        52,
+        3
+      ],
+      "ordinals": [
+        3,
+        9,
+        14
+      ],
+      "candidate_terms": 186
+    },
+    {
+      "cell": [
+        2,
+        -4,
+        3
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1946
+    },
+    {
+      "cell": [
+        2,
+        -7,
+        3
+      ],
+      "ordinals": [
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1668
+    },
+    {
+      "cell": [
+        72,
+        25,
+        3
+      ],
+      "ordinals": [
+        5,
+        8,
+        13,
+        14
+      ],
+      "candidate_terms": 87
+    },
+    {
+      "cell": [
+        129,
+        25,
+        3
+      ],
+      "ordinals": [
+        2,
+        5,
+        11,
+        13,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 1210
+    },
+    {
+      "cell": [
+        70,
+        25,
+        3
+      ],
+      "ordinals": [
+        5,
+        13,
+        14
+      ],
+      "candidate_terms": 82
+    },
+    {
+      "cell": [
+        2,
+        -10,
+        3
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1813
+    },
+    {
+      "cell": [
+        72,
+        24,
+        3
+      ],
+      "ordinals": [
+        8,
+        10,
+        14
+      ],
+      "candidate_terms": 77
+    },
+    {
+      "cell": [
+        70,
+        20,
+        3
+      ],
+      "ordinals": [
+        1,
+        5,
+        8,
+        10,
+        14,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 202
+    },
+    {
+      "cell": [
+        9,
+        14,
+        0
+      ],
+      "ordinals": [
+        8,
+        17
+      ],
+      "candidate_terms": 5375
+    },
+    {
+      "cell": [
+        72,
+        67,
+        3
+      ],
+      "ordinals": [
+        8,
+        9,
+        14,
+        25
+      ],
+      "candidate_terms": 135
+    },
+    {
+      "cell": [
+        72,
+        68,
+        3
+      ],
+      "ordinals": [
+        6,
+        7,
+        8,
+        9,
+        14,
+        26
+      ],
+      "candidate_terms": 170
+    },
+    {
+      "cell": [
+        70,
+        34,
+        3
+      ],
+      "ordinals": [
+        1,
+        2,
+        5,
+        8,
+        9,
+        10,
+        14,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 307
+    },
+    {
+      "cell": [
+        9,
+        29,
+        0
+      ],
+      "ordinals": [
+        9,
+        13,
+        18
+      ],
+      "candidate_terms": 7530
+    },
+    {
+      "cell": [
+        70,
+        67,
+        3
+      ],
+      "ordinals": [
+        9,
+        14,
+        25
+      ],
+      "candidate_terms": 174
+    },
+    {
+      "cell": [
+        70,
+        68,
+        3
+      ],
+      "ordinals": [
+        6,
+        7,
+        9,
+        14,
+        26
+      ],
+      "candidate_terms": 209
+    },
+    {
+      "cell": [
+        2,
+        -13,
+        3
+      ],
+      "ordinals": [
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1741
+    },
+    {
+      "cell": [
+        70,
+        24,
+        3
+      ],
+      "ordinals": [
+        10,
+        14
+      ],
+      "candidate_terms": 72
+    },
+    {
+      "cell": [
+        2,
+        -16,
+        3
+      ],
+      "ordinals": [
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1671
+    },
+    {
+      "cell": [
+        2,
+        -19,
+        3
+      ],
+      "ordinals": [
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1589
+    },
+    {
+      "cell": [
+        5,
+        14,
+        3
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        11,
+        12,
+        13,
+        14,
+        15,
+        17,
+        18,
+        21,
+        22,
+        24
+      ],
+      "candidate_terms": 2276
+    },
+    {
+      "cell": [
+        2,
+        -22,
+        3
+      ],
+      "ordinals": [
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1514
+    },
+    {
+      "cell": [
+        133,
+        41,
+        4
+      ],
+      "ordinals": [
+        3,
+        15,
+        16,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 1059
+    },
+    {
+      "cell": [
+        2,
+        -25,
+        3
+      ],
+      "ordinals": [
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1244
+    },
+    {
+      "cell": [
+        2,
+        -28,
+        3
+      ],
+      "ordinals": [
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1403
+    },
+    {
+      "cell": [
+        296,
+        13,
+        3
+      ],
+      "ordinals": [
+        8,
+        19,
+        20
+      ],
+      "candidate_terms": 1112
+    },
+    {
+      "cell": [
+        296,
+        16,
+        3
+      ],
+      "ordinals": [
+        11,
+        19,
+        20,
+        24
+      ],
+      "candidate_terms": 1120
+    },
+    {
+      "cell": [
+        2,
+        -31,
+        3
+      ],
+      "ordinals": [
+        17,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1346
+    },
+    {
+      "cell": [
+        2,
+        -34,
+        3
+      ],
+      "ordinals": [
+        17,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1282
+    },
+    {
+      "cell": [
+        2,
+        -37,
+        3
+      ],
+      "ordinals": [
+        17,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 1206
+    },
+    {
+      "cell": [
+        122,
+        36,
+        3
+      ],
+      "ordinals": [
+        1,
+        2,
+        4,
+        6,
+        8,
+        9,
+        14,
+        15,
+        16,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 340
+    },
+    {
+      "cell": [
+        122,
+        23,
+        3
+      ],
+      "ordinals": [
+        1,
+        2,
+        4,
+        5,
+        6,
+        8,
+        10,
+        11,
+        13,
+        14,
+        15,
+        18,
+        19,
+        20,
+        21,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 540
+    },
+    {
+      "cell": [
+        122,
+        19,
+        3
+      ],
+      "ordinals": [
+        1,
+        4,
+        5,
+        6,
+        8,
+        10,
+        11,
+        13,
+        14,
+        15,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 397
+    },
+    {
+      "cell": [
+        131,
+        52,
+        3
+      ],
+      "ordinals": [
+        3,
+        7,
+        16,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 1027
+    },
+    {
+      "cell": [
+        122,
+        48,
+        3
+      ],
+      "ordinals": [
+        2,
+        3,
+        6,
+        7,
+        8,
+        9,
+        14,
+        16,
+        20,
+        22,
+        23,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 334
+    },
+    {
+      "cell": [
+        4,
+        -4,
+        3
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1367
+    },
+    {
+      "cell": [
+        7,
+        42,
+        3
+      ],
+      "ordinals": [
+        2,
+        4,
+        6,
+        8,
+        9,
+        14,
+        15,
+        22
+      ],
+      "candidate_terms": 1193
+    },
+    {
+      "cell": [
+        4,
+        -7,
+        3
+      ],
+      "ordinals": [
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1137
+    },
+    {
+      "cell": [
+        7,
+        23,
+        3
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        8,
+        10,
+        13,
+        14,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 384
+    },
+    {
+      "cell": [
+        131,
+        23,
+        3
+      ],
+      "ordinals": [
+        2,
+        5,
+        11,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 150
+    },
+    {
+      "cell": [
+        7,
+        68,
+        3
+      ],
+      "ordinals": [
+        6,
+        7,
+        8,
+        9,
+        14,
+        26
+      ],
+      "candidate_terms": 1149
+    },
+    {
+      "cell": [
+        4,
+        -10,
+        3
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1328
+    },
+    {
+      "cell": [
+        131,
+        66,
+        3
+      ],
+      "ordinals": [
+        6,
+        7,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 1149
+    },
+    {
+      "cell": [
+        122,
+        66,
+        3
+      ],
+      "ordinals": [
+        6,
+        7,
+        8,
+        9,
+        14,
+        23,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 222
+    },
+    {
+      "cell": [
+        7,
+        28,
+        3
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        14,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 1211
+    },
+    {
+      "cell": [
+        7,
+        27,
+        3
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        8,
+        13,
+        14,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 1219
+    },
+    {
+      "cell": [
+        7,
+        43,
+        3
+      ],
+      "ordinals": [
+        6,
+        8,
+        9,
+        14,
+        15,
+        22
+      ],
+      "candidate_terms": 1174
+    },
+    {
+      "cell": [
+        7,
+        20,
+        3
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        8,
+        10,
+        13,
+        14,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 369
+    },
+    {
+      "cell": [
+        7,
+        56,
+        3
+      ],
+      "ordinals": [
+        6,
+        8,
+        9,
+        14,
+        22
+      ],
+      "candidate_terms": 1129
+    },
+    {
+      "cell": [
+        9,
+        28,
+        0
+      ],
+      "ordinals": [
+        9,
+        13,
+        18
+      ],
+      "candidate_terms": 7520
+    },
+    {
+      "cell": [
+        4,
+        -13,
+        3
+      ],
+      "ordinals": [
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1307
+    },
+    {
+      "cell": [
+        4,
+        -16,
+        3
+      ],
+      "ordinals": [
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1284
+    },
+    {
+      "cell": [
+        4,
+        -19,
+        3
+      ],
+      "ordinals": [
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1253
+    },
+    {
+      "cell": [
+        9,
+        27,
+        0
+      ],
+      "ordinals": [
+        9,
+        13,
+        18
+      ],
+      "candidate_terms": 7535
+    },
+    {
+      "cell": [
+        4,
+        -22,
+        3
+      ],
+      "ordinals": [
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1228
+    },
+    {
+      "cell": [
+        4,
+        -25,
+        3
+      ],
+      "ordinals": [
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 994
+    },
+    {
+      "cell": [
+        294,
+        16,
+        3
+      ],
+      "ordinals": [
+        11,
+        19,
+        20,
+        24
+      ],
+      "candidate_terms": 1005
+    },
+    {
+      "cell": [
+        4,
+        -31,
+        3
+      ],
+      "ordinals": [
+        17,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1177
+    },
+    {
+      "cell": [
+        122,
+        12,
+        3
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 349
+    },
+    {
+      "cell": [
+        131,
+        67,
+        3
+      ],
+      "ordinals": [
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 1128
+    },
+    {
+      "cell": [
+        131,
+        68,
+        3
+      ],
+      "ordinals": [
+        6,
+        7,
+        23,
+        26
+      ],
+      "candidate_terms": 1133
+    },
+    {
+      "cell": [
+        122,
+        -37,
+        3
+      ],
+      "ordinals": [
+        25,
+        26
+      ],
+      "candidate_terms": 72
+    },
+    {
+      "cell": [
+        125,
+        22,
+        3
+      ],
+      "ordinals": [
+        1,
+        10
+      ],
+      "candidate_terms": 35
+    },
+    {
+      "cell": [
+        6,
+        -4,
+        3
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1369
+    },
+    {
+      "cell": [
+        6,
+        -7,
+        3
+      ],
+      "ordinals": [
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1144
+    },
+    {
+      "cell": [
+        133,
+        16,
+        4
+      ],
+      "ordinals": [
+        5,
+        11,
+        14,
+        17,
+        21,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 167
+    },
+    {
+      "cell": [
+        6,
+        -10,
+        3
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1334
+    },
+    {
+      "cell": [
+        133,
+        65,
+        3
+      ],
+      "ordinals": [
+        7,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 1259
+    },
+    {
+      "cell": [
+        7,
+        75,
+        4
+      ],
+      "ordinals": [
+        8,
+        9,
+        14
+      ],
+      "candidate_terms": 41
+    },
+    {
+      "cell": [
+        7,
+        68,
+        4
+      ],
+      "ordinals": [
+        6,
+        7,
+        8,
+        9,
+        14,
+        26
+      ],
+      "candidate_terms": 1104
+    },
+    {
+      "cell": [
+        5,
+        29,
+        3
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        9,
+        13,
+        14,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 1264
+    },
+    {
+      "cell": [
+        6,
+        -13,
+        3
+      ],
+      "ordinals": [
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1316
+    },
+    {
+      "cell": [
+        6,
+        -19,
+        3
+      ],
+      "ordinals": [
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1258
+    },
+    {
+      "cell": [
+        5,
+        29,
+        4
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        9,
+        13,
+        14,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 1219
+    },
+    {
+      "cell": [
+        5,
+        68,
+        4
+      ],
+      "ordinals": [
+        6,
+        7,
+        8,
+        9,
+        14,
+        26
+      ],
+      "candidate_terms": 1107
+    },
+    {
+      "cell": [
+        6,
+        -22,
+        3
+      ],
+      "ordinals": [
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1233
+    },
+    {
+      "cell": [
+        6,
+        -25,
+        3
+      ],
+      "ordinals": [
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 998
+    },
+    {
+      "cell": [
+        2,
+        -28,
+        4
+      ],
+      "ordinals": [
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1361
+    },
+    {
+      "cell": [
+        6,
+        -31,
+        3
+      ],
+      "ordinals": [
+        17,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1187
+    },
+    {
+      "cell": [
+        6,
+        -34,
+        3
+      ],
+      "ordinals": [
+        17,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1153
+    },
+    {
+      "cell": [
+        131,
+        68,
+        4
+      ],
+      "ordinals": [
+        6,
+        7,
+        23,
+        26
+      ],
+      "candidate_terms": 1089
+    },
+    {
+      "cell": [
+        123,
+        21,
+        3
+      ],
+      "ordinals": [
+        1,
+        10
+      ],
+      "candidate_terms": 28
+    },
+    {
+      "cell": [
+        72,
+        34,
+        4
+      ],
+      "ordinals": [
+        1,
+        2,
+        5,
+        8,
+        9,
+        10,
+        14,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 291
+    },
+    {
+      "cell": [
+        70,
+        34,
+        4
+      ],
+      "ordinals": [
+        1,
+        2,
+        5,
+        8,
+        9,
+        10,
+        14,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 325
+    },
+    {
+      "cell": [
+        129,
+        34,
+        4
+      ],
+      "ordinals": [
+        2,
+        5,
+        11,
+        16,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 228
+    },
+    {
+      "cell": [
+        9,
+        25,
+        4
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        8,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 1360
+    },
+    {
+      "cell": [
+        72,
+        25,
+        4
+      ],
+      "ordinals": [
+        5,
+        8,
+        13,
+        14
+      ],
+      "candidate_terms": 91
+    },
+    {
+      "cell": [
+        2,
+        -5,
+        4
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1670
+    },
+    {
+      "cell": [
+        70,
+        25,
+        4
+      ],
+      "ordinals": [
+        5,
+        13,
+        14
+      ],
+      "candidate_terms": 85
+    },
+    {
+      "cell": [
+        4,
+        25,
+        4
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 192
+    },
+    {
+      "cell": [
+        129,
+        25,
+        4
+      ],
+      "ordinals": [
+        2,
+        5,
+        11,
+        13,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 1165
+    },
+    {
+      "cell": [
+        9,
+        13,
+        4
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        13,
+        15,
+        17,
+        18,
+        20,
+        22
+      ],
+      "candidate_terms": 1190
+    },
+    {
+      "cell": [
+        9,
+        28,
+        4
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        15,
+        16,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 1395
+    },
+    {
+      "cell": [
+        2,
+        -8,
+        4
+      ],
+      "ordinals": [
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1805
+    },
+    {
+      "cell": [
+        9,
+        16,
+        4
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        11,
+        13,
+        14,
+        15,
+        17,
+        18,
+        22,
+        24
+      ],
+      "candidate_terms": 1232
+    },
+    {
+      "cell": [
+        9,
+        -8,
+        4
+      ],
+      "ordinals": [
+        6,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 103
+    },
+    {
+      "cell": [
+        4,
+        -8,
+        4
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 272
+    },
+    {
+      "cell": [
+        72,
+        67,
+        4
+      ],
+      "ordinals": [
+        8,
+        9,
+        14,
+        25
+      ],
+      "candidate_terms": 140
+    },
+    {
+      "cell": [
+        129,
+        26,
+        4
+      ],
+      "ordinals": [
+        2,
+        5,
+        9,
+        10,
+        11,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 1155
+    },
+    {
+      "cell": [
+        9,
+        23,
+        4
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        8,
+        10,
+        13,
+        14,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 485
+    },
+    {
+      "cell": [
+        4,
+        23,
+        4
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        10,
+        12,
+        13,
+        14,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 410
+    },
+    {
+      "cell": [
+        70,
+        67,
+        4
+      ],
+      "ordinals": [
+        9,
+        14,
+        25
+      ],
+      "candidate_terms": 180
+    },
+    {
+      "cell": [
+        9,
+        -20,
+        4
+      ],
+      "ordinals": [
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 78
+    },
+    {
+      "cell": [
+        4,
+        -20,
+        4
+      ],
+      "ordinals": [
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 174
+    },
+    {
+      "cell": [
+        192,
+        39,
+        4
+      ],
+      "ordinals": [
+        16,
+        23
+      ],
+      "candidate_terms": 69
+    },
+    {
+      "cell": [
+        4,
+        -34,
+        4
+      ],
+      "ordinals": [
+        17,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1112
+    },
+    {
+      "cell": [
+        129,
+        67,
+        4
+      ],
+      "ordinals": [
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 1094
+    },
+    {
+      "cell": [
+        127,
+        19,
+        4
+      ],
+      "ordinals": [
+        1,
+        10,
+        11
+      ],
+      "candidate_terms": 47
+    },
+    {
+      "cell": [
+        122,
+        19,
+        4
+      ],
+      "ordinals": [
+        1,
+        4,
+        5,
+        6,
+        8,
+        10,
+        11,
+        13,
+        14,
+        15,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 435
+    },
+    {
+      "cell": [
+        122,
+        40,
+        4
+      ],
+      "ordinals": [
+        1,
+        2,
+        4,
+        6,
+        8,
+        9,
+        14,
+        15,
+        16,
+        19,
+        20,
+        22,
+        23,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 402
+    },
+    {
+      "cell": [
+        127,
+        -9,
+        4
+      ],
+      "ordinals": [
+        5,
+        10
+      ],
+      "candidate_terms": 23
+    },
+    {
+      "cell": [
+        5,
+        -9,
+        4
+      ],
+      "ordinals": [
+        5,
+        6,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 46
+    },
+    {
+      "cell": [
+        122,
+        -9,
+        4
+      ],
+      "ordinals": [
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 273
+    },
+    {
+      "cell": [
+        2,
+        -12,
+        0
+      ],
+      "ordinals": [
+        6,
+        10
+      ],
+      "candidate_terms": 2155
+    },
+    {
+      "cell": [
+        9,
+        -12,
+        5
+      ],
+      "ordinals": [
+        6,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 93
+    },
+    {
+      "cell": [
+        6,
+        -12,
+        5
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 250
+    },
+    {
+      "cell": [
+        7,
+        75,
+        5
+      ],
+      "ordinals": [
+        8,
+        9,
+        14
+      ],
+      "candidate_terms": 41
+    },
+    {
+      "cell": [
+        7,
+        14,
+        5
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        11,
+        12,
+        13,
+        14,
+        15,
+        17,
+        18,
+        21,
+        22,
+        24
+      ],
+      "candidate_terms": 2115
+    },
+    {
+      "cell": [
+        7,
+        23,
+        5
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        8,
+        10,
+        13,
+        14,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 385
+    },
+    {
+      "cell": [
+        122,
+        28,
+        4
+      ],
+      "ordinals": [
+        1,
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        14,
+        15,
+        16,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 375
+    },
+    {
+      "cell": [
+        5,
+        -11,
+        4
+      ],
+      "ordinals": [
+        6,
+        10,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 46
+    },
+    {
+      "cell": [
+        122,
+        -11,
+        4
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 259
+    },
+    {
+      "cell": [
+        5,
+        16,
+        4
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        11,
+        13,
+        14,
+        15,
+        17,
+        18,
+        22,
+        24
+      ],
+      "candidate_terms": 1163
+    },
+    {
+      "cell": [
+        6,
+        -20,
+        5
+      ],
+      "ordinals": [
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 175
+    },
+    {
+      "cell": [
+        9,
+        -20,
+        5
+      ],
+      "ordinals": [
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 78
+    },
+    {
+      "cell": [
+        178,
+        53,
+        3
+      ],
+      "ordinals": [
+        16,
+        20
+      ],
+      "candidate_terms": 43
+    },
+    {
+      "cell": [
+        42,
+        38,
+        4
+      ],
+      "ordinals": [
+        1,
+        2,
+        3,
+        5,
+        8,
+        9,
+        10,
+        14,
+        25,
+        26
+      ],
+      "candidate_terms": 256
+    },
+    {
+      "cell": [
+        2,
+        -9,
+        0
+      ],
+      "ordinals": [
+        5,
+        6
+      ],
+      "candidate_terms": 1939
+    },
+    {
+      "cell": [
+        2,
+        -9,
+        5
+      ],
+      "ordinals": [
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1550
+    },
+    {
+      "cell": [
+        4,
+        -9,
+        5
+      ],
+      "ordinals": [
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 273
+    },
+    {
+      "cell": [
+        133,
+        -9,
+        5
+      ],
+      "ordinals": [
+        5,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 66
+    },
+    {
+      "cell": [
+        1,
+        -8,
+        3
+      ],
+      "ordinals": [
+        6,
+        12
+      ],
+      "candidate_terms": 10
+    },
+    {
+      "cell": [
+        133,
+        66,
+        0
+      ],
+      "ordinals": [
+        7,
+        25,
+        26
+      ],
+      "candidate_terms": 7320
+    },
+    {
+      "cell": [
+        2,
+        -15,
+        0
+      ],
+      "ordinals": [
+        10,
+        12
+      ],
+      "candidate_terms": 2159
+    },
+    {
+      "cell": [
+        6,
+        -15,
+        4
+      ],
+      "ordinals": [
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 224
+    },
+    {
+      "cell": [
+        2,
+        -17,
+        5
+      ],
+      "ordinals": [
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1548
+    },
+    {
+      "cell": [
+        2,
+        -17,
+        8
+      ],
+      "ordinals": [
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1413
+    },
+    {
+      "cell": [
+        2,
+        -20,
+        5
+      ],
+      "ordinals": [
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1473
+    },
+    {
+      "cell": [
+        2,
+        -23,
+        5
+      ],
+      "ordinals": [
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1209
+    },
+    {
+      "cell": [
+        288,
+        58,
+        4
+      ],
+      "ordinals": [
+        7,
+        20,
+        22,
+        23
+      ],
+      "candidate_terms": 64
+    },
+    {
+      "cell": [
+        133,
+        67,
+        0
+      ],
+      "ordinals": [
+        7,
+        25,
+        26
+      ],
+      "candidate_terms": 7511
+    },
+    {
+      "cell": [
+        127,
+        38,
+        4
+      ],
+      "ordinals": [
+        1,
+        2,
+        3,
+        5,
+        10,
+        11,
+        25,
+        26
+      ],
+      "candidate_terms": 1112
+    },
+    {
+      "cell": [
+        40,
+        20,
+        4
+      ],
+      "ordinals": [
+        1,
+        5,
+        8,
+        10,
+        14,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 214
+    },
+    {
+      "cell": [
+        131,
+        -5,
+        3
+      ],
+      "ordinals": [
+        5,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 30
+    },
+    {
+      "cell": [
+        298,
+        25,
+        3
+      ],
+      "ordinals": [
+        5,
+        13,
+        19,
+        20,
+        24
+      ],
+      "candidate_terms": 125
+    },
+    {
+      "cell": [
+        133,
+        66,
+        4
+      ],
+      "ordinals": [
+        6,
+        7,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 2194
+    },
+    {
+      "cell": [
+        122,
+        64,
+        5
+      ],
+      "ordinals": [
+        6,
+        7,
+        8,
+        9,
+        14,
+        23,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 241
+    },
+    {
+      "cell": [
+        7,
+        13,
+        4
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        13,
+        15,
+        17,
+        18,
+        20,
+        22
+      ],
+      "candidate_terms": 1110
+    },
+    {
+      "cell": [
+        5,
+        28,
+        5
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 1160
+    },
+    {
+      "cell": [
+        7,
+        20,
+        4
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        8,
+        10,
+        13,
+        14,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 369
+    },
+    {
+      "cell": [
+        176,
+        26,
+        4
+      ],
+      "ordinals": [
+        9,
+        10,
+        11,
+        20
+      ],
+      "candidate_terms": 85
+    },
+    {
+      "cell": [
+        133,
+        26,
+        4
+      ],
+      "ordinals": [
+        5,
+        9,
+        10,
+        11,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 170
+    },
+    {
+      "cell": [
+        5,
+        27,
+        5
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        8,
+        13,
+        14,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 1166
+    },
+    {
+      "cell": [
+        2,
+        -21,
+        6
+      ],
+      "ordinals": [
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1403
+    },
+    {
+      "cell": [
+        5,
+        18,
+        5
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        11,
+        13,
+        14,
+        15,
+        17,
+        18,
+        22,
+        24
+      ],
+      "candidate_terms": 1120
+    },
+    {
+      "cell": [
+        5,
+        -24,
+        5
+      ],
+      "ordinals": [
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 34
+    },
+    {
+      "cell": [
+        2,
+        -27,
+        0
+      ],
+      "ordinals": [
+        17,
+        18
+      ],
+      "candidate_terms": 1939
+    },
+    {
+      "cell": [
+        133,
+        62,
+        4
+      ],
+      "ordinals": [
+        3,
+        7,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 259
+    },
+    {
+      "cell": [
+        133,
+        68,
+        0
+      ],
+      "ordinals": [
+        7,
+        25,
+        26
+      ],
+      "candidate_terms": 7486
+    },
+    {
+      "cell": [
+        125,
+        36,
+        4
+      ],
+      "ordinals": [
+        1,
+        2,
+        10
+      ],
+      "candidate_terms": 50
+    },
+    {
+      "cell": [
+        74,
+        50,
+        3
+      ],
+      "ordinals": [
+        3,
+        8,
+        14
+      ],
+      "candidate_terms": 62
+    },
+    {
+      "cell": [
+        2,
+        28,
+        3
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        9,
+        10,
+        11,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 467
+    },
+    {
+      "cell": [
+        129,
+        25,
+        0
+      ],
+      "ordinals": [
+        5,
+        11
+      ],
+      "candidate_terms": 6368
+    },
+    {
+      "cell": [
+        129,
+        -5,
+        3
+      ],
+      "ordinals": [
+        5,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 31
+    },
+    {
+      "cell": [
+        308,
+        -10,
+        26
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 265
+    },
+    {
+      "cell": [
+        5,
+        13,
+        0
+      ],
+      "ordinals": [
+        8,
+        14
+      ],
+      "candidate_terms": 6445
+    },
+    {
+      "cell": [
+        2,
+        -24,
+        0
+      ],
+      "ordinals": [
+        15,
+        17
+      ],
+      "candidate_terms": 1939
+    },
+    {
+      "cell": [
+        9,
+        29,
+        6
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        9,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 2225
+    },
+    {
+      "cell": [
+        9,
+        -24,
+        6
+      ],
+      "ordinals": [
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 61
+    },
+    {
+      "cell": [
+        298,
+        14,
+        4
+      ],
+      "ordinals": [
+        11,
+        12,
+        14,
+        17,
+        19,
+        20,
+        21,
+        24
+      ],
+      "candidate_terms": 1194
+    },
+    {
+      "cell": [
+        294,
+        14,
+        4
+      ],
+      "ordinals": [
+        11,
+        12,
+        14,
+        17,
+        19,
+        20,
+        21,
+        24
+      ],
+      "candidate_terms": 109
+    },
+    {
+      "cell": [
+        123,
+        24,
+        4
+      ],
+      "ordinals": [
+        1,
+        10
+      ],
+      "candidate_terms": 1080
+    },
+    {
+      "cell": [
+        133,
+        52,
+        3
+      ],
+      "ordinals": [
+        3,
+        7,
+        16,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 1177
+    },
+    {
+      "cell": [
+        131,
+        48,
+        4
+      ],
+      "ordinals": [
+        2,
+        3,
+        7,
+        16,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 165
+    },
+    {
+      "cell": [
+        2,
+        28,
+        4
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        9,
+        10,
+        11,
+        12,
+        13,
+        15,
+        16,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 475
+    },
+    {
+      "cell": [
+        2,
+        27,
+        4
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 490
+    },
+    {
+      "cell": [
+        -8,
+        -5,
+        3
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 285
+    },
+    {
+      "cell": [
+        -8,
+        13,
+        3
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        8,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        20,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 296
+    },
+    {
+      "cell": [
+        5,
+        27,
+        3
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        8,
+        13,
+        14,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 1248
+    },
+    {
+      "cell": [
+        -8,
+        -8,
+        3
+      ],
+      "ordinals": [
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 264
+    },
+    {
+      "cell": [
+        181,
+        14,
+        3
+      ],
+      "ordinals": [
+        11,
+        12,
+        14,
+        17,
+        21,
+        24
+      ],
+      "candidate_terms": 1109
+    },
+    {
+      "cell": [
+        2,
+        -18,
+        0
+      ],
+      "ordinals": [
+        12,
+        13
+      ],
+      "candidate_terms": 2157
+    },
+    {
+      "cell": [
+        5,
+        38,
+        6
+      ],
+      "ordinals": [
+        1,
+        4,
+        5,
+        6,
+        8,
+        9,
+        10,
+        12,
+        13,
+        14,
+        15,
+        18,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 367
+    },
+    {
+      "cell": [
+        122,
+        -23,
+        3
+      ],
+      "ordinals": [
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 142
+    },
+    {
+      "cell": [
+        4,
+        -28,
+        8
+      ],
+      "ordinals": [
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 974
+    },
+    {
+      "cell": [
+        296,
+        34,
+        4
+      ],
+      "ordinals": [
+        2,
+        19,
+        20,
+        24
+      ],
+      "candidate_terms": 134
+    },
+    {
+      "cell": [
+        127,
+        26,
+        4
+      ],
+      "ordinals": [
+        1,
+        2,
+        9,
+        10,
+        11
+      ],
+      "candidate_terms": 2165
+    },
+    {
+      "cell": [
+        129,
+        39,
+        0
+      ],
+      "ordinals": [
+        2,
+        23
+      ],
+      "candidate_terms": 5862
+    },
+    {
+      "cell": [
+        133,
+        52,
+        0
+      ],
+      "ordinals": [
+        3,
+        16
+      ],
+      "candidate_terms": 5635
+    },
+    {
+      "cell": [
+        129,
+        52,
+        3
+      ],
+      "ordinals": [
+        3,
+        7,
+        16,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 1036
+    },
+    {
+      "cell": [
+        9,
+        27,
+        5
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        8,
+        9,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 2310
+    },
+    {
+      "cell": [
+        308,
+        -12,
+        25
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 245
+    },
+    {
+      "cell": [
+        2,
+        -12,
+        7
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1583
+    },
+    {
+      "cell": [
+        129,
+        66,
+        3
+      ],
+      "ordinals": [
+        6,
+        7,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 1159
+    },
+    {
+      "cell": [
+        308,
+        28,
+        26
+      ],
+      "ordinals": [
+        1,
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        14,
+        15,
+        16,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 355
+    },
+    {
+      "cell": [
+        2,
+        -15,
+        7
+      ],
+      "ordinals": [
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1508
+    },
+    {
+      "cell": [
+        2,
+        -21,
+        0
+      ],
+      "ordinals": [
+        13,
+        15
+      ],
+      "candidate_terms": 2154
+    },
+    {
+      "cell": [
+        3,
+        14,
+        4
+      ],
+      "ordinals": [
+        11,
+        12,
+        14,
+        17,
+        21,
+        24
+      ],
+      "candidate_terms": 2157
+    },
+    {
+      "cell": [
+        9,
+        20,
+        7
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        8,
+        10,
+        13,
+        14,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 415
+    },
+    {
+      "cell": [
+        70,
+        38,
+        7
+      ],
+      "ordinals": [
+        1,
+        2,
+        3,
+        5,
+        8,
+        9,
+        10,
+        14,
+        25,
+        26
+      ],
+      "candidate_terms": 340
+    },
+    {
+      "cell": [
+        70,
+        23,
+        7
+      ],
+      "ordinals": [
+        1,
+        2,
+        5,
+        8,
+        10,
+        14,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 245
+    },
+    {
+      "cell": [
+        -8,
+        -20,
+        4
+      ],
+      "ordinals": [
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 165
+    },
+    {
+      "cell": [
+        2,
+        -32,
+        7
+      ],
+      "ordinals": [
+        17,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1142
+    },
+    {
+      "cell": [
+        129,
+        68,
+        3
+      ],
+      "ordinals": [
+        6,
+        7,
+        23,
+        26
+      ],
+      "candidate_terms": 1143
+    },
+    {
+      "cell": [
+        2,
+        -35,
+        7
+      ],
+      "ordinals": [
+        17,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1077
+    },
+    {
+      "cell": [
+        44,
+        27,
+        4
+      ],
+      "ordinals": [
+        1,
+        2,
+        5,
+        13,
+        18
+      ],
+      "candidate_terms": 67
+    },
+    {
+      "cell": [
+        44,
+        38,
+        4
+      ],
+      "ordinals": [
+        1,
+        2,
+        3,
+        5,
+        8,
+        9,
+        10,
+        14,
+        25,
+        26
+      ],
+      "candidate_terms": 266
+    },
+    {
+      "cell": [
+        74,
+        54,
+        4
+      ],
+      "ordinals": [
+        3,
+        8,
+        14,
+        22
+      ],
+      "candidate_terms": 65
+    },
+    {
+      "cell": [
+        133,
+        53,
+        0
+      ],
+      "ordinals": [
+        3,
+        16
+      ],
+      "candidate_terms": 6301
+    },
+    {
+      "cell": [
+        133,
+        54,
+        4
+      ],
+      "ordinals": [
+        3,
+        7,
+        16,
+        22,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 1210
+    },
+    {
+      "cell": [
+        9,
+        42,
+        3
+      ],
+      "ordinals": [
+        2,
+        4,
+        6,
+        8,
+        9,
+        15,
+        22
+      ],
+      "candidate_terms": 1369
+    },
+    {
+      "cell": [
+        308,
+        -12,
+        6
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 245
+    },
+    {
+      "cell": [
+        131,
+        60,
+        5
+      ],
+      "ordinals": [
+        3,
+        7,
+        20,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 115
+    },
+    {
+      "cell": [
+        133,
+        64,
+        4
+      ],
+      "ordinals": [
+        7,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 1119
+    },
+    {
+      "cell": [
+        9,
+        43,
+        3
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        9,
+        15,
+        22
+      ],
+      "candidate_terms": 1355
+    },
+    {
+      "cell": [
+        183,
+        27,
+        4
+      ],
+      "ordinals": [
+        5,
+        11,
+        13,
+        18
+      ],
+      "candidate_terms": 37
+    },
+    {
+      "cell": [
+        133,
+        28,
+        4
+      ],
+      "ordinals": [
+        5,
+        9,
+        11,
+        16,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 165
+    },
+    {
+      "cell": [
+        298,
+        27,
+        4
+      ],
+      "ordinals": [
+        5,
+        13,
+        18,
+        19,
+        20,
+        24
+      ],
+      "candidate_terms": 160
+    },
+    {
+      "cell": [
+        133,
+        -17,
+        4
+      ],
+      "ordinals": [
+        13,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 65
+    },
+    {
+      "cell": [
+        7,
+        29,
+        4
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        9,
+        13,
+        14,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 1194
+    },
+    {
+      "cell": [
+        300,
+        43,
+        3
+      ],
+      "ordinals": [
+        15,
+        19
+      ],
+      "candidate_terms": 40
+    },
+    {
+      "cell": [
+        290,
+        43,
+        3
+      ],
+      "ordinals": [
+        15,
+        23,
+        24
+      ],
+      "candidate_terms": 93
+    },
+    {
+      "cell": [
+        133,
+        53,
+        4
+      ],
+      "ordinals": [
+        3,
+        7,
+        16,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 1311
+    },
+    {
+      "cell": [
+        2,
+        -27,
+        9
+      ],
+      "ordinals": [
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 991
+    },
+    {
+      "cell": [
+        2,
+        -30,
+        0
+      ],
+      "ordinals": [
+        18,
+        21
+      ],
+      "candidate_terms": 2157
+    },
+    {
+      "cell": [
+        133,
+        -29,
+        4
+      ],
+      "ordinals": [
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 65
+    },
+    {
+      "cell": [
+        133,
+        67,
+        4
+      ],
+      "ordinals": [
+        7,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 1152
+    },
+    {
+      "cell": [
+        125,
+        24,
+        5
+      ],
+      "ordinals": [
+        1,
+        10
+      ],
+      "candidate_terms": 1025
+    },
+    {
+      "cell": [
+        122,
+        38,
+        6
+      ],
+      "ordinals": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        8,
+        9,
+        10,
+        14,
+        15,
+        16,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 550
+    },
+    {
+      "cell": [
+        7,
+        -5,
+        3
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 47
+    },
+    {
+      "cell": [
+        122,
+        -12,
+        6
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 250
+    },
+    {
+      "cell": [
+        5,
+        28,
+        7
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 1070
+    },
+    {
+      "cell": [
+        185,
+        24,
+        5
+      ],
+      "ordinals": [
+        10,
+        11
+      ],
+      "candidate_terms": 30
+    },
+    {
+      "cell": [
+        298,
+        24,
+        5
+      ],
+      "ordinals": [
+        10,
+        19,
+        20,
+        24
+      ],
+      "candidate_terms": 150
+    },
+    {
+      "cell": [
+        308,
+        -19,
+        24
+      ],
+      "ordinals": [
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 190
+    },
+    {
+      "cell": [
+        6,
+        -19,
+        11
+      ],
+      "ordinals": [
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 909
+    },
+    {
+      "cell": [
+        5,
+        43,
+        7
+      ],
+      "ordinals": [
+        6,
+        8,
+        9,
+        14,
+        15,
+        22
+      ],
+      "candidate_terms": 1003
+    },
+    {
+      "cell": [
+        192,
+        39,
+        5
+      ],
+      "ordinals": [
+        16,
+        23
+      ],
+      "candidate_terms": 69
+    },
+    {
+      "cell": [
+        294,
+        67,
+        3
+      ],
+      "ordinals": [
+        24,
+        25
+      ],
+      "candidate_terms": 40
+    },
+    {
+      "cell": [
+        133,
+        27,
+        23
+      ],
+      "ordinals": [
+        5,
+        13,
+        18,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 315
+    },
+    {
+      "cell": [
+        133,
+        27,
+        8
+      ],
+      "ordinals": [
+        5,
+        13,
+        18,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 990
+    },
+    {
+      "cell": [
+        9,
+        14,
+        3
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        11,
+        12,
+        13,
+        14,
+        15,
+        17,
+        18,
+        21,
+        22,
+        24
+      ],
+      "candidate_terms": 1298
+    },
+    {
+      "cell": [
+        308,
+        -15,
+        3
+      ],
+      "ordinals": [
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 149
+    },
+    {
+      "cell": [
+        308,
+        -19,
+        23
+      ],
+      "ordinals": [
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 190
+    },
+    {
+      "cell": [
+        9,
+        27,
+        8
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        8,
+        9,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 2040
+    },
+    {
+      "cell": [
+        9,
+        45,
+        8
+      ],
+      "ordinals": [
+        6,
+        8,
+        9,
+        15,
+        22
+      ],
+      "candidate_terms": 1060
+    },
+    {
+      "cell": [
+        133,
+        48,
+        5
+      ],
+      "ordinals": [
+        3,
+        7,
+        16,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 331
+    },
+    {
+      "cell": [
+        9,
+        -27,
+        8
+      ],
+      "ordinals": [
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 47
+    },
+    {
+      "cell": [
+        6,
+        -27,
+        8
+      ],
+      "ordinals": [
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 135
+    },
+    {
+      "cell": [
+        9,
+        31,
+        8
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        9,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 1200
+    },
+    {
+      "cell": [
+        6,
+        -28,
+        8
+      ],
+      "ordinals": [
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 982
+    },
+    {
+      "cell": [
+        6,
+        -36,
+        8
+      ],
+      "ordinals": [
+        17,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 73
+    },
+    {
+      "cell": [
+        9,
+        42,
+        0
+      ],
+      "ordinals": [
+        4,
+        15
+      ],
+      "candidate_terms": 6445
+    },
+    {
+      "cell": [
+        131,
+        25,
+        5
+      ],
+      "ordinals": [
+        2,
+        5,
+        11,
+        13,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 1070
+    },
+    {
+      "cell": [
+        131,
+        22,
+        5
+      ],
+      "ordinals": [
+        5,
+        10,
+        11,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 55
+    },
+    {
+      "cell": [
+        296,
+        22,
+        5
+      ],
+      "ordinals": [
+        10,
+        19,
+        20,
+        24
+      ],
+      "candidate_terms": 80
+    },
+    {
+      "cell": [
+        6,
+        -17,
+        7
+      ],
+      "ordinals": [
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 200
+    },
+    {
+      "cell": [
+        308,
+        -20,
+        22
+      ],
+      "ordinals": [
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 175
+    },
+    {
+      "cell": [
+        131,
+        39,
+        5
+      ],
+      "ordinals": [
+        2,
+        3,
+        16,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 895
+    },
+    {
+      "cell": [
+        40,
+        27,
+        5
+      ],
+      "ordinals": [
+        1,
+        2,
+        5,
+        13,
+        18
+      ],
+      "candidate_terms": 101
+    },
+    {
+      "cell": [
+        42,
+        34,
+        6
+      ],
+      "ordinals": [
+        1,
+        2,
+        5,
+        8,
+        9,
+        10,
+        14,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 1087
+    },
+    {
+      "cell": [
+        2,
+        -6,
+        0
+      ],
+      "ordinals": [
+        4,
+        5
+      ],
+      "candidate_terms": 1937
+    },
+    {
+      "cell": [
+        2,
+        -6,
+        6
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1768
+    },
+    {
+      "cell": [
+        2,
+        -12,
+        6
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1628
+    },
+    {
+      "cell": [
+        131,
+        62,
+        3
+      ],
+      "ordinals": [
+        3,
+        7,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 124
+    },
+    {
+      "cell": [
+        129,
+        27,
+        5
+      ],
+      "ordinals": [
+        2,
+        5,
+        11,
+        13,
+        18,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 135
+    },
+    {
+      "cell": [
+        296,
+        27,
+        5
+      ],
+      "ordinals": [
+        5,
+        13,
+        18,
+        19,
+        20,
+        24
+      ],
+      "candidate_terms": 100
+    },
+    {
+      "cell": [
+        5,
+        14,
+        0
+      ],
+      "ordinals": [
+        14,
+        17
+      ],
+      "candidate_terms": 6445
+    },
+    {
+      "cell": [
+        131,
+        45,
+        7
+      ],
+      "ordinals": [
+        2,
+        3,
+        15,
+        16,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 100
+    },
+    {
+      "cell": [
+        308,
+        -20,
+        7
+      ],
+      "ordinals": [
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 175
+    },
+    {
+      "cell": [
+        131,
+        53,
+        3
+      ],
+      "ordinals": [
+        3,
+        7,
+        16,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 1147
+    },
+    {
+      "cell": [
+        2,
+        -39,
+        0
+      ],
+      "ordinals": [
+        25,
+        26
+      ],
+      "candidate_terms": 2150
+    },
+    {
+      "cell": [
+        9,
+        43,
+        0
+      ],
+      "ordinals": [
+        4,
+        15
+      ],
+      "candidate_terms": 6455
+    },
+    {
+      "cell": [
+        5,
+        38,
+        8
+      ],
+      "ordinals": [
+        1,
+        4,
+        5,
+        6,
+        8,
+        9,
+        10,
+        12,
+        13,
+        14,
+        15,
+        18,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 367
+    },
+    {
+      "cell": [
+        -8,
+        -12,
+        5
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 245
+    },
+    {
+      "cell": [
+        300,
+        39,
+        4
+      ],
+      "ordinals": [
+        19,
+        23
+      ],
+      "candidate_terms": 37
+    },
+    {
+      "cell": [
+        178,
+        39,
+        4
+      ],
+      "ordinals": [
+        20,
+        23
+      ],
+      "candidate_terms": 49
+    },
+    {
+      "cell": [
+        290,
+        39,
+        4
+      ],
+      "ordinals": [
+        23,
+        24
+      ],
+      "candidate_terms": 93
+    },
+    {
+      "cell": [
+        4,
+        27,
+        7
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 197
+    },
+    {
+      "cell": [
+        4,
+        -20,
+        7
+      ],
+      "ordinals": [
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 176
+    },
+    {
+      "cell": [
+        292,
+        73,
+        4
+      ],
+      "ordinals": [
+        14,
+        23,
+        24
+      ],
+      "candidate_terms": 862
+    },
+    {
+      "cell": [
+        4,
+        -2,
+        9
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 321
+    },
+    {
+      "cell": [
+        -8,
+        -15,
+        6
+      ],
+      "ordinals": [
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 220
+    },
+    {
+      "cell": [
+        6,
+        22,
+        6
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 238
+    },
+    {
+      "cell": [
+        6,
+        27,
+        6
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 203
+    },
+    {
+      "cell": [
+        4,
+        -36,
+        9
+      ],
+      "ordinals": [
+        17,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 74
+    },
+    {
+      "cell": [
+        133,
+        67,
+        9
+      ],
+      "ordinals": [
+        7,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 927
+    },
+    {
+      "cell": [
+        -8,
+        -12,
+        4
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 235
+    },
+    {
+      "cell": [
+        9,
+        31,
+        10
+      ],
+      "ordinals": [
+        4,
+        6,
+        8,
+        9,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 1110
+    },
+    {
+      "cell": [
+        9,
+        -15,
+        6
+      ],
+      "ordinals": [
+        10,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 95
+    },
+    {
+      "cell": [
+        122,
+        -28,
+        9
+      ],
+      "ordinals": [
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 135
+    },
+    {
+      "cell": [
+        122,
+        19,
+        5
+      ],
+      "ordinals": [
+        1,
+        4,
+        5,
+        6,
+        8,
+        10,
+        11,
+        13,
+        14,
+        15,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 440
+    },
+    {
+      "cell": [
+        2,
+        31,
+        9
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 449
+    },
+    {
+      "cell": [
+        6,
+        38,
+        9
+      ],
+      "ordinals": [
+        1,
+        4,
+        5,
+        6,
+        8,
+        9,
+        10,
+        12,
+        13,
+        14,
+        15,
+        18,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 301
+    },
+    {
+      "cell": [
+        3,
+        -12,
+        4
+      ],
+      "ordinals": [
+        6,
+        12
+      ],
+      "candidate_terms": 28
+    },
+    {
+      "cell": [
+        131,
+        -12,
+        4
+      ],
+      "ordinals": [
+        6,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 24
+    },
+    {
+      "cell": [
+        294,
+        66,
+        4
+      ],
+      "ordinals": [
+        6,
+        7,
+        24,
+        26
+      ],
+      "candidate_terms": 50
+    },
+    {
+      "cell": [
+        6,
+        31,
+        9
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 157
+    },
+    {
+      "cell": [
+        129,
+        -12,
+        4
+      ],
+      "ordinals": [
+        6,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 24
+    },
+    {
+      "cell": [
+        133,
+        68,
+        4
+      ],
+      "ordinals": [
+        6,
+        7,
+        23,
+        25,
+        26
+      ],
+      "candidate_terms": 2130
+    },
+    {
+      "cell": [
+        3,
+        -15,
+        5
+      ],
+      "ordinals": [
+        10,
+        12
+      ],
+      "candidate_terms": 27
+    },
+    {
+      "cell": [
+        290,
+        73,
+        5
+      ],
+      "ordinals": [
+        14,
+        23,
+        24
+      ],
+      "candidate_terms": 863
+    },
+    {
+      "cell": [
+        122,
+        -15,
+        5
+      ],
+      "ordinals": [
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 230
+    },
+    {
+      "cell": [
+        7,
+        -15,
+        3
+      ],
+      "ordinals": [
+        10,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 44
+    },
+    {
+      "cell": [
+        308,
+        28,
+        25
+      ],
+      "ordinals": [
+        1,
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        14,
+        15,
+        16,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 355
+    },
+    {
+      "cell": [
+        -8,
+        -17,
+        7
+      ],
+      "ordinals": [
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 200
+    },
+    {
+      "cell": [
+        9,
+        27,
+        9
+      ],
+      "ordinals": [
+        4,
+        5,
+        6,
+        8,
+        9,
+        13,
+        15,
+        17,
+        18,
+        22
+      ],
+      "candidate_terms": 1950
+    },
+    {
+      "cell": [
+        308,
+        28,
+        24
+      ],
+      "ordinals": [
+        1,
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        14,
+        15,
+        16,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 355
+    },
+    {
+      "cell": [
+        308,
+        -10,
+        24
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 265
+    },
+    {
+      "cell": [
+        308,
+        -13,
+        24
+      ],
+      "ordinals": [
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 240
+    },
+    {
+      "cell": [
+        2,
+        -17,
+        10
+      ],
+      "ordinals": [
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 1323
+    },
+    {
+      "cell": [
+        131,
+        -22,
+        5
+      ],
+      "ordinals": [
+        15,
+        21,
+        25,
+        26
+      ],
+      "candidate_terms": 35
+    },
+    {
+      "cell": [
+        292,
+        43,
+        5
+      ],
+      "ordinals": [
+        15,
+        23,
+        24
+      ],
+      "candidate_terms": 44
+    },
+    {
+      "cell": [
+        308,
+        28,
+        23
+      ],
+      "ordinals": [
+        1,
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        14,
+        15,
+        16,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 355
+    },
+    {
+      "cell": [
+        308,
+        -10,
+        23
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 265
+    },
+    {
+      "cell": [
+        180,
+        43,
+        4
+      ],
+      "ordinals": [
+        15,
+        20
+      ],
+      "candidate_terms": 40
+    },
+    {
+      "cell": [
+        308,
+        28,
+        22
+      ],
+      "ordinals": [
+        1,
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        14,
+        15,
+        16,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 355
+    },
+    {
+      "cell": [
+        308,
+        -10,
+        22
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 265
+    },
+    {
+      "cell": [
+        294,
+        18,
+        5
+      ],
+      "ordinals": [
+        11,
+        14,
+        19,
+        20,
+        24
+      ],
+      "candidate_terms": 99
+    },
+    {
+      "cell": [
+        308,
+        28,
+        21
+      ],
+      "ordinals": [
+        1,
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        14,
+        15,
+        16,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 355
+    },
+    {
+      "cell": [
+        308,
+        -10,
+        21
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 265
+    },
+    {
+      "cell": [
+        308,
+        28,
+        20
+      ],
+      "ordinals": [
+        1,
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        14,
+        15,
+        16,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 355
+    },
+    {
+      "cell": [
+        308,
+        -10,
+        20
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 265
+    },
+    {
+      "cell": [
+        308,
+        28,
+        19
+      ],
+      "ordinals": [
+        1,
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        14,
+        15,
+        16,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 355
+    },
+    {
+      "cell": [
+        308,
+        -10,
+        19
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 265
+    },
+    {
+      "cell": [
+        308,
+        28,
+        18
+      ],
+      "ordinals": [
+        1,
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        14,
+        15,
+        16,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 355
+    },
+    {
+      "cell": [
+        308,
+        -10,
+        18
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 265
+    },
+    {
+      "cell": [
+        308,
+        28,
+        17
+      ],
+      "ordinals": [
+        1,
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        14,
+        15,
+        16,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 355
+    },
+    {
+      "cell": [
+        308,
+        -10,
+        17
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 265
+    },
+    {
+      "cell": [
+        308,
+        28,
+        16
+      ],
+      "ordinals": [
+        1,
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        14,
+        15,
+        16,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 355
+    },
+    {
+      "cell": [
+        308,
+        -10,
+        16
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 265
+    },
+    {
+      "cell": [
+        308,
+        28,
+        15
+      ],
+      "ordinals": [
+        1,
+        4,
+        6,
+        8,
+        9,
+        11,
+        13,
+        14,
+        15,
+        16,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        26
+      ],
+      "candidate_terms": 355
+    },
+    {
+      "cell": [
+        308,
+        -10,
+        15
+      ],
+      "ordinals": [
+        6,
+        10,
+        12,
+        13,
+        15,
+        17,
+        18,
+        21,
+        22,
+        25,
+        26
+      ],
+      "candidate_terms": 265
+    }
+  ],
+  "solver_variables": 131820,
+  "preparation_seconds": 60.60378428408876
+}

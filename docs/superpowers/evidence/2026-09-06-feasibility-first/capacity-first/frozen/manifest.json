@@ -1,0 +1,359 @@
+[
+  {
+    "name": "unsprayed-mall",
+    "case": "mall",
+    "policy": "no-proliferator",
+    "scale": "1",
+    "held_out": false,
+    "url": "https://factoriolab.github.io/dsp/list?z=eJwlx7uOwjAUhOG3OcUUKAYWhWKaY4mgVRaBEBAogRQWayVyuKTys6PEzf.NNNzAZHkmDdcnzBbD0ArTXBp-YH6kod0PtyZ-hxQSqHsgk8Bd4pLQG2Ak0Fbp223yL1Em1sfkMpEPeFoY8TyPdWPLsd3YFkZc3VMn4q41rbjuybmEuucWJ5xxxwMv9FhAN9ADtILeoI-o.9Ap7CraQrwP7GIbXSzFtx0LedOYL5cQRDE_&v=11",
+    "objective_rates": [
+      [
+        "conveyor-belt-3",
+        "1080",
+        "Items",
+        "Output"
+      ],
+      [
+        "sorter-4",
+        "360",
+        "Items",
+        "Output"
+      ],
+      [
+        "ray-receiver",
+        "28",
+        "Items",
+        "Output"
+      ],
+      [
+        "miniature-particle-collider",
+        "15",
+        "Items",
+        "Output"
+      ],
+      [
+        "logistics-distributor",
+        "28",
+        "Items",
+        "Output"
+      ]
+    ],
+    "spec_sha256": "3995a1266312d463293bae0a8e01b6f95f254550df54c56e5888e6d846e00ff3",
+    "machines": 935,
+    "request_preparation_s": 0.14974705805070698,
+    "budget_s": 60,
+    "workers": 8
+  },
+  {
+    "name": "coated-mall",
+    "case": "mall",
+    "policy": "all-products",
+    "scale": "1",
+    "held_out": false,
+    "url": "https://factoriolab.github.io/dsp/list?z=eJwlx7uOwjAUhOG3OcUUKAYWhWKaY4mgVRaBEBAogRQWayVyuKTys6PEzf.NNNzAZHkmDdcnzBbD0ArTXBp-YH6kod0PtyZ-hxQSqHsgk8Bd4pLQG2Ak0Fbp223yL1Em1sfkMpEPeFoY8TyPdWPLsd3YFkZc3VMn4q41rbjuybmEuucWJ5xxxwMv9FhAN9ADtILeoI-o.9Ap7CraQrwP7GIbXSzFtx0LedOYL5cQRDE_&v=11",
+    "objective_rates": [
+      [
+        "conveyor-belt-3",
+        "1080",
+        "Items",
+        "Output"
+      ],
+      [
+        "sorter-4",
+        "360",
+        "Items",
+        "Output"
+      ],
+      [
+        "ray-receiver",
+        "28",
+        "Items",
+        "Output"
+      ],
+      [
+        "miniature-particle-collider",
+        "15",
+        "Items",
+        "Output"
+      ],
+      [
+        "logistics-distributor",
+        "28",
+        "Items",
+        "Output"
+      ]
+    ],
+    "spec_sha256": "2ac9f763d8bca40a93e11f6e6c45ca41ec3fb763a501aefa97a323d18cd0f68e",
+    "machines": 449,
+    "request_preparation_s": 0.24239722196944058,
+    "budget_s": 60,
+    "workers": 8
+  },
+  {
+    "name": "three-output",
+    "case": "three-output",
+    "policy": "no-proliferator",
+    "scale": "1",
+    "held_out": false,
+    "url": "https://factoriolab.github.io/dsp/list?z=eJzLt3Uq0zI1MFDLt3VK1jI0MNDSMgSxs5DYkQi2uZaRAVzcScsYSb0RjF2CYDolaxmZwtiVIOUIvYZwThUSuwCJHQFmw3SUI.PCtAwtLS2hMoEgC0GMMCijFEWjIdzIzKRUW2e1otQK23i13Nwi28g6pzrXukC1MltDQwBw4z6V&v=11",
+    "objective_rates": [
+      [
+        "titanium-glass",
+        "500",
+        "Items",
+        "Output"
+      ],
+      [
+        "high-purity-silicon",
+        "100",
+        "Items",
+        "Input"
+      ],
+      [
+        "steel",
+        "100",
+        "Items",
+        "Input"
+      ],
+      [
+        "refined-oil",
+        "100",
+        "Items",
+        "Input"
+      ],
+      [
+        "iron-ingot",
+        "2000",
+        "Items",
+        "Input"
+      ],
+      [
+        "magnet",
+        "300",
+        "Items",
+        "Input"
+      ],
+      [
+        "steel",
+        "200",
+        "Items",
+        "Input"
+      ],
+      [
+        "energetic-graphite",
+        "200",
+        "Items",
+        "Input"
+      ],
+      [
+        "high-purity-silicon",
+        "250",
+        "Items",
+        "Input"
+      ],
+      [
+        "titanium-ingot",
+        "3000",
+        "Items",
+        "Input"
+      ],
+      [
+        "magnet",
+        "1000",
+        "Items",
+        "Input"
+      ],
+      [
+        "super-magnetic-ring",
+        "1000",
+        "Items",
+        "Input"
+      ],
+      [
+        "fire-ice",
+        "1000",
+        "Items",
+        "Input"
+      ],
+      [
+        "deuterium",
+        "10000",
+        "Items",
+        "Input"
+      ],
+      [
+        "titanium-alloy",
+        "10000",
+        "Items",
+        "Input"
+      ],
+      [
+        "copper-ingot",
+        "1999",
+        "Items",
+        "Input"
+      ],
+      [
+        "plane-filter",
+        "200",
+        "Items",
+        "Output"
+      ],
+      [
+        "processor",
+        "200",
+        "Items",
+        "Output"
+      ],
+      [
+        "optical-grating-crystal",
+        "10000",
+        "Items",
+        "Input"
+      ],
+      [
+        "water",
+        "1000",
+        "Items",
+        "Input"
+      ]
+    ],
+    "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+    "machines": 172,
+    "request_preparation_s": 0.03210722003132105,
+    "budget_s": 30,
+    "workers": 8
+  },
+  {
+    "name": "universe-matrix",
+    "case": "universe-matrix",
+    "policy": "all-products",
+    "scale": "1",
+    "held_out": false,
+    "url": "https://factoriolab.github.io/dsp/list?o=universe-matrix*60&ibe=conveyor-belt-3&mmr=plane-smelter~assembling-machine-3~quantum-chemical-plant~matrix-lab&v=11",
+    "objective_rates": [
+      [
+        "universe-matrix",
+        "60",
+        "Items",
+        "Output"
+      ]
+    ],
+    "spec_sha256": "8eb481d486228dfaed052af14cb8d8c9aeca8c1c3d35bf07fc6679cfe9bcb101",
+    "machines": 113,
+    "request_preparation_s": 0.34147774893790483,
+    "budget_s": 60,
+    "workers": 8
+  },
+  {
+    "name": "unsprayed-mall-075",
+    "case": "mall",
+    "policy": "no-proliferator",
+    "scale": "3/4",
+    "held_out": true,
+    "url": "https://factoriolab.github.io/dsp/list?z=eJwlx7uOwjAUhOG3OcUUKAYWhWKaY4mgVRaBEBAogRQWayVyuKTys6PEzf.NNNzAZHkmDdcnzBbD0ArTXBp-YH6kod0PtyZ-hxQSqHsgk8Bd4pLQG2Ak0Fbp223yL1Em1sfkMpEPeFoY8TyPdWPLsd3YFkZc3VMn4q41rbjuybmEuucWJ5xxxwMv9FhAN9ADtILeoI-o.9Ap7CraQrwP7GIbXSzFtx0LedOYL5cQRDE_&v=11",
+    "objective_rates": [
+      [
+        "conveyor-belt-3",
+        "810",
+        "Items",
+        "Output"
+      ],
+      [
+        "sorter-4",
+        "270",
+        "Items",
+        "Output"
+      ],
+      [
+        "ray-receiver",
+        "21",
+        "Items",
+        "Output"
+      ],
+      [
+        "miniature-particle-collider",
+        "45/4",
+        "Items",
+        "Output"
+      ],
+      [
+        "logistics-distributor",
+        "21",
+        "Items",
+        "Output"
+      ]
+    ],
+    "spec_sha256": "d6aade99fcafb5bdb4603a3cdde32115632305d3cf0bbec5a74f6fd53588e54c",
+    "machines": 705,
+    "request_preparation_s": 0.12165209418162704,
+    "budget_s": 60,
+    "workers": 8
+  },
+  {
+    "name": "unsprayed-mall-125",
+    "case": "mall",
+    "policy": "no-proliferator",
+    "scale": "5/4",
+    "held_out": true,
+    "url": "https://factoriolab.github.io/dsp/list?z=eJwlx7uOwjAUhOG3OcUUKAYWhWKaY4mgVRaBEBAogRQWayVyuKTys6PEzf.NNNzAZHkmDdcnzBbD0ArTXBp-YH6kod0PtyZ-hxQSqHsgk8Bd4pLQG2Ak0Fbp223yL1Em1sfkMpEPeFoY8TyPdWPLsd3YFkZc3VMn4q41rbjuybmEuucWJ5xxxwMv9FhAN9ADtILeoI-o.9Ap7CraQrwP7GIbXSzFtx0LedOYL5cQRDE_&v=11",
+    "objective_rates": [
+      [
+        "conveyor-belt-3",
+        "1350",
+        "Items",
+        "Output"
+      ],
+      [
+        "sorter-4",
+        "450",
+        "Items",
+        "Output"
+      ],
+      [
+        "ray-receiver",
+        "35",
+        "Items",
+        "Output"
+      ],
+      [
+        "miniature-particle-collider",
+        "75/4",
+        "Items",
+        "Output"
+      ],
+      [
+        "logistics-distributor",
+        "35",
+        "Items",
+        "Output"
+      ]
+    ],
+    "spec_sha256": "8b767432f5260328ab80cbf2d8528ec8c02475d81a52074e8b242fa3db2a89e9",
+    "machines": 1166,
+    "request_preparation_s": 0.12491585500538349,
+    "budget_s": 60,
+    "workers": 8
+  },
+  {
+    "name": "unsprayed-universe",
+    "case": "universe-matrix",
+    "policy": "no-proliferator",
+    "scale": "1",
+    "held_out": true,
+    "url": "https://factoriolab.github.io/dsp/list?o=universe-matrix*60&ibe=conveyor-belt-3&mmr=plane-smelter~assembling-machine-3~quantum-chemical-plant~matrix-lab&v=11",
+    "objective_rates": [
+      [
+        "universe-matrix",
+        "60",
+        "Items",
+        "Output"
+      ]
+    ],
+    "spec_sha256": "8337dfe1999a9f82d1bc8c92649db1fcaf1621dd3ef112bf9540ad9978d35033",
+    "machines": 224,
+    "request_preparation_s": 0.15866985893808305,
+    "budget_s": 60,
+    "workers": 8
+  }
+]

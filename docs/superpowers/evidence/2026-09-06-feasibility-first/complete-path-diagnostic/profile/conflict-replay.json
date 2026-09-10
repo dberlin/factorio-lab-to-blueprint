@@ -1,0 +1,952 @@
+{
+  "scope": "exhaustive conditional diagnosis; not global template-family feasibility",
+  "target_obligation": 13,
+  "target_item": "hydrogen",
+  "domain_count": 5400,
+  "static_invalid": 15,
+  "static_valid": 5385,
+  "compatible_with_seven_choice_prefix": 25,
+  "compatible_with_eight_choice_prefix": 0,
+  "prefix_survivor_ids": [
+    48,
+    264,
+    480,
+    696,
+    3288,
+    3504,
+    3720,
+    3936,
+    912,
+    1128,
+    1344,
+    1560,
+    1776,
+    4152,
+    4368,
+    4584,
+    4800,
+    5016,
+    1992,
+    2208,
+    2424,
+    2640,
+    2856,
+    5232,
+    3072
+  ],
+  "survivor_example": null,
+  "independent_pair_checks": 43280,
+  "production_oracle_disagreements": 0,
+  "blocking_counts": {
+    "10": 175,
+    "8": 1140,
+    "14": 1100,
+    "4": 3180,
+    "6": 3070,
+    "15": 3115,
+    "22": 25,
+    "1": 35
+  },
+  "smallest_core_ordinals": [
+    1,
+    10,
+    4,
+    8,
+    14,
+    15,
+    22
+  ],
+  "core_assignments": {
+    "1": 0,
+    "10": 240,
+    "4": 1081,
+    "8": 217,
+    "14": 2,
+    "15": 457,
+    "22": 3936
+  },
+  "core_paths": {
+    "1": {
+      "points": [
+        [
+          38,
+          19,
+          0
+        ],
+        [
+          40,
+          19,
+          0
+        ],
+        [
+          40,
+          19,
+          3
+        ],
+        [
+          127,
+          19,
+          3
+        ],
+        [
+          127,
+          38,
+          3
+        ],
+        [
+          127,
+          38,
+          0
+        ],
+        [
+          129,
+          38,
+          0
+        ]
+      ],
+      "source": {
+        "cell": [
+          38,
+          19,
+          0
+        ],
+        "outward": [
+          1,
+          0
+        ],
+        "port_id": 105,
+        "junction_id": null
+      },
+      "sink": {
+        "cell": [
+          129,
+          38,
+          0
+        ],
+        "outward": [
+          -1,
+          0
+        ],
+        "port_id": 2939,
+        "junction_id": 2932
+      },
+      "item": "casimir-crystal"
+    },
+    "10": {
+      "points": [
+        [
+          0,
+          -13,
+          0
+        ],
+        [
+          2,
+          -13,
+          0
+        ],
+        [
+          2,
+          -13,
+          3
+        ],
+        [
+          2,
+          24,
+          3
+        ],
+        [
+          125,
+          24,
+          3
+        ],
+        [
+          125,
+          24,
+          0
+        ],
+        [
+          129,
+          24,
+          0
+        ]
+      ],
+      "source": {
+        "cell": [
+          0,
+          -13,
+          0
+        ],
+        "outward": [
+          1,
+          0
+        ],
+        "port_id": 2962,
+        "junction_id": null
+      },
+      "sink": {
+        "cell": [
+          129,
+          24,
+          0
+        ],
+        "outward": [
+          -1,
+          0
+        ],
+        "port_id": 2948,
+        "junction_id": 2941
+      },
+      "item": "high-purity-silicon"
+    },
+    "4": {
+      "points": [
+        [
+          0,
+          -4,
+          0
+        ],
+        [
+          4,
+          -4,
+          0
+        ],
+        [
+          4,
+          -4,
+          4
+        ],
+        [
+          9,
+          -4,
+          4
+        ],
+        [
+          9,
+          42,
+          4
+        ],
+        [
+          9,
+          42,
+          0
+        ],
+        [
+          11,
+          42,
+          0
+        ]
+      ],
+      "source": {
+        "cell": [
+          0,
+          -4,
+          0
+        ],
+        "outward": [
+          1,
+          0
+        ],
+        "port_id": 2959,
+        "junction_id": null
+      },
+      "sink": {
+        "cell": [
+          11,
+          42,
+          0
+        ],
+        "outward": [
+          -1,
+          0
+        ],
+        "port_id": 282,
+        "junction_id": null
+      },
+      "item": "copper-ingot"
+    },
+    "8": {
+      "points": [
+        [
+          70,
+          79,
+          0
+        ],
+        [
+          72,
+          79,
+          0
+        ],
+        [
+          72,
+          79,
+          4
+        ],
+        [
+          7,
+          79,
+          4
+        ],
+        [
+          7,
+          13,
+          4
+        ],
+        [
+          7,
+          13,
+          0
+        ],
+        [
+          11,
+          13,
+          0
+        ]
+      ],
+      "source": {
+        "cell": [
+          70,
+          79,
+          0
+        ],
+        "outward": [
+          1,
+          0
+        ],
+        "port_id": 2926,
+        "junction_id": 2924
+      },
+      "sink": {
+        "cell": [
+          11,
+          13,
+          0
+        ],
+        "outward": [
+          -1,
+          0
+        ],
+        "port_id": 25,
+        "junction_id": null
+      },
+      "item": "graphene"
+    },
+    "14": {
+      "points": [
+        [
+          68,
+          75,
+          0
+        ],
+        [
+          70,
+          75,
+          0
+        ],
+        [
+          70,
+          75,
+          5
+        ],
+        [
+          5,
+          75,
+          5
+        ],
+        [
+          5,
+          14,
+          5
+        ],
+        [
+          5,
+          14,
+          0
+        ],
+        [
+          5,
+          12,
+          0
+        ]
+      ],
+      "source": {
+        "cell": [
+          68,
+          75,
+          0
+        ],
+        "outward": [
+          1,
+          0
+        ],
+        "port_id": 2928,
+        "junction_id": null
+      },
+      "sink": {
+        "cell": [
+          5,
+          12,
+          0
+        ],
+        "outward": [
+          0,
+          1
+        ],
+        "port_id": 2958,
+        "junction_id": 2950
+      },
+      "item": "hydrogen"
+    },
+    "15": {
+      "points": [
+        [
+          0,
+          -22,
+          0
+        ],
+        [
+          2,
+          -22,
+          0
+        ],
+        [
+          2,
+          -22,
+          4
+        ],
+        [
+          2,
+          43,
+          4
+        ],
+        [
+          5,
+          43,
+          4
+        ],
+        [
+          5,
+          43,
+          0
+        ],
+        [
+          11,
+          43,
+          0
+        ]
+      ],
+      "source": {
+        "cell": [
+          0,
+          -22,
+          0
+        ],
+        "outward": [
+          1,
+          0
+        ],
+        "port_id": 2965,
+        "junction_id": null
+      },
+      "sink": {
+        "cell": [
+          11,
+          43,
+          0
+        ],
+        "outward": [
+          -1,
+          0
+        ],
+        "port_id": 295,
+        "junction_id": null
+      },
+      "item": "iron-ingot"
+    },
+    "22": {
+      "points": [
+        [
+          0,
+          -34,
+          0
+        ],
+        [
+          2,
+          -34,
+          0
+        ],
+        [
+          2,
+          -32,
+          0
+        ],
+        [
+          2,
+          -32,
+          3
+        ],
+        [
+          -8,
+          -32,
+          3
+        ],
+        [
+          -8,
+          54,
+          3
+        ],
+        [
+          9,
+          54,
+          3
+        ],
+        [
+          9,
+          54,
+          0
+        ],
+        [
+          9,
+          56,
+          0
+        ],
+        [
+          11,
+          56,
+          0
+        ]
+      ],
+      "source": {
+        "cell": [
+          0,
+          -34,
+          0
+        ],
+        "outward": [
+          1,
+          0
+        ],
+        "port_id": 2971,
+        "junction_id": null
+      },
+      "sink": {
+        "cell": [
+          11,
+          56,
+          0
+        ],
+        "outward": [
+          -1,
+          0
+        ],
+        "port_id": 341,
+        "junction_id": null
+      },
+      "item": "stone"
+    }
+  },
+  "core_deletion_witnesses": {
+    "1": {
+      "candidate_id": 744,
+      "points": [
+        [
+          0,
+          -19,
+          0
+        ],
+        [
+          2,
+          -19,
+          0
+        ],
+        [
+          2,
+          -19,
+          3
+        ],
+        [
+          308,
+          -19,
+          3
+        ],
+        [
+          308,
+          25,
+          3
+        ],
+        [
+          9,
+          25,
+          3
+        ],
+        [
+          9,
+          25,
+          0
+        ],
+        [
+          9,
+          27,
+          0
+        ],
+        [
+          11,
+          27,
+          0
+        ]
+      ],
+      "compatible_with_other_core_members": true
+    },
+    "10": {
+      "candidate_id": 0,
+      "points": [
+        [
+          0,
+          -19,
+          0
+        ],
+        [
+          2,
+          -19,
+          0
+        ],
+        [
+          2,
+          -19,
+          3
+        ],
+        [
+          9,
+          -19,
+          3
+        ],
+        [
+          9,
+          27,
+          3
+        ],
+        [
+          9,
+          27,
+          0
+        ],
+        [
+          11,
+          27,
+          0
+        ]
+      ],
+      "compatible_with_other_core_members": true
+    },
+    "4": {
+      "candidate_id": 1081,
+      "points": [
+        [
+          0,
+          -19,
+          0
+        ],
+        [
+          4,
+          -19,
+          0
+        ],
+        [
+          4,
+          -19,
+          4
+        ],
+        [
+          9,
+          -19,
+          4
+        ],
+        [
+          9,
+          27,
+          4
+        ],
+        [
+          9,
+          27,
+          0
+        ],
+        [
+          11,
+          27,
+          0
+        ]
+      ],
+      "compatible_with_other_core_members": true
+    },
+    "8": {
+      "candidate_id": 1298,
+      "points": [
+        [
+          0,
+          -19,
+          0
+        ],
+        [
+          4,
+          -19,
+          0
+        ],
+        [
+          4,
+          -19,
+          5
+        ],
+        [
+          7,
+          -19,
+          5
+        ],
+        [
+          7,
+          27,
+          5
+        ],
+        [
+          7,
+          27,
+          0
+        ],
+        [
+          11,
+          27,
+          0
+        ]
+      ],
+      "compatible_with_other_core_members": true
+    },
+    "14": {
+      "candidate_id": 1514,
+      "points": [
+        [
+          0,
+          -19,
+          0
+        ],
+        [
+          4,
+          -19,
+          0
+        ],
+        [
+          4,
+          -19,
+          5
+        ],
+        [
+          5,
+          -19,
+          5
+        ],
+        [
+          5,
+          27,
+          5
+        ],
+        [
+          5,
+          27,
+          0
+        ],
+        [
+          11,
+          27,
+          0
+        ]
+      ],
+      "compatible_with_other_core_members": true
+    },
+    "15": {
+      "candidate_id": 457,
+      "points": [
+        [
+          0,
+          -19,
+          0
+        ],
+        [
+          2,
+          -19,
+          0
+        ],
+        [
+          2,
+          -19,
+          4
+        ],
+        [
+          2,
+          27,
+          4
+        ],
+        [
+          5,
+          27,
+          4
+        ],
+        [
+          5,
+          27,
+          0
+        ],
+        [
+          11,
+          27,
+          0
+        ]
+      ],
+      "compatible_with_other_core_members": true
+    },
+    "22": {
+      "candidate_id": 48,
+      "points": [
+        [
+          0,
+          -19,
+          0
+        ],
+        [
+          2,
+          -19,
+          0
+        ],
+        [
+          2,
+          -19,
+          3
+        ],
+        [
+          -8,
+          -19,
+          3
+        ],
+        [
+          -8,
+          27,
+          3
+        ],
+        [
+          9,
+          27,
+          3
+        ],
+        [
+          9,
+          27,
+          0
+        ],
+        [
+          11,
+          27,
+          0
+        ]
+      ],
+      "compatible_with_other_core_members": true
+    }
+  },
+  "stone_obligation_22_needed_in_core": true,
+  "attempted_stone_choices": [
+    {
+      "stone_candidate": 48,
+      "hydrogen_survivors": []
+    },
+    {
+      "stone_candidate": 264,
+      "hydrogen_survivors": []
+    },
+    {
+      "stone_candidate": 480,
+      "hydrogen_survivors": []
+    },
+    {
+      "stone_candidate": 696,
+      "hydrogen_survivors": []
+    },
+    {
+      "stone_candidate": 3288,
+      "hydrogen_survivors": []
+    },
+    {
+      "stone_candidate": 3504,
+      "hydrogen_survivors": []
+    },
+    {
+      "stone_candidate": 3720,
+      "hydrogen_survivors": []
+    },
+    {
+      "stone_candidate": 3936,
+      "hydrogen_survivors": []
+    }
+  ],
+  "repeated_decodes_of_candidates_blocked_by_unchanged_prefix": 30500,
+  "static_errors": {
+    "96": "body reservation collision at (135, 27, 3)",
+    "1176": "body reservation collision at (135, 27, 3)",
+    "2256": "body reservation collision at (135, 27, 3)",
+    "3336": "body reservation collision at (135, 27, 3)",
+    "312": "body reservation collision at (135, 27, 3)",
+    "1392": "body reservation collision at (135, 27, 3)",
+    "2472": "body reservation collision at (135, 27, 3)",
+    "3552": "body reservation collision at (135, 27, 3)",
+    "4416": "body reservation collision at (135, 27, 3)",
+    "528": "body reservation collision at (135, 27, 3)",
+    "1608": "body reservation collision at (135, 27, 3)",
+    "2688": "body reservation collision at (135, 27, 3)",
+    "3768": "body reservation collision at (135, 27, 3)",
+    "4632": "body reservation collision at (135, 27, 3)",
+    "4848": "body reservation collision at (135, 27, 3)"
+  },
+  "mask_histogram": {
+    "2": 115,
+    "18": 5,
+    "34": 5,
+    "14": 25,
+    "68": 27,
+    "84": 75,
+    "80": 587,
+    "100": 3,
+    "64": 20,
+    "4": 23,
+    "28": 20,
+    "20": 30,
+    "36": 2,
+    "12": 1172,
+    "76": 1728,
+    "108": 54,
+    "88": 9,
+    "112": 18,
+    "104": 9,
+    "96": 585,
+    "44": 21,
+    "24": 11,
+    "56": 5,
+    "40": 16,
+    "16": 378,
+    "32": 380,
+    "128": 25,
+    "48": 2,
+    "3": 25,
+    "1": 10
+  },
+  "mask_bit_order": [
+    1,
+    10,
+    4,
+    6,
+    8,
+    14,
+    15,
+    22
+  ],
+  "work": {
+    "predicates": 2689891,
+    "candidates": 5616
+  },
+  "elapsed_s": 3.881913443095982,
+  "profile_sha256": "250b00f0efff077162905a487f710381a9dc7309b8ff82c3d9b8b86e49db3738"
+}

@@ -1,0 +1,51 @@
+[
+  {
+    "revision": "2026-09-10-certified-capacity",
+    "experiment_members": 56,
+    "experiment_hashes": "PASS",
+    "production_members": 118,
+    "production_hashes": "PASS (current source or preserved pre-longitude encoder)"
+  },
+  {
+    "revision": "2026-09-10-native-capacity",
+    "experiment_members": 56,
+    "experiment_hashes": "PASS",
+    "production_members": 118,
+    "production_hashes": "PASS (current source or preserved pre-longitude encoder)"
+  },
+  {
+    "revision": "2026-09-10-decoded-aabb",
+    "experiment_members": 59,
+    "experiment_hashes": "PASS",
+    "production_members": 118,
+    "production_hashes": "PASS (current source or preserved pre-longitude encoder)"
+  },
+  {
+    "revision": "2026-09-10-decoded-periodic",
+    "experiment_members": 59,
+    "experiment_hashes": "PASS",
+    "production_members": 118,
+    "production_hashes": "PASS (current source or preserved pre-longitude encoder)"
+  },
+  {
+    "revision": "2026-09-10-audit-loop-hoist",
+    "experiment_members": 61,
+    "experiment_hashes": "PASS",
+    "production_members": 118,
+    "production_hashes": "PASS (current source or preserved pre-longitude encoder)"
+  },
+  {
+    "revision": "2026-09-10-port-longitude",
+    "experiment_members": 62,
+    "experiment_hashes": "PASS",
+    "production_members": 118,
+    "production_hashes": "PASS (current source or preserved pre-longitude encoder)"
+  },
+  {
+    "revision": "2026-09-10-integer-audit-grid",
+    "experiment_members": 63,
+    "experiment_hashes": "PASS",
+    "production_members": 118,
+    "production_hashes": "PASS (current source or preserved pre-longitude encoder)"
+  }
+]

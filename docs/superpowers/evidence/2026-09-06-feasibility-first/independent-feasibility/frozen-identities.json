@@ -1,0 +1,17 @@
+{
+  "2026-09-08-transport-first": {
+    "rule_sha256": "0004c2846e2d9da69a2738d2a976b3b6d1abad0ff67903a0ef23e35b237e4e75",
+    "sources": 23,
+    "all_hashes_match": true
+  },
+  "2026-09-09-blocker-owned-templates": {
+    "rule_sha256": "cca61b0440ef96a960ad9d5585400378645235cd6e9f745f43ba7f4deab09404",
+    "sources": 24,
+    "all_hashes_match": true
+  },
+  "2026-09-09-joint-domain-templates": {
+    "rule_sha256": "109b02d2830cd5c6f490242fad67fc86c3f30dca8ed45bf316d43b996e6c3e8f",
+    "sources": 26,
+    "all_hashes_match": true
+  }
+}

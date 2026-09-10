@@ -1,0 +1,45 @@
+{
+  "case": "unsprayed-mall-075",
+  "original_factory_gate": false,
+  "audited_links": 22,
+  "full_segment_intersections": [],
+  "partial_geometry_only": true,
+  "impossible_height_cycle": [
+    {
+      "higher": 31,
+      "higher_item": "circuit-board",
+      "lower": 59,
+      "lower_item": "magnetic-coil",
+      "plane_crosses_ground_riser_at": [
+        [
+          1045,
+          12
+        ]
+      ]
+    },
+    {
+      "higher": 59,
+      "higher_item": "magnetic-coil",
+      "lower": 39,
+      "lower_item": "electromagnetic-turbine",
+      "plane_crosses_ground_riser_at": [
+        [
+          456,
+          41
+        ]
+      ]
+    },
+    {
+      "higher": 39,
+      "higher_item": "electromagnetic-turbine",
+      "lower": 31,
+      "lower_item": "circuit-board",
+      "plane_crosses_ground_riser_at": [
+        [
+          1103,
+          12
+        ]
+      ]
+    }
+  ]
+}

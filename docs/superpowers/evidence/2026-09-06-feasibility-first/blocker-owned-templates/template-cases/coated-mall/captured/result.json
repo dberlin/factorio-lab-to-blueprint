@@ -1,0 +1,18 @@
+{
+  "case": "coated-mall",
+  "spec_sha256": "2ac9f763d8bca40a93e11f6e6c45ca41ec3fb763a501aefa97a323d18cd0f68e",
+  "budget_s": 60.0,
+  "original_factory_gate": false,
+  "global_router_calls": 0,
+  "mode": "GEOMETRY_ONLY",
+  "topology_order": "captured",
+  "rate_status": "RATE_REALIZATION_UNPROVED",
+  "outcome": "UNSUPPORTED_INTERFACE",
+  "reason": "sprayed/prelinked interfaces are not compiled",
+  "work": {},
+  "flight_allocation": [],
+  "elapsed_s": 0.6903729299083352,
+  "constructed_links": 0,
+  "junctions": [],
+  "junction_cells": []
+}

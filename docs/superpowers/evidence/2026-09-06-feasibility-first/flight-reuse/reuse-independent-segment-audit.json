@@ -1,0 +1,91 @@
+[
+  {
+    "folder": "constructive-cases/three-output",
+    "links": 33,
+    "roles": {
+      "local-source": 2,
+      "local-merge": 4,
+      "internal": 11,
+      "external": 13,
+      "output": 3
+    },
+    "occupied_cells": 5962,
+    "collision_count": 4,
+    "collisions": [
+      {
+        "cell": [
+          68,
+          75,
+          1
+        ],
+        "links": [
+          0,
+          1
+        ],
+        "items": [
+          "graphene",
+          "hydrogen"
+        ]
+      },
+      {
+        "cell": [
+          70,
+          81,
+          2
+        ],
+        "links": [
+          1,
+          11
+        ],
+        "items": [
+          "hydrogen",
+          "graphene"
+        ]
+      },
+      {
+        "cell": [
+          9,
+          14,
+          14
+        ],
+        "links": [
+          17,
+          18
+        ],
+        "items": [
+          "hydrogen",
+          "optical-grating-crystal"
+        ]
+      },
+      {
+        "cell": [
+          9,
+          29,
+          16
+        ],
+        "links": [
+          19,
+          20
+        ],
+        "items": [
+          "hydrogen",
+          "optical-grating-crystal"
+        ]
+      }
+    ]
+  },
+  {
+    "folder": "reused-flight-cases/three-output",
+    "links": 33,
+    "roles": {
+      "local-merge": 4,
+      "output": 3,
+      "local-source": 2,
+      "internal": 11,
+      "external": 13
+    },
+    "occupied_cells": 5678,
+    "collision_count": 0,
+    "collisions": []
+  }
+]

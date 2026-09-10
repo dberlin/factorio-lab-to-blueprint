@@ -1,0 +1,16 @@
+{
+  "case": "unsprayed-mall-075",
+  "spec_sha256": "d6aade99fcafb5bdb4603a3cdde32115632305d3cf0bbec5a74f6fd53588e54c",
+  "budget_s": 60.0,
+  "original_factory_gate": false,
+  "global_router_calls": 0,
+  "obligations": 123,
+  "flights_required": 116,
+  "flights_available": 24,
+  "held_out": true,
+  "outcome": "constructive-control-refused",
+  "reason": "fixed one-level-per-flight construction needs 116 flight levels; original technology provides 24",
+  "elapsed_s": 0.7670472811441869,
+  "constructed_links": 0,
+  "junctions": []
+}

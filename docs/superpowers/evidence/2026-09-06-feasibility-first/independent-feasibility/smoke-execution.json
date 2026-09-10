@@ -1,0 +1,5 @@
+{
+  "exit": 0,
+  "stdout": "[{\"escape\": false, \"expected\": false, \"outcome\": \"FROZEN_FAMILY_INFEASIBLE\", \"cuts\": 2, \"rounds\": 3}, {\"escape\": true, \"expected\": true, \"outcome\": \"COMPLETE_TEMPLATE_GEOMETRY_WITNESS\", \"cuts\": 2, \"rounds\": 3}]\n",
+  "stderr": ""
+}

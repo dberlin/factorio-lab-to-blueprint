@@ -1,0 +1,71 @@
+{
+  "status": "refused",
+  "reason": "no valid layout for no-proliferator after 30s: freeform/no-proliferator: every packing that wired was rejected by our own validator (flow.self_loop_primed, flow.conservation; findings: flow.self_loop_primed (): 'hydrogen''s loop lane does not close: x-ray-cracking's own output sorter never reaches its own input pickups, so there is no lane to prime and the group has no source of it ({'item': 'hydrogen', 'recipe_id': 'x-ray-cracking'}); flow.conservation (140, 279, 280, 281, 1245): hydrogen: directed flow obligations are short by at least 47/80 items/s ({'item': 'hydrogen', 'demand': '61/3', 'supply': '4739/240', 'shortfall': '47/80'})); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.",
+  "details": {
+    "reason": "freeform/no-proliferator: every packing that wired was rejected by our own validator (flow.self_loop_primed, flow.conservation; findings: flow.self_loop_primed (): 'hydrogen''s loop lane does not close: x-ray-cracking's own output sorter never reaches its own input pickups, so there is no lane to prime and the group has no source of it ({'item': 'hydrogen', 'recipe_id': 'x-ray-cracking'}); flow.conservation (140, 279, 280, 281, 1245): hydrogen: directed flow obligations are short by at least 47/80 items/s ({'item': 'hydrogen', 'demand': '61/3', 'supply': '4739/240', 'shortfall': '47/80'})); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run",
+    "spec_label": "no-proliferator",
+    "budget_s": 30,
+    "attempt_reasons": [
+      "freeform/no-proliferator: every packing that wired was rejected by our own validator (flow.self_loop_primed, flow.conservation; findings: flow.self_loop_primed (): 'hydrogen''s loop lane does not close: x-ray-cracking's own output sorter never reaches its own input pickups, so there is no lane to prime and the group has no source of it ({'item': 'hydrogen', 'recipe_id': 'x-ray-cracking'}); flow.conservation (140, 279, 280, 281, 1245): hydrogen: directed flow obligations are short by at least 47/80 items/s ({'item': 'hydrogen', 'demand': '61/3', 'supply': '4739/240', 'shortfall': '47/80'})); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run"
+    ],
+    "attempt_failures": [
+      {
+        "candidate": "no-proliferator",
+        "strategy": "freeform",
+        "reason": "every packing that wired was rejected by our own validator (flow.self_loop_primed, flow.conservation; findings: flow.self_loop_primed (): 'hydrogen''s loop lane does not close: x-ray-cracking's own output sorter never reaches its own input pickups, so there is no lane to prime and the group has no source of it ({'item': 'hydrogen', 'recipe_id': 'x-ray-cracking'}); flow.conservation (140, 279, 280, 281, 1245): hydrogen: directed flow obligations are short by at least 47/80 items/s ({'item': 'hydrogen', 'demand': '61/3', 'supply': '4739/240', 'shortfall': '47/80'})); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run",
+        "projection_failures": [],
+        "stats": {
+          "alns_choices": 0.0,
+          "alns_applied": 0.0,
+          "alns_evaluations": 1.0,
+          "alns_routing_seconds": 0.0,
+          "alns_operators": "destroy:failed-endpoints:0|destroy:band-boundary:0|repair:sequence-reinsert:0|repair:local-exact-pack:0",
+          "alns_window_solves": 0.0,
+          "alns_window_accepted": 0.0,
+          "alns_window_seconds": 0.0,
+          "alns_encode_errors": 0.0,
+          "alns_skipped_no_goods": 0.0,
+          "evaluations": 1.0,
+          "distinct_assignments": 1.0,
+          "stale_draws": 0.0,
+          "stale_stop": 0.0,
+          "window_solves": 0.0,
+          "window_accepted": 0.0,
+          "pack_time_s": 0.21505334740504622,
+          "preparation_time_s": 2.275082654785365,
+          "detailed_route_time_s": 20.531920458190143,
+          "compaction_time_s": 0.10634164186194539,
+          "finalization_time_s": 2.5635614320635796,
+          "validation_time_s": 0.7427499871701002,
+          "certify_skipped": 0.0,
+          "budget_unspent_s": 3.1358855762518942,
+          "pack_cp_wall_time_s": 0.20843167696148157,
+          "pack_cp_deterministic_time_s": 0.052035518433533955,
+          "pack_cp_solves": 1.0,
+          "pack_cp_optimal": 0.0,
+          "pack_cp_feasible": 1.0,
+          "pack_cp_infeasible": 0.0,
+          "pack_cp_model_invalid": 0.0,
+          "pack_cp_unknown": 0.0,
+          "pack_cp_last_status": "FEASIBLE",
+          "pack_cp_last_objective": 5187457.0,
+          "pack_cp_last_best_bound": 1997680.0,
+          "pack_window_solves": 0.0,
+          "pack_window_optimal": 0.0,
+          "pack_window_feasible": 0.0,
+          "pack_window_infeasible": 0.0,
+          "pack_window_model_invalid": 0.0,
+          "pack_window_unknown": 0.0,
+          "pack_window_distinct_submodels": 0.0,
+          "pack_window_repeated_submodels": 0.0,
+          "pack_window_repeated_submodel_seconds": 0.0,
+          "attempts": 1.0,
+          "skipped_heights": 0.0
+        }
+      }
+    ],
+    "projection_failures": [],
+    "stats": {}
+  },
+  "elapsed_s": 27.145037434063852
+}

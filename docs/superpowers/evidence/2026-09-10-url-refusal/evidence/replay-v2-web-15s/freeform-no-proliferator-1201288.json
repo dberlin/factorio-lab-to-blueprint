@@ -1,0 +1,2754 @@
+{
+  "label": "no-proliferator",
+  "telemetry": {
+    "alns_choices": 0.0,
+    "alns_applied": 0.0,
+    "alns_evaluations": 1.0,
+    "alns_routing_seconds": 0.0,
+    "alns_operators": "destroy:failed-endpoints:0|destroy:band-boundary:0|repair:sequence-reinsert:0|repair:local-exact-pack:0",
+    "alns_window_solves": 0.0,
+    "alns_window_accepted": 0.0,
+    "alns_window_seconds": 0.0,
+    "alns_encode_errors": 0.0,
+    "alns_skipped_no_goods": 0.0,
+    "evaluations": 1.0,
+    "distinct_assignments": 1.0,
+    "stale_draws": 0.0,
+    "stale_stop": 0.0,
+    "window_solves": 0.0,
+    "window_accepted": 0.0,
+    "pack_time_s": 0.22259957995265722,
+    "preparation_time_s": 2.8124274984002113,
+    "detailed_route_time_s": 10.34320106683299,
+    "compaction_time_s": 0.0,
+    "finalization_time_s": 0.0,
+    "validation_time_s": 0.0,
+    "certify_skipped": 0.0,
+    "budget_unspent_s": 0.0,
+    "pack_cp_wall_time_s": 0.21638414403423667,
+    "pack_cp_deterministic_time_s": 0.052035518433533955,
+    "pack_cp_solves": 1.0,
+    "pack_cp_optimal": 0.0,
+    "pack_cp_feasible": 1.0,
+    "pack_cp_infeasible": 0.0,
+    "pack_cp_model_invalid": 0.0,
+    "pack_cp_unknown": 0.0,
+    "pack_cp_last_status": "FEASIBLE",
+    "pack_cp_last_objective": 5187457.0,
+    "pack_cp_last_best_bound": 1997680.0,
+    "pack_window_solves": 0.0,
+    "pack_window_optimal": 0.0,
+    "pack_window_feasible": 0.0,
+    "pack_window_infeasible": 0.0,
+    "pack_window_model_invalid": 0.0,
+    "pack_window_unknown": 0.0,
+    "pack_window_distinct_submodels": 0.0,
+    "pack_window_repeated_submodels": 0.0,
+    "pack_window_repeated_submodel_seconds": 0.0
+  },
+  "rejected": [],
+  "skipped_heights": [],
+  "attempts": [
+    {
+      "height": 94,
+      "width": 110,
+      "budget_stage": "routing",
+      "failure_kinds": {
+        "budget": 50,
+        "sealed-pocket": 1
+      },
+      "routing": {
+        "status": "budget",
+        "routed": [
+          {
+            "source_strip": null,
+            "destination_strip": 0,
+            "item": "titanium-ingot",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "carbon-nanotube#0",
+                "shard_index": 0
+              },
+              "item": "titanium-ingot",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 1,
+            "item": "hydrogen",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "casimir-crystal-advanced#1",
+                "shard_index": 0
+              },
+              "item": "hydrogen",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 1,
+            "item": "optical-grating-crystal",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "casimir-crystal-advanced#1",
+                "shard_index": 0
+              },
+              "item": "optical-grating-crystal",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 3,
+            "item": "copper-ore",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "copper-ingot#3",
+                "shard_index": 0
+              },
+              "item": "copper-ore",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 4,
+            "item": "copper-ore",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "copper-ingot#3",
+                "shard_index": 1
+              },
+              "item": "copper-ore",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 5,
+            "item": "hydrogen",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "deuterium#4",
+                "shard_index": 0
+              },
+              "item": "hydrogen",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 6,
+            "item": "deuterium",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "deuteron-fuel-rod#5",
+                "shard_index": 0
+              },
+              "item": "deuterium",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 7,
+            "item": "kimberlite-ore",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "diamond-advanced#6",
+                "shard_index": 0
+              },
+              "item": "kimberlite-ore",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 13,
+            "item": "stone",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "glass#12",
+                "shard_index": 0
+              },
+              "item": "stone",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 14,
+            "item": "fire-ice",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "graphene-advanced#13",
+                "shard_index": 0
+              },
+              "item": "fire-ice",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 15,
+            "item": "fire-ice",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "graphene-advanced#13",
+                "shard_index": 1
+              },
+              "item": "fire-ice",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 16,
+            "item": "fire-ice",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "graphene-advanced#13",
+                "shard_index": 2
+              },
+              "item": "fire-ice",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 18,
+            "item": "silicon-ore",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "high-purity-silicon#15",
+                "shard_index": 0
+              },
+              "item": "silicon-ore",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 19,
+            "item": "iron-ore",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "iron-ingot#16",
+                "shard_index": 0
+              },
+              "item": "iron-ore",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 20,
+            "item": "iron-ore",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "iron-ingot#16",
+                "shard_index": 1
+              },
+              "item": "iron-ore",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 21,
+            "item": "iron-ore",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "magnet#17",
+                "shard_index": 0
+              },
+              "item": "iron-ore",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 24,
+            "item": "unipolar-magnet",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "particle-container-advanced#20",
+                "shard_index": 0
+              },
+              "item": "unipolar-magnet",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 25,
+            "item": "optical-grating-crystal",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "photon-combiner-advanced#21",
+                "shard_index": 0
+              },
+              "item": "optical-grating-crystal",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 27,
+            "item": "crude-oil",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "plasma-refining#23",
+                "shard_index": 0
+              },
+              "item": "crude-oil",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 33,
+            "item": "deuterium",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "strange-matter#29",
+                "shard_index": 0
+              },
+              "item": "deuterium",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 35,
+            "item": "sulfuric-acid",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "titanium-alloy#31",
+                "shard_index": 0
+              },
+              "item": "sulfuric-acid",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 35,
+            "item": "titanium-ingot",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "titanium-alloy#31",
+                "shard_index": 0
+              },
+              "item": "titanium-ingot",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 36,
+            "item": "titanium-ingot",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "titanium-glass#32",
+                "shard_index": 0
+              },
+              "item": "titanium-ingot",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 36,
+            "item": "water",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "titanium-glass#32",
+                "shard_index": 0
+              },
+              "item": "water",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": null,
+            "destination_strip": 38,
+            "item": "hydrogen",
+            "role": "external",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": null,
+              "destination_family": {
+                "group_key": "x-ray-cracking#34",
+                "shard_index": 0
+              },
+              "item": "hydrogen",
+              "role": "external",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 8,
+            "destination_strip": null,
+            "item": "dyson-sphere-component",
+            "role": "external-output",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "dyson-sphere-component#7",
+                "shard_index": 0
+              },
+              "destination_family": null,
+              "item": "dyson-sphere-component",
+              "role": "external-output",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 30,
+            "destination_strip": null,
+            "item": "small-carrier-rocket",
+            "role": "external-output",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "small-carrier-rocket#26",
+                "shard_index": 0
+              },
+              "destination_family": null,
+              "item": "small-carrier-rocket",
+              "role": "external-output",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 37,
+            "destination_strip": null,
+            "item": "vertical-launching-silo",
+            "role": "external-output",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "vertical-launching-silo#33",
+                "shard_index": 0
+              },
+              "destination_family": null,
+              "item": "vertical-launching-silo",
+              "role": "external-output",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 4,
+            "destination_strip": 23,
+            "item": "copper-ingot",
+            "role": "internal",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "copper-ingot#3",
+                "shard_index": 1
+              },
+              "destination_family": {
+                "group_key": "microcrystalline-component#19",
+                "shard_index": 0
+              },
+              "item": "copper-ingot",
+              "role": "internal",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 6,
+            "destination_strip": 30,
+            "item": "deuteron-fuel-rod",
+            "role": "internal",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "deuteron-fuel-rod#5",
+                "shard_index": 0
+              },
+              "destination_family": {
+                "group_key": "small-carrier-rocket#26",
+                "shard_index": 0
+              },
+              "item": "deuteron-fuel-rod",
+              "role": "internal",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 8,
+            "destination_strip": 30,
+            "item": "dyson-sphere-component",
+            "role": "internal",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "dyson-sphere-component#7",
+                "shard_index": 0
+              },
+              "destination_family": {
+                "group_key": "small-carrier-rocket#26",
+                "shard_index": 0
+              },
+              "item": "dyson-sphere-component",
+              "role": "internal",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 15,
+            "destination_strip": 1,
+            "item": "graphene",
+            "role": "internal",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "graphene-advanced#13",
+                "shard_index": 1
+              },
+              "destination_family": {
+                "group_key": "casimir-crystal-advanced#1",
+                "shard_index": 0
+              },
+              "item": "graphene",
+              "role": "internal",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 16,
+            "destination_strip": 31,
+            "item": "graphene",
+            "role": "internal",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "graphene-advanced#13",
+                "shard_index": 2
+              },
+              "destination_family": {
+                "group_key": "solar-sail#27",
+                "shard_index": 0
+              },
+              "item": "graphene",
+              "role": "internal",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 19,
+            "destination_strip": 9,
+            "item": "iron-ingot",
+            "role": "internal",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "iron-ingot#16",
+                "shard_index": 0
+              },
+              "destination_family": {
+                "group_key": "electric-motor#8",
+                "shard_index": 0
+              },
+              "item": "iron-ingot",
+              "role": "internal",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 27,
+            "destination_strip": 1,
+            "item": "hydrogen",
+            "role": "internal",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "plasma-refining#23",
+                "shard_index": 0
+              },
+              "destination_family": {
+                "group_key": "casimir-crystal-advanced#1",
+                "shard_index": 0
+              },
+              "item": "hydrogen",
+              "role": "internal",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 31,
+            "destination_strip": 8,
+            "item": "solar-sail",
+            "role": "internal",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "solar-sail#27",
+                "shard_index": 0
+              },
+              "destination_family": {
+                "group_key": "dyson-sphere-component#7",
+                "shard_index": 0
+              },
+              "item": "solar-sail",
+              "role": "internal",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 38,
+            "destination_strip": 1,
+            "item": "hydrogen",
+            "role": "internal",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "x-ray-cracking#34",
+                "shard_index": 0
+              },
+              "destination_family": {
+                "group_key": "casimir-crystal-advanced#1",
+                "shard_index": 0
+              },
+              "item": "hydrogen",
+              "role": "internal",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 38,
+            "destination_strip": 38,
+            "item": "hydrogen",
+            "role": "internal",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "x-ray-cracking#34",
+                "shard_index": 0
+              },
+              "destination_family": {
+                "group_key": "x-ray-cracking#34",
+                "shard_index": 0
+              },
+              "item": "hydrogen",
+              "role": "internal",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 4,
+            "destination_strip": 2,
+            "item": "copper-ingot",
+            "role": "internal",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "copper-ingot#3",
+                "shard_index": 1
+              },
+              "destination_family": {
+                "group_key": "circuit-board#2",
+                "shard_index": 0
+              },
+              "item": "copper-ingot",
+              "role": "internal",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 15,
+            "destination_strip": 0,
+            "item": "graphene",
+            "role": "internal",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "graphene-advanced#13",
+                "shard_index": 1
+              },
+              "destination_family": {
+                "group_key": "carbon-nanotube#0",
+                "shard_index": 0
+              },
+              "item": "graphene",
+              "role": "internal",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 16,
+            "destination_strip": 0,
+            "item": "graphene",
+            "role": "internal",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "graphene-advanced#13",
+                "shard_index": 2
+              },
+              "destination_family": {
+                "group_key": "carbon-nanotube#0",
+                "shard_index": 0
+              },
+              "item": "graphene",
+              "role": "internal",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          },
+          {
+            "source_strip": 19,
+            "destination_strip": 32,
+            "item": "iron-ingot",
+            "role": "internal",
+            "ordinal": 0,
+            "logical_id": {
+              "source_family": {
+                "group_key": "iron-ingot#16",
+                "shard_index": 0
+              },
+              "destination_family": {
+                "group_key": "steel#28",
+                "shard_index": 0
+              },
+              "item": "iron-ingot",
+              "role": "internal",
+              "cargo_domain": "unsprayed",
+              "legacy_source_strip": null,
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null
+            },
+            "cargo_domain": "unsprayed"
+          }
+        ],
+        "failures": [
+          {
+            "net_id": {
+              "source_strip": 0,
+              "destination_strip": 11,
+              "item": "carbon-nanotube",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "carbon-nanotube#0",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "frame-material#10",
+                  "shard_index": 0
+                },
+                "item": "carbon-nanotube",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 1,
+              "destination_strip": 26,
+              "item": "casimir-crystal",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "casimir-crystal-advanced#1",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "plane-filter#22",
+                  "shard_index": 0
+                },
+                "item": "casimir-crystal",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 2,
+              "destination_strip": 25,
+              "item": "circuit-board",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "circuit-board#2",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "photon-combiner-advanced#21",
+                  "shard_index": 0
+                },
+                "item": "circuit-board",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 2,
+              "destination_strip": 28,
+              "item": "circuit-board",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "circuit-board#2",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "processor#24",
+                  "shard_index": 0
+                },
+                "item": "circuit-board",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 3,
+              "destination_strip": 2,
+              "item": "copper-ingot",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "copper-ingot#3",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "circuit-board#2",
+                  "shard_index": 0
+                },
+                "item": "copper-ingot",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 3,
+              "destination_strip": 22,
+              "item": "copper-ingot",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "copper-ingot#3",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "magnetic-coil#18",
+                  "shard_index": 0
+                },
+                "item": "copper-ingot",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 4,
+              "destination_strip": 24,
+              "item": "copper-ingot",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "copper-ingot#3",
+                  "shard_index": 1
+                },
+                "destination_family": {
+                  "group_key": "particle-container-advanced#20",
+                  "shard_index": 0
+                },
+                "item": "copper-ingot",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 5,
+              "destination_strip": 6,
+              "item": "deuterium",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "deuterium#4",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "deuteron-fuel-rod#5",
+                  "shard_index": 0
+                },
+                "item": "deuterium",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 5,
+              "destination_strip": 33,
+              "item": "deuterium",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "deuterium#4",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "strange-matter#29",
+                  "shard_index": 0
+                },
+                "item": "deuterium",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 7,
+              "destination_strip": 17,
+              "item": "diamond",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "diamond-advanced#6",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "graviton-lens#14",
+                  "shard_index": 0
+                },
+                "item": "diamond",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 9,
+              "destination_strip": 10,
+              "item": "electric-motor",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "electric-motor#8",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "electromagnetic-turbine#9",
+                  "shard_index": 0
+                },
+                "item": "electric-motor",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": [
+              4,
+              91,
+              0
+            ],
+            "destination": [
+              44,
+              0,
+              0
+            ],
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 10,
+              "destination_strip": 34,
+              "item": "electromagnetic-turbine",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "electromagnetic-turbine#9",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "super-magnetic-ring#30",
+                  "shard_index": 0
+                },
+                "item": "electromagnetic-turbine",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 11,
+              "destination_strip": 8,
+              "item": "frame-material",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "frame-material#10",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "dyson-sphere-component#7",
+                  "shard_index": 0
+                },
+                "item": "frame-material",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 11,
+              "destination_strip": 37,
+              "item": "frame-material",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "frame-material#10",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "vertical-launching-silo#33",
+                  "shard_index": 0
+                },
+                "item": "frame-material",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 12,
+              "destination_strip": 9,
+              "item": "gear",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "gear#11",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "electric-motor#8",
+                  "shard_index": 0
+                },
+                "item": "gear",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 13,
+              "destination_strip": 36,
+              "item": "glass",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "glass#12",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "titanium-glass#32",
+                  "shard_index": 0
+                },
+                "item": "glass",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 14,
+              "destination_strip": 0,
+              "item": "graphene",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "graphene-advanced#13",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "carbon-nanotube#0",
+                  "shard_index": 0
+                },
+                "item": "graphene",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 14,
+              "destination_strip": 1,
+              "item": "hydrogen",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "graphene-advanced#13",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "casimir-crystal-advanced#1",
+                  "shard_index": 0
+                },
+                "item": "hydrogen",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 15,
+              "destination_strip": 5,
+              "item": "hydrogen",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "graphene-advanced#13",
+                  "shard_index": 1
+                },
+                "destination_family": {
+                  "group_key": "deuterium#4",
+                  "shard_index": 0
+                },
+                "item": "hydrogen",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 16,
+              "destination_strip": 38,
+              "item": "hydrogen",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "graphene-advanced#13",
+                  "shard_index": 2
+                },
+                "destination_family": {
+                  "group_key": "x-ray-cracking#34",
+                  "shard_index": 0
+                },
+                "item": "hydrogen",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 17,
+              "destination_strip": 37,
+              "item": "graviton-lens",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "graviton-lens#14",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "vertical-launching-silo#33",
+                  "shard_index": 0
+                },
+                "item": "graviton-lens",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 18,
+              "destination_strip": 11,
+              "item": "high-purity-silicon",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "high-purity-silicon#15",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "frame-material#10",
+                  "shard_index": 0
+                },
+                "item": "high-purity-silicon",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 18,
+              "destination_strip": 23,
+              "item": "high-purity-silicon",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "high-purity-silicon#15",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "microcrystalline-component#19",
+                  "shard_index": 0
+                },
+                "item": "high-purity-silicon",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 19,
+              "destination_strip": 2,
+              "item": "iron-ingot",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "iron-ingot#16",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "circuit-board#2",
+                  "shard_index": 0
+                },
+                "item": "iron-ingot",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 19,
+              "destination_strip": 12,
+              "item": "iron-ingot",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "iron-ingot#16",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "gear#11",
+                  "shard_index": 0
+                },
+                "item": "iron-ingot",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 20,
+              "destination_strip": 32,
+              "item": "iron-ingot",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "iron-ingot#16",
+                  "shard_index": 1
+                },
+                "destination_family": {
+                  "group_key": "steel#28",
+                  "shard_index": 0
+                },
+                "item": "iron-ingot",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 20,
+              "destination_strip": 33,
+              "item": "iron-ingot",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "iron-ingot#16",
+                  "shard_index": 1
+                },
+                "destination_family": {
+                  "group_key": "strange-matter#29",
+                  "shard_index": 0
+                },
+                "item": "iron-ingot",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 21,
+              "destination_strip": 22,
+              "item": "magnet",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "magnet#17",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "magnetic-coil#18",
+                  "shard_index": 0
+                },
+                "item": "magnet",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 21,
+              "destination_strip": 34,
+              "item": "magnet",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "magnet#17",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "super-magnetic-ring#30",
+                  "shard_index": 0
+                },
+                "item": "magnet",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 22,
+              "destination_strip": 9,
+              "item": "magnetic-coil",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "magnetic-coil#18",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "electric-motor#8",
+                  "shard_index": 0
+                },
+                "item": "magnetic-coil",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 22,
+              "destination_strip": 10,
+              "item": "magnetic-coil",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "magnetic-coil#18",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "electromagnetic-turbine#9",
+                  "shard_index": 0
+                },
+                "item": "magnetic-coil",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 23,
+              "destination_strip": 28,
+              "item": "microcrystalline-component",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "microcrystalline-component#19",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "processor#24",
+                  "shard_index": 0
+                },
+                "item": "microcrystalline-component",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 24,
+              "destination_strip": 33,
+              "item": "particle-container",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "particle-container-advanced#20",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "strange-matter#29",
+                  "shard_index": 0
+                },
+                "item": "particle-container",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 25,
+              "destination_strip": 31,
+              "item": "photon-combiner",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "photon-combiner-advanced#21",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "solar-sail#27",
+                  "shard_index": 0
+                },
+                "item": "photon-combiner",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 26,
+              "destination_strip": 29,
+              "item": "plane-filter",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "plane-filter#22",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "quantum-chip#25",
+                  "shard_index": 0
+                },
+                "item": "plane-filter",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 27,
+              "destination_strip": 5,
+              "item": "hydrogen",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "plasma-refining#23",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "deuterium#4",
+                  "shard_index": 0
+                },
+                "item": "hydrogen",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 27,
+              "destination_strip": 38,
+              "item": "hydrogen",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "plasma-refining#23",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "x-ray-cracking#34",
+                  "shard_index": 0
+                },
+                "item": "hydrogen",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "sealed-pocket",
+            "wall": [
+              [
+                77,
+                79,
+                0
+              ]
+            ],
+            "blocking_nets": [
+              {
+                "source_strip": 38,
+                "destination_strip": 38,
+                "item": "hydrogen",
+                "role": "internal",
+                "ordinal": 0,
+                "logical_id": {
+                  "source_family": {
+                    "group_key": "x-ray-cracking#34",
+                    "shard_index": 0
+                  },
+                  "destination_family": {
+                    "group_key": "x-ray-cracking#34",
+                    "shard_index": 0
+                  },
+                  "item": "hydrogen",
+                  "role": "internal",
+                  "cargo_domain": "unsprayed",
+                  "legacy_source_strip": null,
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null
+                },
+                "cargo_domain": "unsprayed"
+              }
+            ],
+            "expansions": 0,
+            "source": [
+              69,
+              67,
+              0
+            ],
+            "destination": [
+              78,
+              79,
+              0
+            ],
+            "blocking_endpoints": [
+              [
+                [
+                  84,
+                  86,
+                  0
+                ],
+                [
+                  78,
+                  79,
+                  0
+                ]
+              ]
+            ]
+          },
+          {
+            "net_id": {
+              "source_strip": 27,
+              "destination_strip": 38,
+              "item": "refined-oil",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "plasma-refining#23",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "x-ray-cracking#34",
+                  "shard_index": 0
+                },
+                "item": "refined-oil",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 28,
+              "destination_strip": 8,
+              "item": "processor",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "processor#24",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "dyson-sphere-component#7",
+                  "shard_index": 0
+                },
+                "item": "processor",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 28,
+              "destination_strip": 29,
+              "item": "processor",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "processor#24",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "quantum-chip#25",
+                  "shard_index": 0
+                },
+                "item": "processor",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 29,
+              "destination_strip": 30,
+              "item": "quantum-chip",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "quantum-chip#25",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "small-carrier-rocket#26",
+                  "shard_index": 0
+                },
+                "item": "quantum-chip",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 29,
+              "destination_strip": 37,
+              "item": "quantum-chip",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "quantum-chip#25",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "vertical-launching-silo#33",
+                  "shard_index": 0
+                },
+                "item": "quantum-chip",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 32,
+              "destination_strip": 35,
+              "item": "steel",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "steel#28",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "titanium-alloy#31",
+                  "shard_index": 0
+                },
+                "item": "steel",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 33,
+              "destination_strip": 17,
+              "item": "strange-matter",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "strange-matter#29",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "graviton-lens#14",
+                  "shard_index": 0
+                },
+                "item": "strange-matter",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 34,
+              "destination_strip": 6,
+              "item": "super-magnetic-ring",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "super-magnetic-ring#30",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "deuteron-fuel-rod#5",
+                  "shard_index": 0
+                },
+                "item": "super-magnetic-ring",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 35,
+              "destination_strip": 6,
+              "item": "titanium-alloy",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "titanium-alloy#31",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "deuteron-fuel-rod#5",
+                  "shard_index": 0
+                },
+                "item": "titanium-alloy",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 35,
+              "destination_strip": 11,
+              "item": "titanium-alloy",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "titanium-alloy#31",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "frame-material#10",
+                  "shard_index": 0
+                },
+                "item": "titanium-alloy",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 35,
+              "destination_strip": 37,
+              "item": "titanium-alloy",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "titanium-alloy#31",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "vertical-launching-silo#33",
+                  "shard_index": 0
+                },
+                "item": "titanium-alloy",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 36,
+              "destination_strip": 26,
+              "item": "titanium-glass",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "titanium-glass#32",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "plane-filter#22",
+                  "shard_index": 0
+                },
+                "item": "titanium-glass",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 38,
+              "destination_strip": 34,
+              "item": "energetic-graphite",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "x-ray-cracking#34",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "super-magnetic-ring#30",
+                  "shard_index": 0
+                },
+                "item": "energetic-graphite",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          },
+          {
+            "net_id": {
+              "source_strip": 38,
+              "destination_strip": 5,
+              "item": "hydrogen",
+              "role": "internal",
+              "ordinal": 0,
+              "logical_id": {
+                "source_family": {
+                  "group_key": "x-ray-cracking#34",
+                  "shard_index": 0
+                },
+                "destination_family": {
+                  "group_key": "deuterium#4",
+                  "shard_index": 0
+                },
+                "item": "hydrogen",
+                "role": "internal",
+                "cargo_domain": "unsprayed",
+                "legacy_source_strip": null,
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null
+              },
+              "cargo_domain": "unsprayed"
+            },
+            "kind": "budget",
+            "wall": [],
+            "blocking_nets": [],
+            "expansions": 0,
+            "source": null,
+            "destination": null,
+            "blocking_endpoints": []
+          }
+        ],
+        "iterations": 1,
+        "expansions": 124390,
+        "exhaustive": false,
+        "last_mile": {
+          "invocations": 0,
+          "solved": 0,
+          "proved": 0,
+          "bounded": 0,
+          "commit_rejected": 0,
+          "relation_skipped_siblings": 0,
+          "restore_mismatch": 0,
+          "nodes": 0,
+          "expansions": 0,
+          "seconds": 0.0,
+          "relation_strips": [],
+          "relation_evidence": "",
+          "same_source_dropped": 0
+        }
+      }
+    }
+  ]
+}

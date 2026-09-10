@@ -1,0 +1,557 @@
+{
+  "scope": "Separate bounded experiment; no production integration or mall bypass.",
+  "decision": "Mechanism hypothesis confirmed; control/promotion gate failed. No further tuning applied.",
+  "rule_sha256": "109b02d2830cd5c6f490242fad67fc86c3f30dca8ed45bf316d43b996e6c3e8f",
+  "control": {
+    "case": "three-output",
+    "mode": "GEOMETRY_ONLY",
+    "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+    "outcome": "POLICY_BOUND",
+    "reason": "predicates work limit reached at 5000000",
+    "attempts": [
+      {
+        "case": "three-output",
+        "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+        "budget_s": 30.0,
+        "original_factory_gate": false,
+        "global_router_calls": 0,
+        "mode": "GEOMETRY_ONLY",
+        "topology_order": "captured",
+        "rate_status": "RATE_REALIZATION_UNPROVED",
+        "topology": {
+          "candidate_arcs": 28,
+          "selected_arcs": 26,
+          "added": 0,
+          "removed": 1
+        },
+        "obligations": 26,
+        "flights_required": 26,
+        "flights_available": 24,
+        "held_out": false,
+        "assigned_rates": {
+          "0": "5/3",
+          "1": "5/3",
+          "2": "20/3",
+          "3": "10/3",
+          "4": "20/3",
+          "5": "20/3",
+          "6": "15",
+          "7": "10/3",
+          "8": "10/3",
+          "9": "35/6",
+          "10": "15/2",
+          "11": "50/3",
+          "12": "20",
+          "13": "10/3",
+          "14": "20/3",
+          "15": "20/3",
+          "16": "40/3",
+          "17": "40/3",
+          "18": "10/3",
+          "19": "10/3",
+          "20": "15",
+          "21": "30",
+          "22": "20/3",
+          "23": "25/3",
+          "24": "15",
+          "25": "15"
+        },
+        "outcome": "POLICY_BOUND",
+        "reason": "predicates work limit reached at 5000000",
+        "work": {
+          "arcs": 28,
+          "augmentations": 26,
+          "audit_cells": 39,
+          "predicates": 5000000,
+          "assignments": 1926,
+          "candidates": 26513
+        },
+        "flight_allocation": [],
+        "elapsed_s": 11.039870326872915,
+        "constructed_links": 6,
+        "junctions": [
+          2924,
+          2932,
+          2941,
+          2950
+        ],
+        "junction_cells": [
+          [
+            70,
+            79,
+            0
+          ],
+          [
+            129,
+            38,
+            0
+          ],
+          [
+            129,
+            24,
+            0
+          ],
+          [
+            5,
+            12,
+            0
+          ]
+        ]
+      }
+    ],
+    "elapsed_s": 11.07547091273591,
+    "budget_s": 30.0,
+    "work": {
+      "arcs": 28,
+      "augmentations": 26,
+      "audit_cells": 39,
+      "predicates": 5000000,
+      "assignments": 1926,
+      "candidates": 26513
+    },
+    "original_factory_gate": false,
+    "rule_sha256": "109b02d2830cd5c6f490242fad67fc86c3f30dca8ed45bf316d43b996e6c3e8f",
+    "global_router_calls": 0
+  },
+  "previous_blocker_owned_control": {
+    "outcome": "POLICY_BOUND",
+    "predicates": 5000000,
+    "candidates": 17589,
+    "assignments": 177,
+    "maximum_selected_depth": 9
+  },
+  "observation": {
+    "same_frozen_outcome_and_counters": true,
+    "maximum_selected_depth": 9,
+    "joint_calls": 42,
+    "direct_joint_pair_predicates": 3861,
+    "cost_scope": "Direct pair probe predicates only, excluding residual materialization and explanation work.",
+    "contradiction": {
+      "targets": [
+        13,
+        18
+      ],
+      "residual_sizes": [
+        25,
+        25
+      ],
+      "selected": {
+        "1": 0,
+        "10": 240,
+        "4": 1081,
+        "6": 1082,
+        "8": 217,
+        "14": 2,
+        "15": 457,
+        "22": 3721
+      },
+      "explaining_owners": [
+        1,
+        4,
+        6,
+        8,
+        10,
+        14,
+        15
+      ],
+      "work": {
+        "arcs": 28,
+        "augmentations": 26,
+        "audit_cells": 39,
+        "predicates": 3962748,
+        "assignments": 197,
+        "candidates": 14217
+      }
+    },
+    "next_assignment_proves_irrelevant_frame_crossed": {
+      "assignment": 198,
+      "trying_obligation": 15,
+      "candidate": 553,
+      "selected": {
+        "1": 0,
+        "10": 240,
+        "4": 1081,
+        "6": 1082,
+        "8": 217,
+        "14": 2
+      },
+      "work": {
+        "arcs": 28,
+        "augmentations": 26,
+        "audit_cells": 39,
+        "predicates": 3962748,
+        "assignments": 198,
+        "candidates": 14217
+      }
+    },
+    "terminal_assignment": {
+      "assignment": 1926,
+      "trying_obligation": 18,
+      "candidate": 481,
+      "selected": {
+        "1": 0,
+        "10": 240,
+        "4": 1081,
+        "6": 1082,
+        "8": 217,
+        "14": 2,
+        "15": 48,
+        "13": 457
+      },
+      "work": {
+        "arcs": 28,
+        "augmentations": 26,
+        "audit_cells": 39,
+        "predicates": 4561710,
+        "assignments": 1926,
+        "candidates": 25199
+      }
+    }
+  },
+  "correctness": {
+    "bounded_escape": {
+      "bounded_escape_work": {
+        "assignments": 6,
+        "candidates": 62,
+        "predicates": 2122
+      },
+      "assignment_cap": 8,
+      "joint_blocker_exhaustive_cases": [
+        {
+          "ancestor_escape": false,
+          "sibling_escape": false,
+          "feasible": false,
+          "backjump": {
+            "contradictory_domains": [
+              3,
+              4
+            ],
+            "selected_at_contradiction": [
+              0,
+              1,
+              2
+            ],
+            "crossed_active_irrelevant_domain": 2,
+            "resumed_explaining_domain": 1
+          },
+          "work": {
+            "assignments": 14,
+            "candidates": 442,
+            "predicates": 11458
+          }
+        },
+        {
+          "ancestor_escape": false,
+          "sibling_escape": true,
+          "feasible": true,
+          "backjump": {
+            "contradictory_domains": [
+              3,
+              4
+            ],
+            "selected_at_contradiction": [
+              0,
+              1,
+              2
+            ],
+            "crossed_active_irrelevant_domain": 2,
+            "resumed_explaining_domain": 1
+          },
+          "work": {
+            "assignments": 7,
+            "candidates": 127,
+            "predicates": 7043
+          }
+        },
+        {
+          "ancestor_escape": true,
+          "sibling_escape": false,
+          "feasible": true,
+          "backjump": {
+            "contradictory_domains": [
+              3,
+              4
+            ],
+            "selected_at_contradiction": [
+              0,
+              1,
+              2
+            ],
+            "crossed_active_irrelevant_domain": 2,
+            "resumed_explaining_domain": 1
+          },
+          "work": {
+            "assignments": 12,
+            "candidates": 284,
+            "predicates": 11357
+          }
+        },
+        {
+          "ancestor_escape": true,
+          "sibling_escape": true,
+          "feasible": true,
+          "backjump": {
+            "contradictory_domains": [
+              3,
+              4
+            ],
+            "selected_at_contradiction": [
+              0,
+              1,
+              2
+            ],
+            "crossed_active_irrelevant_domain": 2,
+            "resumed_explaining_domain": 1
+          },
+          "work": {
+            "assignments": 7,
+            "candidates": 126,
+            "predicates": 7043
+          }
+        }
+      ],
+      "incomplete_local_checks": {
+        "incomplete_compatible_pair": "unknown",
+        "incomplete_unsupported_pair": "unknown",
+        "complete_unsupported_pair": [
+          0,
+          1
+        ],
+        "compatible_solution_after_local_cutoff": true,
+        "work": {
+          "candidates": 16,
+          "predicates": 451,
+          "assignments": 4
+        }
+      }
+    },
+    "recorded_frontier": {
+      "input_sha256": "efac01df0a1200f7b52f0a8a37382c8428cbd7a70ac292e4f9dfaa8b5d4b30e3",
+      "conditional_candidates": {
+        "13": 25,
+        "18": 25
+      },
+      "unsupported_pairs": 625,
+      "independent_prefix_comparisons": 42060,
+      "unconditioned_compatible_ids": {
+        "13": 0,
+        "18": 1
+      },
+      "work": {
+        "candidates": 10809,
+        "predicates": 3205139
+      }
+    },
+    "existing_rollback_exhaustive_cases": 12,
+    "existing_template_exhaustive_cases": 8,
+    "retained_incompatible_height_pairs": 576,
+    "witness_modules": {
+      "template_joint_witness": 0,
+      "template_frontier_witness": 0,
+      "template_rollback_witness": 0,
+      "template_paths_witness": 0,
+      "template_contract_witness": 0,
+      "template_audit_witness": 0
+    },
+    "ruff_exit": 0,
+    "typecheck": {
+      "filesAnalyzed": 13,
+      "errorCount": 0,
+      "warningCount": 0,
+      "informationCount": 0,
+      "timeInSec": 5.603
+    },
+    "review": "Independent read-only review found no blocking correctness issue; runtime overhead remained a measurement risk."
+  },
+  "admissions": {
+    "three-output": {
+      "outcome": "COST_ADMISSION_MEASURED",
+      "within_admission_budget": true,
+      "elapsed_s": 0.6010929169133306,
+      "budget_s": 30.0
+    },
+    "unsprayed-mall": {
+      "outcome": "COST_ADMISSION_MEASURED",
+      "within_admission_budget": true,
+      "elapsed_s": 2.302215259987861,
+      "budget_s": 60.0
+    },
+    "unsprayed-mall-075": {
+      "outcome": "COST_ADMISSION_MEASURED",
+      "within_admission_budget": true,
+      "elapsed_s": 1.6960343359969556,
+      "budget_s": 60.0
+    },
+    "unsprayed-mall-125": {
+      "outcome": "COST_ADMISSION_MEASURED",
+      "within_admission_budget": true,
+      "elapsed_s": 2.6358503927476704,
+      "budget_s": 60.0
+    },
+    "unsprayed-universe": {
+      "outcome": "COST_ADMISSION_MEASURED",
+      "within_admission_budget": true,
+      "elapsed_s": 1.4468911667354405,
+      "budget_s": 60.0
+    }
+  },
+  "downstream_gates": [
+    {
+      "case": "unsprayed-mall",
+      "exit": 2,
+      "result": {
+        "outcome": "PREREQUISITE_NOT_MET",
+        "reason": "three-output"
+      },
+      "stderr": ""
+    },
+    {
+      "case": "unsprayed-mall-075",
+      "exit": 2,
+      "result": {
+        "outcome": "PREREQUISITE_NOT_MET",
+        "reason": "unsprayed-mall"
+      },
+      "stderr": ""
+    },
+    {
+      "case": "unsprayed-mall-125",
+      "exit": 2,
+      "result": {
+        "outcome": "PREREQUISITE_NOT_MET",
+        "reason": "unsprayed-mall"
+      },
+      "stderr": ""
+    },
+    {
+      "case": "unsprayed-universe",
+      "exit": 2,
+      "result": {
+        "outcome": "PREREQUISITE_NOT_MET",
+        "reason": "unsprayed-mall"
+      },
+      "stderr": ""
+    },
+    {
+      "case": "coated-mall",
+      "exit": 0,
+      "result": {
+        "case": "coated-mall",
+        "mode": "GEOMETRY_ONLY",
+        "spec_sha256": "2ac9f763d8bca40a93e11f6e6c45ca41ec3fb763a501aefa97a323d18cd0f68e",
+        "outcome": "UNSUPPORTED_INTERFACE",
+        "reason": "sprayed/prelinked interfaces are not compiled",
+        "attempts": [
+          {
+            "case": "coated-mall",
+            "spec_sha256": "2ac9f763d8bca40a93e11f6e6c45ca41ec3fb763a501aefa97a323d18cd0f68e",
+            "budget_s": 60.0,
+            "original_factory_gate": false,
+            "global_router_calls": 0,
+            "mode": "GEOMETRY_ONLY",
+            "topology_order": "captured",
+            "rate_status": "RATE_REALIZATION_UNPROVED",
+            "outcome": "UNSUPPORTED_INTERFACE",
+            "reason": "sprayed/prelinked interfaces are not compiled",
+            "work": {},
+            "flight_allocation": [],
+            "elapsed_s": 0.6784328897483647,
+            "constructed_links": 0,
+            "junctions": [],
+            "junction_cells": []
+          }
+        ],
+        "elapsed_s": 0.710143927950412,
+        "budget_s": 60.0,
+        "work": {},
+        "original_factory_gate": false,
+        "rule_sha256": "109b02d2830cd5c6f490242fad67fc86c3f30dca8ed45bf316d43b996e6c3e8f",
+        "global_router_calls": 0
+      },
+      "stderr": ""
+    },
+    {
+      "case": "universe-matrix",
+      "exit": 0,
+      "result": {
+        "case": "universe-matrix",
+        "mode": "GEOMETRY_ONLY",
+        "spec_sha256": "8eb481d486228dfaed052af14cb8d8c9aeca8c1c3d35bf07fc6679cfe9bcb101",
+        "outcome": "UNSUPPORTED_INTERFACE",
+        "reason": "sprayed/prelinked interfaces are not compiled",
+        "attempts": [
+          {
+            "case": "universe-matrix",
+            "spec_sha256": "8eb481d486228dfaed052af14cb8d8c9aeca8c1c3d35bf07fc6679cfe9bcb101",
+            "budget_s": 60.0,
+            "original_factory_gate": false,
+            "global_router_calls": 0,
+            "mode": "GEOMETRY_ONLY",
+            "topology_order": "captured",
+            "rate_status": "RATE_REALIZATION_UNPROVED",
+            "outcome": "UNSUPPORTED_INTERFACE",
+            "reason": "sprayed/prelinked interfaces are not compiled",
+            "work": {},
+            "flight_allocation": [],
+            "elapsed_s": 0.556722816079855,
+            "constructed_links": 0,
+            "junctions": [],
+            "junction_cells": []
+          }
+        ],
+        "elapsed_s": 0.5860504368320107,
+        "budget_s": 60.0,
+        "work": {},
+        "original_factory_gate": false,
+        "rule_sha256": "109b02d2830cd5c6f490242fad67fc86c3f30dca8ed45bf316d43b996e6c3e8f",
+        "global_router_calls": 0
+      },
+      "stderr": ""
+    }
+  ],
+  "frozen_identities": {
+    "2026-09-08-transport-first": {
+      "rule_sha256": "0004c2846e2d9da69a2738d2a976b3b6d1abad0ff67903a0ef23e35b237e4e75",
+      "source_files": 23,
+      "admissions": 5,
+      "specs": 5,
+      "all_match": true
+    },
+    "2026-09-09-blocker-owned-templates": {
+      "rule_sha256": "cca61b0440ef96a960ad9d5585400378645235cd6e9f745f43ba7f4deab09404",
+      "source_files": 24,
+      "admissions": 5,
+      "specs": 5,
+      "all_match": true
+    },
+    "2026-09-09-joint-domain-templates": {
+      "rule_sha256": "109b02d2830cd5c6f490242fad67fc86c3f30dca8ed45bf316d43b996e6c3e8f",
+      "source_files": 26,
+      "admissions": 5,
+      "specs": 5,
+      "all_match": true
+    },
+    "unchanged_template_limits_deadlines_and_specs": true
+  },
+  "claim_limits": [
+    "No complete factory selection, settlement or rated acceptance.",
+    "No global template-family infeasibility proof.",
+    "More assignments are not evidence of deeper search or better layout.",
+    "Maximum selected depth is observed during the exact-counter replay.",
+    "No project-wide suite or in-game verification claimed."
+  ],
+  "reproduction": {
+    "environment": "Existing project Python 3.14 environment with project dependencies; no new dependencies.",
+    "frozen_archive_sha256": "47494cee11af2fc46fd597181bd147dc6234c76d5fc068f3c02a37ab2a063393",
+    "control_command": "After extracting reproduction.zip to <extract>: PYTHONPATH=<extract> .venv/bin/python -m 2026-09-09-joint-domain-templates.template_experiment run three-output",
+    "diagnostic_command": "After extracting diagnostic-reproduction.zip: PYTHONPATH=src .venv/bin/python <extract>/replay.py <extract>/frozen-reproduction.zip <output.json>",
+    "witness_commands": [
+      "PYTHONPATH=<extract> .venv/bin/python -m 2026-09-09-joint-domain-templates.template_joint_witness",
+      "PYTHONPATH=<extract> .venv/bin/python -m 2026-09-09-joint-domain-templates.template_frontier_witness",
+      "PYTHONPATH=<extract> .venv/bin/python -m 2026-09-09-joint-domain-templates.template_rollback_witness",
+      "PYTHONPATH=<extract> .venv/bin/python -m 2026-09-09-joint-domain-templates.template_paths_witness",
+      "PYTHONPATH=<extract> .venv/bin/python -m 2026-09-09-joint-domain-templates.template_contract_witness",
+      "PYTHONPATH=<extract> .venv/bin/python -m 2026-09-09-joint-domain-templates.template_audit_witness"
+    ]
+  }
+}

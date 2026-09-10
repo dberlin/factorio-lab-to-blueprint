@@ -1,0 +1,114 @@
+[
+  {
+    "case": "unsprayed-mall",
+    "exit": 2,
+    "result": {
+      "outcome": "PREREQUISITE_NOT_MET",
+      "reason": "three-output"
+    },
+    "stderr": ""
+  },
+  {
+    "case": "unsprayed-mall-075",
+    "exit": 2,
+    "result": {
+      "outcome": "PREREQUISITE_NOT_MET",
+      "reason": "unsprayed-mall"
+    },
+    "stderr": ""
+  },
+  {
+    "case": "unsprayed-mall-125",
+    "exit": 2,
+    "result": {
+      "outcome": "PREREQUISITE_NOT_MET",
+      "reason": "unsprayed-mall"
+    },
+    "stderr": ""
+  },
+  {
+    "case": "unsprayed-universe",
+    "exit": 2,
+    "result": {
+      "outcome": "PREREQUISITE_NOT_MET",
+      "reason": "unsprayed-mall"
+    },
+    "stderr": ""
+  },
+  {
+    "case": "coated-mall",
+    "exit": 0,
+    "result": {
+      "case": "coated-mall",
+      "mode": "GEOMETRY_ONLY",
+      "spec_sha256": "2ac9f763d8bca40a93e11f6e6c45ca41ec3fb763a501aefa97a323d18cd0f68e",
+      "outcome": "UNSUPPORTED_INTERFACE",
+      "reason": "sprayed/prelinked interfaces are not compiled",
+      "attempts": [
+        {
+          "case": "coated-mall",
+          "spec_sha256": "2ac9f763d8bca40a93e11f6e6c45ca41ec3fb763a501aefa97a323d18cd0f68e",
+          "budget_s": 60.0,
+          "original_factory_gate": false,
+          "global_router_calls": 0,
+          "mode": "GEOMETRY_ONLY",
+          "topology_order": "captured",
+          "rate_status": "RATE_REALIZATION_UNPROVED",
+          "outcome": "UNSUPPORTED_INTERFACE",
+          "reason": "sprayed/prelinked interfaces are not compiled",
+          "work": {},
+          "flight_allocation": [],
+          "elapsed_s": 0.6784328897483647,
+          "constructed_links": 0,
+          "junctions": [],
+          "junction_cells": []
+        }
+      ],
+      "elapsed_s": 0.710143927950412,
+      "budget_s": 60.0,
+      "work": {},
+      "original_factory_gate": false,
+      "rule_sha256": "109b02d2830cd5c6f490242fad67fc86c3f30dca8ed45bf316d43b996e6c3e8f",
+      "global_router_calls": 0
+    },
+    "stderr": ""
+  },
+  {
+    "case": "universe-matrix",
+    "exit": 0,
+    "result": {
+      "case": "universe-matrix",
+      "mode": "GEOMETRY_ONLY",
+      "spec_sha256": "8eb481d486228dfaed052af14cb8d8c9aeca8c1c3d35bf07fc6679cfe9bcb101",
+      "outcome": "UNSUPPORTED_INTERFACE",
+      "reason": "sprayed/prelinked interfaces are not compiled",
+      "attempts": [
+        {
+          "case": "universe-matrix",
+          "spec_sha256": "8eb481d486228dfaed052af14cb8d8c9aeca8c1c3d35bf07fc6679cfe9bcb101",
+          "budget_s": 60.0,
+          "original_factory_gate": false,
+          "global_router_calls": 0,
+          "mode": "GEOMETRY_ONLY",
+          "topology_order": "captured",
+          "rate_status": "RATE_REALIZATION_UNPROVED",
+          "outcome": "UNSUPPORTED_INTERFACE",
+          "reason": "sprayed/prelinked interfaces are not compiled",
+          "work": {},
+          "flight_allocation": [],
+          "elapsed_s": 0.556722816079855,
+          "constructed_links": 0,
+          "junctions": [],
+          "junction_cells": []
+        }
+      ],
+      "elapsed_s": 0.5860504368320107,
+      "budget_s": 60.0,
+      "work": {},
+      "original_factory_gate": false,
+      "rule_sha256": "109b02d2830cd5c6f490242fad67fc86c3f30dca8ed45bf316d43b996e6c3e8f",
+      "global_router_calls": 0
+    },
+    "stderr": ""
+  }
+]

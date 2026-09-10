@@ -1,0 +1,5 @@
+{
+  "exit": 1,
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.superpowers/sdd/2026-09-09-independent-feasibility/probe.py\", line 436, in <module>\n    main()\n    ~~~~^^\n  File \"/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.superpowers/sdd/2026-09-09-independent-feasibility/probe.py\", line 420, in main\n    signal.setitimer(signal.ITIMER_REAL, 0)\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.superpowers/sdd/2026-09-09-independent-feasibility/probe.py\", line 324, in expired\n    raise DiagnosticLimit(\"absolute diagnostic deadline\")\nDiagnosticLimit: absolute diagnostic deadline\n"
+}

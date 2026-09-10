@@ -1,0 +1,121 @@
+{
+  "outcome": "UNKNOWN",
+  "decision": "No feasibility witness and no infeasibility proof. Keep the approach unpromoted; neither search redesign nor template-family rejection is justified by this run alone.",
+  "scope": "Diagnostic-only independent finite-domain solver on exactly the captured three-output topology and frozen templates. No production or frozen-experiment modifications.",
+  "policy": {
+    "scope": "Diagnostic-only feasibility of the unchanged captured three-output topology and complete template domains. Not an original-budget control result.",
+    "solver": "OR-Tools CP-SAT, exactly one Boolean per distinct statically legal complete path, lazy exact cell-occupancy exclusions",
+    "wall_seconds_including_preparation": 180,
+    "audit_wall_seconds": 60,
+    "solver_workers": 1,
+    "solver_random_seed": 0,
+    "maximum_rounds": 2000,
+    "maximum_collision_cuts": 20000,
+    "maximum_expanded_candidate_cells": 40000000,
+    "diagnostic_predicate_limit": 100000000,
+    "diagnostic_candidate_limit": 200000,
+    "invariants": [
+      "Enumerate every frozen domain candidate; do not shorten domains or change geometry.",
+      "Collapse only identical normalized complete paths belonging to the same obligation, retaining a representative frozen candidate ID.",
+      "Cross-check static rejection against independent expanded-cell geometry; disagreement invalidates the diagnostic, never proves infeasibility.",
+      "Collision cuts exclude only simultaneous selections occupying a cell they cannot legally share under exact endpoint ownership.",
+      "A relaxed-model witness is not accepted until all selected paths pass independent complete geometry checks.",
+      "Only CP-SAT INFEASIBLE after complete domain enumeration and sound exclusions proves frozen-family infeasibility. Any diagnostic limit is UNKNOWN.",
+      "Any witness is separately replayed through the existing construction/audit path with exact problem equality, in a temporary extracted archive. It cannot open production or downstream experiment gates."
+    ]
+  },
+  "ortools_version": "9.15.6755",
+  "actual_frozen_problem_equality": true,
+  "frozen_rule_sha256": "109b02d2830cd5c6f490242fad67fc86c3f30dca8ed45bf316d43b996e6c3e8f",
+  "problem_sha256": "fc0288585c67647540b36b69e0f33979f0b8bab6a15cedad53d9065aa39faf11",
+  "complete_domain_enumeration": true,
+  "domain_totals": {
+    "enumerated": 140400,
+    "retained": 131820,
+    "exact_duplicates": 2568,
+    "static_rejected": 6012
+  },
+  "independent_static_checks": "Every enumerated candidate was checked against the independent expanded-cell oracle, or collapsed into an identical already-checked legal path in the same obligation. Zero disagreements.",
+  "expanded_candidate_cells": 30141240,
+  "preparation_seconds": 60.60378428408876,
+  "solver": {
+    "variables": 131820,
+    "calls": 37,
+    "completed_relaxed_assignments": 36,
+    "collision_exclusions": 370,
+    "last_status": "UNKNOWN",
+    "last_checkpoint_elapsed_seconds": 179.50291937869042,
+    "summed_solver_wall_seconds": 117.13009561300001,
+    "independently_validated_complete_witnesses": 0,
+    "interpretation": "OPTIMAL in intermediate rounds means feasibility of the incomplete relaxation, not collision-free template feasibility. Each rejected assignment added only exact shared-cell exclusions."
+  },
+  "existing_acceptance_audit": {
+    "status": "NOT_RUN_NO_COMPLETE_WITNESS",
+    "audit_deadline_seconds": 60,
+    "original_gates_opened": false
+  },
+  "reporting_failure": {
+    "original_process_exit": 1,
+    "failure": "The one-shot deadline alarm interrupted final timer cancellation before result.json was written.",
+    "recovery": "Classification is explicitly recovered from the saved solver checkpoint and execution traceback, not presented as an originally emitted final result.",
+    "fix": "Catch the pending one-shot deadline exception while disarming for evidence finalization.",
+    "verified": "Real SIGALRM injection reproduces missing evidence before the fix and successful UNKNOWN evidence flush after it.",
+    "full_feasibility_run_repeated": false
+  },
+  "smoke_verification": {
+    "smoke-execution.json": {
+      "exit": 0,
+      "stdout": "[{\"escape\": false, \"expected\": false, \"outcome\": \"FROZEN_FAMILY_INFEASIBLE\", \"cuts\": 2, \"rounds\": 3}, {\"escape\": true, \"expected\": true, \"outcome\": \"COMPLETE_TEMPLATE_GEOMETRY_WITNESS\", \"cuts\": 2, \"rounds\": 3}]\n",
+      "stderr": ""
+    },
+    "multi-blocker-smoke.json": {
+      "exit": 0,
+      "stdout": "[{\"ancestor_escape\": false, \"sibling_escape\": false, \"expected\": false, \"outcome\": \"FROZEN_FAMILY_INFEASIBLE\", \"cuts\": 4, \"rounds\": 3}, {\"ancestor_escape\": false, \"sibling_escape\": true, \"expected\": true, \"outcome\": \"COMPLETE_TEMPLATE_GEOMETRY_WITNESS\", \"cuts\": 4, \"rounds\": 3}, {\"ancestor_escape\": true, \"sibling_escape\": false, \"expected\": true, \"outcome\": \"COMPLETE_TEMPLATE_GEOMETRY_WITNESS\", \"cuts\": 4, \"rounds\": 3}, {\"ancestor_escape\": true, \"sibling_escape\": true, \"expected\": true, \"outcome\": \"COMPLETE_TEMPLATE_GEOMETRY_WITNESS\", \"cuts\": 4, \"rounds\": 3}]\n",
+      "stderr": ""
+    },
+    "ownership-smoke.json": {
+      "exit": 0,
+      "stdout": "{\"legal_shared_physical_endpoint_preserved\": true, \"independent_pairs\": 1}\n",
+      "stderr": ""
+    },
+    "alarm-red-green.json": {
+      "exit": 0,
+      "stdout": "[{\"corrected\": false, \"evidence_flushed\": false, \"deadline_interrupted_flush\": true}, {\"corrected\": true, \"evidence_flushed\": true, \"deadline_interrupted_flush\": false}]\n",
+      "stderr": ""
+    }
+  },
+  "ruff_exit": 0,
+  "frozen_identities": {
+    "2026-09-08-transport-first": {
+      "rule_sha256": "0004c2846e2d9da69a2738d2a976b3b6d1abad0ff67903a0ef23e35b237e4e75",
+      "sources": 23,
+      "all_hashes_match": true
+    },
+    "2026-09-09-blocker-owned-templates": {
+      "rule_sha256": "cca61b0440ef96a960ad9d5585400378645235cd6e9f745f43ba7f4deab09404",
+      "sources": 24,
+      "all_hashes_match": true
+    },
+    "2026-09-09-joint-domain-templates": {
+      "rule_sha256": "109b02d2830cd5c6f490242fad67fc86c3f30dca8ed45bf316d43b996e6c3e8f",
+      "sources": 26,
+      "all_hashes_match": true
+    }
+  },
+  "reproduction": {
+    "command": "From the project root, after extracting this reproduction archive: PYTHONPATH=src .venv/bin/python <extract>/probe.py <extract>/frozen-reproduction.zip <fresh-output-directory>",
+    "versions": "Project Python 3.14 environment and existing OR-Tools 9.15.6755 dependency; no dependency added.",
+    "runtime_scope": "180 seconds for capture, full domain preparation and solver; only a valid complete geometry witness triggers the separate 60-second diagnostic acceptance audit.",
+    "reproducibility_limit": "The worker count and seed are fixed, but a wall-time cutoff does not guarantee identical round counts on another run.",
+    "original_probe_and_checkpoint": "initial-run-evidence.zip preserves the exact executed source and its hashes. Top-level probe.py includes only the subsequent alarm-finalization repair.",
+    "frozen_archive_sha256": "47494cee11af2fc46fd597181bd147dc6234c76d5fc068f3c02a37ab2a063393",
+    "current_probe_sha256": "8504edd3bd4a39b832755f59be932808ad1ae67eafb0385d7d2b7f2c4809a338"
+  },
+  "claim_limits": [
+    "No complete template-geometry witness.",
+    "No frozen-template-family or factory infeasibility proof.",
+    "No factory acceptance audit was invoked without a witness.",
+    "No production-budget result or downstream gate acceptance.",
+    "No deadline extension or feasibility-search restart after UNKNOWN."
+  ]
+}

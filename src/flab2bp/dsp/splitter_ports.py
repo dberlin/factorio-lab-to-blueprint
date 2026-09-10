@@ -289,6 +289,14 @@ def blueprint_port_anchor(
             centre[2] + offset[2],
         )
         local_port = _inverse_projection(projection, world_port)
+        # atan2 returns principal longitude, while the area may extend past
+        # that seam. Keep the port in its host's chart before scoring its
+        # outward offset or comparing it with an adjoining belt.
+        local_port = (
+            local_port[0] + band.columns * round((x - local_port[0]) / band.columns),
+            local_port[1],
+            local_port[2],
+        )
         score = (local_port[0] - x) * axis_x + (local_port[1] - y) * axis_y
         candidates.append((score, local_port))
     return max(candidates, key=lambda candidate: candidate[0])[1]

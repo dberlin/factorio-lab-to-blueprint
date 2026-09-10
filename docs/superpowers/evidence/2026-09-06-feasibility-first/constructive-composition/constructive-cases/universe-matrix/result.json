@@ -1,0 +1,16 @@
+{
+  "case": "universe-matrix",
+  "spec_sha256": "8eb481d486228dfaed052af14cb8d8c9aeca8c1c3d35bf07fc6679cfe9bcb101",
+  "budget_s": 60.0,
+  "original_factory_gate": false,
+  "global_router_calls": 0,
+  "obligations": 443,
+  "flights_required": 431,
+  "flights_available": 24,
+  "held_out": false,
+  "outcome": "constructive-control-refused",
+  "reason": "fixed one-level-per-flight construction needs 431 flight levels; original technology provides 24",
+  "elapsed_s": 0.5108883420471102,
+  "constructed_links": 0,
+  "junctions": []
+}

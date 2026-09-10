@@ -1,0 +1,14 @@
+{
+  "case": "coated-mall",
+  "spec_sha256": "2ac9f763d8bca40a93e11f6e6c45ca41ec3fb763a501aefa97a323d18cd0f68e",
+  "budget_s": 60.0,
+  "original_factory_gate": false,
+  "global_router_calls": 0,
+  "outcome": "constructive-control-refused",
+  "reason": "capacity-first probe requires uncoated, non-prelinked interfaces",
+  "flight_allocation": [],
+  "elapsed_s": 1.0277359378524125,
+  "constructed_links": 0,
+  "junctions": [],
+  "junction_cells": []
+}

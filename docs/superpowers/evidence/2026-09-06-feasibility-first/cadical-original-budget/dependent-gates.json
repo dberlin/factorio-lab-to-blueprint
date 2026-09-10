@@ -1,0 +1,10 @@
+{
+  "control": "UNKNOWN",
+  "unsprayed-mall": "PREREQUISITE_NOT_MET: original-budget three-output",
+  "unsprayed-mall-075": "PREREQUISITE_NOT_MET: unsprayed-mall",
+  "unsprayed-mall-125": "PREREQUISITE_NOT_MET: unsprayed-mall",
+  "unsprayed-universe": "PREREQUISITE_NOT_MET: unsprayed-mall",
+  "coated-mall": "UNSUPPORTED_INTERFACE: shared spray supply",
+  "universe-matrix": "UNSUPPORTED_INTERFACE: shared spray supply",
+  "no_downstream_solver_invoked": true
+}

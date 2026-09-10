@@ -1,0 +1,140 @@
+{
+  "fractional-shared": {
+    "nodes": 2,
+    "arcs": 3,
+    "input_sha256": "d54c89dd04588a3d0bd18872fc0e271411165c756d08a8073ee0dddf3848099f",
+    "GLOP": {
+      "backend": "GLOP",
+      "version": "Glop solver v9.15.6755",
+      "structural_build_s": 0.001554728951305151,
+      "total_s": 0.0031463708728551865,
+      "queries": [
+        {
+          "blocked": false,
+          "status": "sat",
+          "constraint_s": 1.4972873032093048e-05,
+          "solve_s": 0.0007342188619077206,
+          "extract_verify_s": 0.000580803956836462,
+          "verified": true
+        },
+        {
+          "blocked": true,
+          "status": "unsat",
+          "constraint_s": 1.4911405742168427e-05,
+          "solve_s": 7.009366527199745e-05,
+          "extract_verify_s": 1.3010576367378235e-06,
+          "verified": false
+        },
+        {
+          "blocked": false,
+          "status": "sat",
+          "constraint_s": 7.241964340209961e-06,
+          "solve_s": 5.846284329891205e-05,
+          "extract_verify_s": 7.4808020144701e-05,
+          "verified": true
+        }
+      ]
+    },
+    "Z3": {
+      "backend": "Z3",
+      "version": "5.1.0",
+      "structural_build_s": 0.06485771341249347,
+      "total_s": 0.09693565405905247,
+      "queries": [
+        {
+          "blocked": false,
+          "status": "sat",
+          "constraint_s": 0.02239095326513052,
+          "solve_s": 0.001718438696116209,
+          "extract_verify_s": 0.004058062098920345,
+          "verified": true
+        },
+        {
+          "blocked": true,
+          "status": "unsat",
+          "constraint_s": 0.000943303108215332,
+          "solve_s": 0.0012991349212825298,
+          "extract_verify_s": 4.309229552745819e-06,
+          "verified": false
+        },
+        {
+          "blocked": false,
+          "status": "sat",
+          "constraint_s": 0.000609004870057106,
+          "solve_s": 0.00037818681448698044,
+          "extract_verify_s": 0.00041234632954001427,
+          "verified": true
+        }
+      ]
+    }
+  },
+  "mall": {
+    "nodes": 16261,
+    "arcs": 19590,
+    "input_sha256": "3f246392f7c1f53d658e5442b5b331132512b974e977ff081256a9c1563b00ae",
+    "GLOP": {
+      "backend": "GLOP",
+      "version": "Glop solver v9.15.6755",
+      "structural_build_s": 0.11739660007879138,
+      "total_s": 0.6980523909442127,
+      "queries": [
+        {
+          "blocked": false,
+          "status": "sat",
+          "constraint_s": 0.01981335924938321,
+          "solve_s": 0.04814991168677807,
+          "extract_verify_s": 0.18831034703180194,
+          "verified": true
+        },
+        {
+          "blocked": true,
+          "status": "unsat",
+          "constraint_s": 0.023335497826337814,
+          "solve_s": 0.01572771416977048,
+          "extract_verify_s": 3.135763108730316e-06,
+          "verified": false
+        },
+        {
+          "blocked": false,
+          "status": "sat",
+          "constraint_s": 0.019439563620835543,
+          "solve_s": 0.04567925026640296,
+          "extract_verify_s": 0.22011451004073024,
+          "verified": true
+        }
+      ]
+    },
+    "Z3": {
+      "backend": "Z3",
+      "version": "5.1.0",
+      "structural_build_s": 2.9884730027988553,
+      "total_s": 15.453191413078457,
+      "queries": [
+        {
+          "blocked": false,
+          "status": "sat",
+          "constraint_s": 3.1042729089967906,
+          "solve_s": 1.3336316170170903,
+          "extract_verify_s": 0.5533539270982146,
+          "verified": true
+        },
+        {
+          "blocked": true,
+          "status": "unsat",
+          "constraint_s": 0.8325733351521194,
+          "solve_s": 0.8766876896843314,
+          "extract_verify_s": 3.773253411054611e-06,
+          "verified": false
+        },
+        {
+          "blocked": false,
+          "status": "sat",
+          "constraint_s": 1.1481510340236127,
+          "solve_s": 3.7849687882699072,
+          "extract_verify_s": 0.7912267269566655,
+          "verified": true
+        }
+      ]
+    }
+  }
+}

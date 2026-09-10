@@ -1,0 +1,2292 @@
+{
+  "demands": [
+    {
+      "ordinal": 0,
+      "item": "carbon-nanotube",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 0,
+        "belt": 350,
+        "x": 120,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 13,
+        "belt": 3929,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 1,
+      "item": "circuit-board",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 1,
+        "belt": 453,
+        "x": 16,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 34,
+        "belt": 10781,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 2,
+      "item": "circuit-board",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 2,
+        "belt": 508,
+        "x": 8,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 40,
+        "belt": 11137,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 3,
+      "item": "coal",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 12,
+        "belt": 3805,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 4,
+      "item": "conveyor-belt-1",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 3,
+        "belt": 535,
+        "x": 8,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 4,
+        "belt": 544,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 5,
+      "item": "conveyor-belt-2",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 4,
+        "belt": 562,
+        "x": 8,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 5,
+        "belt": 571,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 6,
+      "item": "conveyor-belt-3",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 5,
+        "belt": 596,
+        "x": 8,
+        "y": 9,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 7,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 6,
+        "belt": 748,
+        "x": 72,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 1,
+        "belt": 411,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 8,
+      "item": "copper-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 6,
+        "belt": 607,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 9,
+      "item": "copper-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 7,
+        "belt": 1013,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 10,
+      "item": "electric-motor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 8,
+        "belt": 1971,
+        "x": 144,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 10,
+        "belt": 3236,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 11,
+      "item": "electric-motor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 8,
+        "belt": 1971,
+        "x": 144,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 11,
+        "belt": 3378,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 12,
+      "item": "electric-motor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 9,
+        "belt": 2885,
+        "x": 140,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 11,
+        "belt": 3378,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 13,
+      "item": "electromagnetic-turbine",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 10,
+        "belt": 3314,
+        "x": 28,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 4,
+        "belt": 549,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 14,
+      "item": "electromagnetic-turbine",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 10,
+        "belt": 3314,
+        "x": 28,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 45,
+        "belt": 11463,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 15,
+      "item": "electromagnetic-turbine",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 11,
+        "belt": 3696,
+        "x": 108,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 45,
+        "belt": 11463,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 16,
+      "item": "electromagnetic-turbine",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 11,
+        "belt": 3696,
+        "x": 108,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 46,
+        "belt": 11691,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 17,
+      "item": "energetic-graphite",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 12,
+        "belt": 3886,
+        "x": 42,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 45,
+        "belt": 11496,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 18,
+      "item": "energetic-graphite",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 12,
+        "belt": 3886,
+        "x": 42,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 46,
+        "belt": 11736,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 19,
+      "item": "fire-ice",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 16,
+        "belt": 4768,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 20,
+      "item": "fire-ice",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 17,
+        "belt": 5096,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 21,
+      "item": "frame-material",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 13,
+        "belt": 4050,
+        "x": 32,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 33,
+        "belt": 10756,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 22,
+      "item": "gear",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 14,
+        "belt": 4383,
+        "x": 148,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 3,
+        "belt": 517,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 23,
+      "item": "glass",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 15,
+        "belt": 4737,
+        "x": 30,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 36,
+        "belt": 10851,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 24,
+      "item": "graphene",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 16,
+        "belt": 4906,
+        "x": 72,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 0,
+        "belt": 0,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 25,
+      "item": "graphene",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 17,
+        "belt": 5186,
+        "x": 48,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 0,
+        "belt": 0,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 26,
+      "item": "graphene",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 17,
+        "belt": 5186,
+        "x": 48,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 33,
+        "belt": 10757,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 27,
+      "item": "high-purity-silicon",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 18,
+        "belt": 5448,
+        "x": 96,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 13,
+        "belt": 3958,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 28,
+      "item": "hydrogen",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 16,
+        "belt": 5050,
+        "x": 72,
+        "y": 10,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 29,
+      "item": "hydrogen",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 17,
+        "belt": 5234,
+        "x": 48,
+        "y": 9,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 30,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 19,
+        "belt": 5966,
+        "x": 84,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 1,
+        "belt": 424,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 31,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 22,
+        "belt": 7329,
+        "x": 63,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 14,
+        "belt": 4091,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 32,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 23,
+        "belt": 7678,
+        "x": 60,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 14,
+        "belt": 4091,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 33,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 24,
+        "belt": 7986,
+        "x": 45,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 44,
+        "belt": 11270,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 34,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 19,
+        "belt": 5801,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 35,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 20,
+        "belt": 6275,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 36,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 21,
+        "belt": 6749,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 37,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 22,
+        "belt": 7206,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 38,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 23,
+        "belt": 7561,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 39,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 24,
+        "belt": 7899,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 40,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 26,
+        "belt": 8047,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 41,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 27,
+        "belt": 8643,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 42,
+      "item": "iron-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 28,
+        "belt": 9239,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 43,
+      "item": "logistics-distributor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 25,
+        "belt": 8041,
+        "x": 4,
+        "y": 9,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 44,
+      "item": "magnet",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 26,
+        "belt": 8320,
+        "x": 138,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 29,
+        "belt": 9887,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 45,
+      "item": "magnet",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 27,
+        "belt": 8916,
+        "x": 138,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 30,
+        "belt": 10239,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 46,
+      "item": "magnet",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 28,
+        "belt": 9506,
+        "x": 135,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 29,
+        "belt": 9887,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 47,
+      "item": "magnet",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 28,
+        "belt": 9506,
+        "x": 135,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 31,
+        "belt": 10531,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 48,
+      "item": "magnetic-coil",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 29,
+        "belt": 10020,
+        "x": 68,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 8,
+        "belt": 1685,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 49,
+      "item": "magnetic-coil",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 29,
+        "belt": 10020,
+        "x": 68,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 9,
+        "belt": 2607,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 50,
+      "item": "magnetic-coil",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 30,
+        "belt": 10372,
+        "x": 68,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 9,
+        "belt": 2607,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 51,
+      "item": "magnetic-coil",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 31,
+        "belt": 10544,
+        "x": 8,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 11,
+        "belt": 3483,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 52,
+      "item": "magnetic-coil",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 31,
+        "belt": 10544,
+        "x": 8,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 35,
+        "belt": 10840,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 53,
+      "item": "microcrystalline-component",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 32,
+        "belt": 10703,
+        "x": 52,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 37,
+        "belt": 10925,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 54,
+      "item": "microcrystalline-component",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 32,
+        "belt": 10703,
+        "x": 52,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 38,
+        "belt": 11012,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 55,
+      "item": "miniature-particle-collider",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 33,
+        "belt": 10769,
+        "x": 5,
+        "y": 11,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 56,
+      "item": "photon-combiner",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 34,
+        "belt": 10823,
+        "x": 16,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 39,
+        "belt": 11113,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 57,
+      "item": "plasma-exciter",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 35,
+        "belt": 10846,
+        "x": 4,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 25,
+        "belt": 8033,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 58,
+      "item": "prism",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 36,
+        "belt": 10879,
+        "x": 16,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 34,
+        "belt": 10794,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 59,
+      "item": "processor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 37,
+        "belt": 10954,
+        "x": 16,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 25,
+        "belt": 8035,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 60,
+      "item": "processor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 37,
+        "belt": 10954,
+        "x": 16,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 39,
+        "belt": 11115,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 61,
+      "item": "ray-receiver",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 39,
+        "belt": 11125,
+        "x": 5,
+        "y": 11,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 62,
+      "item": "silicon-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 18,
+        "belt": 5259,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 63,
+      "item": "sorter-1",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 40,
+        "belt": 11167,
+        "x": 12,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 41,
+        "belt": 11185,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 64,
+      "item": "sorter-2",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 41,
+        "belt": 11198,
+        "x": 8,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 42,
+        "belt": 11212,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 65,
+      "item": "sorter-3",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 42,
+        "belt": 11225,
+        "x": 8,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 43,
+        "belt": 11239,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 66,
+      "item": "sorter-4",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 43,
+        "belt": 11259,
+        "x": 8,
+        "y": 9,
+        "z": 0
+      },
+      "sink": null,
+      "role": "output"
+    },
+    {
+      "ordinal": 67,
+      "item": "steel",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 44,
+        "belt": 11357,
+        "x": 45,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 39,
+        "belt": 11118,
+        "x": 1,
+        "y": 9,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 68,
+      "item": "stone",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 15,
+        "belt": 4680,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 69,
+      "item": "sulfuric-acid",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 47,
+        "belt": 12019,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 70,
+      "item": "super-magnetic-ring",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 45,
+        "belt": 11600,
+        "x": 36,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 5,
+        "belt": 582,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 71,
+      "item": "super-magnetic-ring",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 46,
+        "belt": 11876,
+        "x": 48,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 39,
+        "belt": 11119,
+        "x": 1,
+        "y": 10,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 72,
+      "item": "titanium-alloy",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 47,
+        "belt": 12089,
+        "x": 24,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 13,
+        "belt": 3988,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 73,
+      "item": "titanium-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 48,
+        "belt": 12219,
+        "x": 30,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 0,
+        "belt": 115,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 74,
+      "item": "titanium-ore",
+      "domain": "unsprayed",
+      "source": null,
+      "sink": {
+        "strip": 48,
+        "belt": 12162,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "external"
+    },
+    {
+      "ordinal": 75,
+      "item": "circuit-board",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 1,
+        "belt": 453,
+        "x": 16,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 37,
+        "belt": 10912,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 76,
+      "item": "circuit-board",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 1,
+        "belt": 453,
+        "x": 16,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 38,
+        "belt": 10991,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 77,
+      "item": "circuit-board",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 2,
+        "belt": 508,
+        "x": 8,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 38,
+        "belt": 10991,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 78,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 6,
+        "belt": 748,
+        "x": 72,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 2,
+        "belt": 490,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 79,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 6,
+        "belt": 748,
+        "x": 72,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 29,
+        "belt": 9822,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 80,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 6,
+        "belt": 748,
+        "x": 72,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 30,
+        "belt": 10174,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 81,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 7,
+        "belt": 1148,
+        "x": 69,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 30,
+        "belt": 10174,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 82,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 7,
+        "belt": 1148,
+        "x": 69,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 31,
+        "belt": 10526,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 83,
+      "item": "copper-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 7,
+        "belt": 1148,
+        "x": 69,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 32,
+        "belt": 10553,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 84,
+      "item": "electric-motor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 9,
+        "belt": 2885,
+        "x": 140,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 41,
+        "belt": 11180,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 85,
+      "item": "electromagnetic-turbine",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 11,
+        "belt": 3696,
+        "x": 108,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 42,
+        "belt": 11207,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 86,
+      "item": "gear",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 14,
+        "belt": 4383,
+        "x": 148,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 8,
+        "belt": 1402,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 87,
+      "item": "gear",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 14,
+        "belt": 4383,
+        "x": 148,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 9,
+        "belt": 2332,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 88,
+      "item": "graphene",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 17,
+        "belt": 5186,
+        "x": 48,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 5,
+        "belt": 576,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 89,
+      "item": "high-purity-silicon",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 18,
+        "belt": 5448,
+        "x": 96,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 32,
+        "belt": 10602,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 90,
+      "item": "high-purity-silicon",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 18,
+        "belt": 5448,
+        "x": 96,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 39,
+        "belt": 11112,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 91,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 19,
+        "belt": 5966,
+        "x": 84,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 2,
+        "belt": 495,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 92,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 19,
+        "belt": 5966,
+        "x": 84,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 3,
+        "belt": 522,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 93,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 19,
+        "belt": 5966,
+        "x": 84,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 8,
+        "belt": 1543,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 94,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 20,
+        "belt": 6440,
+        "x": 84,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 8,
+        "belt": 1543,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 95,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 20,
+        "belt": 6440,
+        "x": 84,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 9,
+        "belt": 2469,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 96,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 21,
+        "belt": 6908,
+        "x": 81,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 9,
+        "belt": 2469,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 97,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 23,
+        "belt": 7678,
+        "x": 60,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 9,
+        "belt": 2469,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 98,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 23,
+        "belt": 7678,
+        "x": 60,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 25,
+        "belt": 8032,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 99,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 23,
+        "belt": 7678,
+        "x": 60,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 40,
+        "belt": 11146,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 100,
+      "item": "iron-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 24,
+        "belt": 7986,
+        "x": 45,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 40,
+        "belt": 11146,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 101,
+      "item": "magnet",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 28,
+        "belt": 9506,
+        "x": 135,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 30,
+        "belt": 10239,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 102,
+      "item": "magnet",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 28,
+        "belt": 9506,
+        "x": 135,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 45,
+        "belt": 11530,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 103,
+      "item": "magnet",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 28,
+        "belt": 9506,
+        "x": 135,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 46,
+        "belt": 11782,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 104,
+      "item": "magnetic-coil",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 30,
+        "belt": 10372,
+        "x": 68,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 10,
+        "belt": 3261,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 105,
+      "item": "magnetic-coil",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 30,
+        "belt": 10372,
+        "x": 68,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 11,
+        "belt": 3483,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 106,
+      "item": "prism",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 36,
+        "belt": 10879,
+        "x": 16,
+        "y": 7,
+        "z": 0
+      },
+      "sink": {
+        "strip": 35,
+        "belt": 10841,
+        "x": 1,
+        "y": 3,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 107,
+      "item": "processor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 37,
+        "belt": 10954,
+        "x": 16,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 33,
+        "belt": 10759,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 108,
+      "item": "processor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 38,
+        "belt": 11057,
+        "x": 24,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 33,
+        "belt": 10759,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 109,
+      "item": "processor",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 38,
+        "belt": 11057,
+        "x": 24,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 43,
+        "belt": 11234,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 110,
+      "item": "steel",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 44,
+        "belt": 11357,
+        "x": 45,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 47,
+        "belt": 11997,
+        "x": 1,
+        "y": 2,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 111,
+      "item": "super-magnetic-ring",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 45,
+        "belt": 11600,
+        "x": 36,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 33,
+        "belt": 10762,
+        "x": 1,
+        "y": 9,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 112,
+      "item": "super-magnetic-ring",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 46,
+        "belt": 11876,
+        "x": 48,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 33,
+        "belt": 10762,
+        "x": 1,
+        "y": 9,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 113,
+      "item": "super-magnetic-ring",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 46,
+        "belt": 11876,
+        "x": 48,
+        "y": 9,
+        "z": 0
+      },
+      "sink": {
+        "strip": 43,
+        "belt": 11245,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 114,
+      "item": "titanium-alloy",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 47,
+        "belt": 12089,
+        "x": 24,
+        "y": 8,
+        "z": 0
+      },
+      "sink": {
+        "strip": 33,
+        "belt": 10763,
+        "x": 1,
+        "y": 10,
+        "z": 0
+      },
+      "role": "internal"
+    },
+    {
+      "ordinal": 115,
+      "item": "titanium-ingot",
+      "domain": "unsprayed",
+      "source": {
+        "strip": 48,
+        "belt": 12219,
+        "x": 30,
+        "y": 6,
+        "z": 0
+      },
+      "sink": {
+        "strip": 47,
+        "belt": 12042,
+        "x": 1,
+        "y": 4,
+        "z": 0
+      },
+      "role": "internal"
+    }
+  ],
+  "rates": {
+    "0": "15",
+    "1": "7/2",
+    "2": "9",
+    "3": "331/8",
+    "4": "27/2",
+    "5": "27/2",
+    "6": "27/2",
+    "7": "154/15",
+    "8": "3348/47",
+    "9": "6417/94",
+    "10": "2821/136",
+    "11": "315013/9656",
+    "12": "13457/284",
+    "13": "9/2",
+    "14": "1597/272",
+    "15": "22583/1904",
+    "16": "331/14",
+    "17": "993/112",
+    "18": "331/28",
+    "19": "693/40",
+    "20": "231/20",
+    "21": "15/4",
+    "22": "9/2",
+    "23": "147/10",
+    "24": "693/40",
+    "25": "207/40",
+    "26": "15/8",
+    "27": "15/4",
+    "28": "693/80",
+    "29": "231/40",
+    "30": "308/15",
+    "31": "174447/2780",
+    "32": "65329/1390",
+    "33": "87/2",
+    "34": "58149/695",
+    "35": "58149/695",
+    "36": "224289/2780",
+    "37": "174447/2780",
+    "38": "8307/139",
+    "39": "24921/556",
+    "40": "503539/5480",
+    "41": "503539/5480",
+    "42": "197037/2192",
+    "43": "7/20",
+    "44": "503539/5480",
+    "45": "503539/5480",
+    "46": "396313/49320",
+    "47": "529/45",
+    "48": "3789/71",
+    "49": "297493/6390",
+    "50": "959/180",
+    "51": "277/45",
+    "52": "28/5",
+    "53": "183/25",
+    "54": "549/50",
+    "55": "3/16",
+    "56": "7/2",
+    "57": "7/5",
+    "58": "7",
+    "59": "7/5",
+    "60": "7/4",
+    "61": "7/20",
+    "62": "947/10",
+    "63": "9",
+    "64": "9",
+    "65": "9",
+    "66": "9/2",
+    "67": "7",
+    "68": "147/5",
+    "69": "15",
+    "70": "9/2",
+    "71": "7",
+    "72": "15/4",
+    "73": "15/2",
+    "74": "30",
+    "75": "183/25",
+    "76": "1457/150",
+    "77": "19/15",
+    "78": "77/15",
+    "79": "8993/180",
+    "80": "9937/1692",
+    "81": "186493/4230",
+    "82": "529/90",
+    "83": "183/10",
+    "84": "9/2",
+    "85": "9/2",
+    "86": "3789/71",
+    "87": "14735/284",
+    "88": "9/2",
+    "89": "183/5",
+    "90": "7",
+    "91": "154/15",
+    "92": "9",
+    "93": "30488/695",
+    "94": "3102062/49345",
+    "95": "1026517/49345",
+    "96": "224289/2780",
+    "97": "6353/2780",
+    "98": "14/5",
+    "99": "4269/556",
+    "100": "735/556",
+    "101": "396313/49320",
+    "102": "2979/112",
+    "103": "993/28",
+    "104": "2821/136",
+    "105": "451973/6120",
+    "106": "14/5",
+    "107": "51/100",
+    "108": "99/100",
+    "109": "9/2",
+    "110": "15/2",
+    "111": "489/112",
+    "112": "9/28",
+    "113": "9/2",
+    "114": "15/4",
+    "115": "15/2"
+  }
+}

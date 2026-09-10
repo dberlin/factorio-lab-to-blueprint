@@ -1,0 +1,22 @@
+{
+  "scope": "Diagnostic-only feasibility of the unchanged captured three-output topology and complete template domains. Not an original-budget control result.",
+  "solver": "OR-Tools CP-SAT, exactly one Boolean per distinct statically legal complete path, lazy exact cell-occupancy exclusions",
+  "wall_seconds_including_preparation": 180,
+  "audit_wall_seconds": 60,
+  "solver_workers": 1,
+  "solver_random_seed": 0,
+  "maximum_rounds": 2000,
+  "maximum_collision_cuts": 20000,
+  "maximum_expanded_candidate_cells": 40000000,
+  "diagnostic_predicate_limit": 100000000,
+  "diagnostic_candidate_limit": 200000,
+  "invariants": [
+    "Enumerate every frozen domain candidate; do not shorten domains or change geometry.",
+    "Collapse only identical normalized complete paths belonging to the same obligation, retaining a representative frozen candidate ID.",
+    "Cross-check static rejection against independent expanded-cell geometry; disagreement invalidates the diagnostic, never proves infeasibility.",
+    "Collision cuts exclude only simultaneous selections occupying a cell they cannot legally share under exact endpoint ownership.",
+    "A relaxed-model witness is not accepted until all selected paths pass independent complete geometry checks.",
+    "Only CP-SAT INFEASIBLE after complete domain enumeration and sound exclusions proves frozen-family infeasibility. Any diagnostic limit is UNKNOWN.",
+    "Any witness is separately replayed through the existing construction/audit path with exact problem equality, in a temporary extracted archive. It cannot open production or downstream experiment gates."
+  ]
+}

@@ -1,0 +1,44 @@
+[
+  {
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+      "-m",
+      "2026-09-10-cadical-blocking-flow.blocking_flow_witness"
+    ],
+    "exit": 0,
+    "stdout": "{\"random_flow_and_cut_comparisons\": 64, \"wide_reference_checks\": 5663250, \"wide_current_checks\": 49502}\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+      "-m",
+      "2026-09-10-cadical-blocking-flow.capacity_runs_witness"
+    ],
+    "exit": 0,
+    "stdout": "{\"series_comparisons\": [{\"demand\": \"3\", \"achieved\": \"3\", \"arcs\": 5, \"cut\": false}, {\"demand\": \"7\", \"achieved\": \"6\", \"arcs\": 5, \"cut\": true}], \"cycle_and_mixed_labels\": \"PASS\", \"shared_producer_and_sorter_bottleneck\": \"PASS\", \"junction_allocation_boundary\": \"PASS\"}\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+      "/tmp/.ctx-mode-6n0F2V/cadical-settlement-restore-tdjy1wb3/.superpowers/sdd/2026-09-10-cadical-capacity-verdict/counterexample.py"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"scope\": \"Flow-check unit fixture, not complete physical geometry or sorter proof\",\n  \"exact_feasible_belt_flows\": {\n    \"2\": \"18\",\n    \"3\": \"6\",\n    \"4\": \"24\",\n    \"5\": \"24\"\n  },\n  \"findings\": [\n    {\n      \"check\": \"flow.belt_capacity\",\n      \"severity\": \"error\",\n      \"message\": \"belt run 1 must carry 12 items/s but its tier sustains only 6\",\n      \"buildings\": [\n        3\n      ],\n      \"detail\": {\n        \"run\": 1,\n        \"required\": \"12\",\n        \"capacity\": \"6\",\n        \"stack\": 1,\n        \"per_item\": {\n          \"intermediate\": \"12\"\n        }\n      }\n    }\n  ]\n}\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+      "-m",
+      "pytest",
+      "/tmp/.ctx-mode-6n0F2V/cadical-settlement-restore-tdjy1wb3/tests/layout/test_strip_variants.py",
+      "-k",
+      "flanked_output_drain_contains_only_productive_belts"
+    ],
+    "exit": 0,
+    "stdout": "..                                                                       [100%]\n2 passed, 118 deselected in 0.27s\n",
+    "stderr": ""
+  }
+]

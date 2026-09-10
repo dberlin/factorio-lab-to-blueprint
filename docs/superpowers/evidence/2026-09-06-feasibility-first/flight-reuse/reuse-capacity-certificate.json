@@ -1,0 +1,21 @@
+{
+  "case": "unsprayed-mall",
+  "spec_sha256": "3995a1266312d463293bae0a8e01b6f95f254550df54c56e5888e6d846e00ff3",
+  "scope": "captured adjacency, not original-factory infeasibility",
+  "cuts": [
+    {
+      "item": "copper-ingot",
+      "source_strip": 6,
+      "source_group": "copper-ingot#5",
+      "source_machines": 31,
+      "capacity": "93",
+      "forced_consumers": {
+        "1": "44/3",
+        "33": "2116/45",
+        "35": "529/12"
+      },
+      "required": "19039/180",
+      "deficit": "2299/180"
+    }
+  ]
+}

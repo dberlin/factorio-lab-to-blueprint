@@ -1,0 +1,52 @@
+[
+  {
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+      "-m",
+      "2026-09-09-cadical-neighborhood.neighborhood_witness"
+    ],
+    "exit": 0,
+    "stdout": "{\"charged_construction\": true, \"compatible_graph_cases\": 64, \"global_unsat_preserved\": true, \"native_retention_and_core_recovery\": true, \"no_unconditional_exclusion_from_holds\": true, \"worse_incumbent_does_not_relock\": true}\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+      "-m",
+      "2026-09-09-cadical-neighborhood-joint.neighborhood_witness"
+    ],
+    "exit": 0,
+    "stdout": "{\"charged_construction\": true, \"compatible_graph_cases\": 64, \"global_unsat_preserved\": true, \"native_retention_and_core_recovery\": true, \"no_unconditional_exclusion_from_holds\": true, \"worse_incumbent_does_not_relock\": true}\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+      "-m",
+      "2026-09-09-cadical-neighborhood-joint.joint_witness"
+    ],
+    "exit": 0,
+    "stdout": "{\"actual_canonical_height_pairs\": 25920, \"actual_joint_proofs\": 45, \"boundary_height_pairs\": 54, \"ownership_holes_and_opposite_anchor_sides_rejected\": true}\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+      "-c",
+      "import importlib; m=importlib.import_module('2026-09-09-cadical-neighborhood.template_experiment'); p=m.FrozenPolicy.model_validate_json(m.POLICY.read_text()); assert p.rule_sha256==m.rule_hash(); assert p.source_sha256==m.source_hashes(); assert p.manifest_sha256==m.manifest_hash(); print('restored rule/source/manifest verified')"
+    ],
+    "exit": 0,
+    "stdout": "restored rule/source/manifest verified\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+      "-c",
+      "import importlib; m=importlib.import_module('2026-09-09-cadical-neighborhood-joint.template_experiment'); p=m.FrozenPolicy.model_validate_json(m.POLICY.read_text()); assert p.rule_sha256==m.rule_hash(); assert p.source_sha256==m.source_hashes(); assert p.manifest_sha256==m.manifest_hash(); print('restored rule/source/manifest verified')"
+    ],
+    "exit": 0,
+    "stdout": "restored rule/source/manifest verified\n",
+    "stderr": ""
+  }
+]

@@ -1,0 +1,432 @@
+{
+  "case": "three-output",
+  "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+  "budget_s": 30.0,
+  "original_factory_gate": false,
+  "global_router_calls": 0,
+  "topology": {
+    "candidate_arcs": 28,
+    "selected_arcs": 26,
+    "added": 0,
+    "removed": 1
+  },
+  "obligations": 26,
+  "flights_required": 23,
+  "flights_available": 24,
+  "held_out": false,
+  "assigned_rates": {
+    "0": "5/3",
+    "1": "5/3",
+    "2": "20/3",
+    "3": "15",
+    "4": "10/3",
+    "5": "10/3",
+    "6": "10/3",
+    "7": "15/2",
+    "8": "20/3",
+    "9": "20/3",
+    "10": "20",
+    "11": "40/3",
+    "12": "50/3",
+    "13": "40/3",
+    "14": "10/3",
+    "15": "20/3",
+    "16": "30",
+    "17": "20/3",
+    "18": "15",
+    "19": "20/3",
+    "20": "35/6",
+    "21": "15",
+    "22": "15",
+    "23": "10/3",
+    "24": "10/3",
+    "25": "25/3"
+  },
+  "outcome": "constructive-control-refused",
+  "reason": "no legal reused level on fixed flight: hydrogen, internal",
+  "flight_allocation": [
+    {
+      "id": 0,
+      "item": "graphene",
+      "role": "local-source",
+      "level": 1,
+      "exclusive_level": 1,
+      "predecessors": [],
+      "rejected": []
+    },
+    {
+      "id": 1,
+      "item": "casimir-crystal",
+      "role": "internal",
+      "level": 3,
+      "exclusive_level": 3,
+      "predecessors": [],
+      "rejected": []
+    },
+    {
+      "id": 2,
+      "item": "casimir-crystal",
+      "role": "internal",
+      "level": 4,
+      "exclusive_level": 4,
+      "predecessors": [],
+      "rejected": [
+        {
+          "level": 3,
+          "reason": "horizontal-overlap"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "item": "circuit-board",
+      "role": "internal",
+      "level": 3,
+      "exclusive_level": 5,
+      "predecessors": [],
+      "rejected": []
+    },
+    {
+      "id": 4,
+      "item": "glass",
+      "role": "internal",
+      "level": 3,
+      "exclusive_level": 6,
+      "predecessors": [],
+      "rejected": []
+    },
+    {
+      "id": 5,
+      "item": "graphene",
+      "role": "internal",
+      "level": 5,
+      "exclusive_level": 7,
+      "predecessors": [],
+      "rejected": [
+        {
+          "level": 3,
+          "reason": "horizontal-overlap"
+        },
+        {
+          "level": 4,
+          "reason": "horizontal-overlap"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "item": "graphene",
+      "role": "internal",
+      "level": 6,
+      "exclusive_level": 8,
+      "predecessors": [],
+      "rejected": [
+        {
+          "level": 3,
+          "reason": "horizontal-overlap"
+        },
+        {
+          "level": 4,
+          "reason": "horizontal-overlap"
+        },
+        {
+          "level": 5,
+          "reason": "horizontal-overlap"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "item": "hydrogen",
+      "role": "internal",
+      "level": null,
+      "minimum": 3,
+      "rejected": [
+        {
+          "level": 3,
+          "reason": "horizontal-overlap"
+        },
+        {
+          "level": 4,
+          "reason": "horizontal-overlap"
+        },
+        {
+          "level": 5,
+          "reason": "horizontal-overlap"
+        },
+        {
+          "level": 6,
+          "reason": "horizontal-overlap"
+        },
+        {
+          "level": 7,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 8,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 9,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 10,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 11,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 12,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 13,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 14,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 15,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 16,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 17,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 18,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 19,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 20,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 21,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 22,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 23,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 24,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 25,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        },
+        {
+          "level": 26,
+          "occupied": [
+            68,
+            75,
+            1
+          ],
+          "fixed": [
+            68,
+            75,
+            1
+          ]
+        }
+      ]
+    }
+  ],
+  "elapsed_s": 0.508621372282505,
+  "constructed_links": 10,
+  "junctions": [
+    2924,
+    2928,
+    2937,
+    2946
+  ]
+}

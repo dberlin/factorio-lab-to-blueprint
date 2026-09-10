@@ -1,0 +1,17 @@
+{
+  "case": "unsprayed-mall-125",
+  "spec_sha256": "8b767432f5260328ab80cbf2d8528ec8c02475d81a52074e8b242fa3db2a89e9",
+  "budget_s": 60.0,
+  "original_factory_gate": false,
+  "global_router_calls": 0,
+  "obligations": 161,
+  "flights_required": 152,
+  "flights_available": 24,
+  "held_out": true,
+  "outcome": "constructive-control-refused",
+  "reason": "captured adjacency cannot carry exact original rates: 19220849/4248/36289/8; unserved={\"('consumer', 38, 'copper-ingot')\": '24305/2124'}; unused={\"('producer', 7, 'copper-ingot')\": '24305/2124'}",
+  "flight_allocation": [],
+  "elapsed_s": 1.2003881810232997,
+  "constructed_links": 0,
+  "junctions": []
+}

@@ -1,0 +1,15 @@
+{
+  "command": [
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+    "-m",
+    "2026-09-10-cadical-endpoint-trace.hypothesis"
+  ],
+  "exit": 0,
+  "stdout": "{\"scope\": \"Diagnostic counterfactual only; source, gate and audit policies unchanged\", \"created_merges\": [14306, 14331, 14798, 14823], \"ordinary_strips\": 52, \"dead_branches\": [{\"target\": 14306, \"dead_prefix\": [14302, 14303, 14304, 14305], \"declared_port_overlap\": []}, {\"target\": 14331, \"dead_prefix\": [14327, 14328, 14329, 14330], \"declared_port_overlap\": []}, {\"target\": 14798, \"dead_prefix\": [14794, 14795, 14796, 14797], \"declared_port_overlap\": []}, {\"target\": 14823, \"dead_prefix\": [14819, 14820, 14821, 14822], \"declared_port_overlap\": []}], \"removed_belts\": 16, \"remaining_buildings\": 97225, \"native_calls\": 0, \"full_validator_or_codec_run\": false}\n",
+  "stderr": "",
+  "member_hashes_verified": 94,
+  "native_solver_run": false,
+  "full_emission_replay": false,
+  "exact_hypothesis_result_reproduced": true,
+  "temporary_extraction_removed": true
+}

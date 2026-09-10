@@ -1,0 +1,99 @@
+{
+  "diagnostic_only": true,
+  "decision": "The frozen finite template family is geometrically feasible. Z3 and CaDiCaL both produce independently checked complete selections and validator-complete constructions. No production promotion.",
+  "allowance": {
+    "feasibility_including_capture_preparation_seconds": 180,
+    "audit_if_witness_seconds": 60,
+    "workers": 1,
+    "seed": 0
+  },
+  "versions": {
+    "z3": "5.1.0.0",
+    "python_sat": "1.9.dev15",
+    "cadical": "1.9.5 via Cadical195 installed binding documentation",
+    "cp_sat": "9.15.6755"
+  },
+  "problem_sha256": "fc0288585c67647540b36b69e0f33979f0b8bab6a15cedad53d9065aa39faf11",
+  "frozen_rule_sha256": "109b02d2830cd5c6f490242fad67fc86c3f30dca8ed45bf316d43b996e6c3e8f",
+  "input_archive_sha256": "47494cee11af2fc46fd597181bd147dc6234c76d5fc068f3c02a37ab2a063393",
+  "domain_totals": {
+    "domains": 26,
+    "enumerated": 140400,
+    "static_rejected": 6012,
+    "exact_duplicates": 2568,
+    "retained": 131820,
+    "expanded_candidate_cells": 30141240
+  },
+  "results": {
+    "z3": {
+      "outcome": "COMPLETE_TEMPLATE_GEOMETRY_WITNESS",
+      "preparation_seconds": 64.01196935866028,
+      "feasibility_elapsed_seconds": 92.2055349717848,
+      "solver_variables": 131820,
+      "rounds": 13,
+      "cuts": 146,
+      "solver_wall_seconds": 6.915758084505796,
+      "audit_seconds": 15.010993449017406,
+      "audit_outcome": "VALIDATOR_COMPLETE_WITNESS",
+      "validator_checks": 67,
+      "validator_errors": 0,
+      "geometry_audits_passed": true,
+      "rate_status": "RATE_REALIZATION_UNPROVED",
+      "original_factory_gate": false,
+      "buildings": 8638,
+      "area": 39308,
+      "source_hashes_verified": true
+    },
+    "cadical": {
+      "outcome": "COMPLETE_TEMPLATE_GEOMETRY_WITNESS",
+      "preparation_seconds": 62.225022049155086,
+      "feasibility_elapsed_seconds": 91.2778619308956,
+      "solver_variables": 735554,
+      "rounds": 53,
+      "cuts": 654,
+      "solver_wall_seconds": 16.20118401478976,
+      "audit_seconds": 12.008196456823498,
+      "audit_outcome": "VALIDATOR_COMPLETE_WITNESS",
+      "validator_checks": 67,
+      "validator_errors": 0,
+      "geometry_audits_passed": true,
+      "rate_status": "RATE_REALIZATION_UNPROVED",
+      "original_factory_gate": false,
+      "buildings": 6587,
+      "area": 39942,
+      "source_hashes_verified": true,
+      "candidate_variables": 131820,
+      "auxiliary_variables": 603734,
+      "clauses_added": 1810548,
+      "encoding_seconds": 8.160808100830764,
+      "clause_addition_seconds": 1.6094057918526232,
+      "native_calls": 690
+    },
+    "cp_sat": {
+      "outcome": "UNKNOWN",
+      "last_checkpoint_seconds": 179.50291937869042,
+      "preparation_seconds": 60.60378428408876,
+      "rounds": 37,
+      "cuts": 370,
+      "audit": "not invoked; no geometry witness",
+      "provenance": "prior run recovered checkpoint, not rerun"
+    }
+  },
+  "runs_overlap": false,
+  "claim_limits": [
+    "One case, one run per backend; not a statistical benchmark or engine-only causal comparison.",
+    "Logical compatibility problem shared; cardinality encodings, assignments and resulting lazy cuts differ.",
+    "Z3 QF_FD retains one solver; CaDiCaL retains one solver with sequential-counter CNF. CP-SAT reference uses its original solve loop.",
+    "CaDiCaL native interruption unsupported; shared external hard-deadline supervisor verified with a native sleeping child.",
+    "All validator checks run, but warnings remain, including 317-tile width; no terrain or in-game paste proof.",
+    "Both rate models remain incomplete: cargo stacking and junction dynamics/nonstarvation unproved; upper-bound flow feasibility is not rate realization.",
+    "No original-budget success, downstream gate opening, production edits, dependency lockfile changes or project-wide test claim."
+  ],
+  "reproduce": {
+    "python": "project Python 3.14.7 environment with existing project dependencies",
+    "z3_install": "uv pip install --python <project>/.venv/bin/python --target <extract>/z3/deps z3-solver==5.1.0.0",
+    "cadical_install": "uv pip install --python <project>/.venv/bin/python --target <extract>/cadical/deps python-sat==1.9.dev15 six==1.17.0",
+    "command": "<project>/.venv/bin/python <extract>/shared/run_probe.py <project> <extract>/<z3|cadical> <extract>/frozen-input.zip <new-output-dir>",
+    "backend_deps": "Isolated pinned installations omitted from archive; project dependency environment required."
+  }
+}

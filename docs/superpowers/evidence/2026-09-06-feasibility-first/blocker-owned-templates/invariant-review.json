@@ -1,0 +1,12 @@
+{
+  "review_kind": "Inline invariant review supported by executable witnesses; not an independent reviewer claim",
+  "selection_lifetime": "A blocker bucket is created only after the corresponding candidate is selected. It is popped and fully drained on removal, before another candidate can be selected for that domain.",
+  "deletion_uniqueness": "Both selection and forward checking call candidate only for live IDs. Rejection removes the ID before adding one bucket entry, preventing duplicate ownership.",
+  "static_safety": "Static failures enter bad bits and no dynamic bucket. Existing restore logic never restores a static-bad ID.",
+  "rollback_safety": "Chronological DFS removes child selections before an ancestor. Retaining an ancestor bucket therefore cannot preserve a conflict after its actual blocker has changed.",
+  "bounds": "Total live dynamic entries are bounded by candidate count and candidate-work allowance. Bucket containers are bounded by selected obligation count. Every drain iteration checks the shared deadline.",
+  "caller_contract": "select input and result types unchanged; runtime and existing witnesses pass. Admission adds the explicit blocker_bucket_bound field.",
+  "evidence": ["rollback-red.json", "rollback-green.json", "template_rollback_witness-execution.json", "template_paths_witness-execution.json", "typecheck-execution.json"],
+  "remaining_correctness_blockers_identified": [],
+  "factory_gate": "POLICY_BOUND; no complete construction or rated acceptance"
+}

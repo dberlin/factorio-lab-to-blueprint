@@ -1,0 +1,107 @@
+{
+  "budget_s": 30.0,
+  "command": [
+    "capture_replay.py",
+    "web",
+    "30"
+  ],
+  "cwd": "/tmp/flab-url-refusal-27483797/evidence/replay-v2-web-30s",
+  "details": {
+    "attempt_failures": [
+      {
+        "candidate": "no-proliferator",
+        "projection_failures": [],
+        "reason": "every packing that wired was rejected by our own validator (flow.self_loop_primed, flow.conservation; findings: flow.self_loop_primed (): 'hydrogen''s loop lane does not close: x-ray-cracking's own output sorter never reaches its own input pickups, so there is no lane to prime and the group has no source of it ({'item': 'hydrogen', 'recipe_id': 'x-ray-cracking'}); flow.conservation (140, 279, 280, 281, 1245): hydrogen: directed flow obligations are short by at least 47/80 items/s ({'item': 'hydrogen', 'demand': '61/3', 'supply': '4739/240', 'shortfall': '47/80'})); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run",
+        "stats": {
+          "process_peak_rss_kib": 257524,
+          "process_system_cpu_s": 0.716175,
+          "process_user_cpu_s": 26.655142000000005,
+          "process_wall_time_s": 27.373213103972375
+        },
+        "strategy": "freeform"
+      },
+      {
+        "candidate": "no-proliferator",
+        "projection_failures": [],
+        "reason": "all 2 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout",
+        "stats": {
+          "process_peak_rss_kib": 183884,
+          "process_system_cpu_s": 3.699999999999537e-05,
+          "process_user_cpu_s": 0.0061749999999998195,
+          "process_wall_time_s": 29.01337904157117
+        },
+        "strategy": "sequence-pair"
+      },
+      {
+        "candidate": "all-products",
+        "projection_failures": [],
+        "reason": "the 30s deadline passed with no completed packing of 39 strips; 1 pack was routed in that time and the best of them still left 147 nets unrouted (worst 147), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec",
+        "stats": {
+          "process_peak_rss_kib": 241064,
+          "process_system_cpu_s": 0.924298,
+          "process_user_cpu_s": 27.903751,
+          "process_wall_time_s": 28.840249747037888
+        },
+        "strategy": "freeform"
+      },
+      {
+        "candidate": "all-products",
+        "projection_failures": [],
+        "reason": "all 2 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout",
+        "stats": {
+          "process_peak_rss_kib": 183884,
+          "process_system_cpu_s": 4.000000000001225e-05,
+          "process_user_cpu_s": 0.005621999999999794,
+          "process_wall_time_s": 30.666380702983588
+        },
+        "strategy": "sequence-pair"
+      },
+      {
+        "candidate": "output-products",
+        "projection_failures": [],
+        "reason": "the 30s deadline passed with no completed packing of 39 strips; 1 pack was routed in that time and the best of them still left 2 nets unrouted (worst 2), so a longer clock alone would not have wired this spec; 1 other pack stopped during exact preparation. This is a REFUSAL and not a verdict on the spec",
+        "stats": {
+          "process_peak_rss_kib": 258736,
+          "process_system_cpu_s": 0.7278319999999999,
+          "process_user_cpu_s": 27.898269,
+          "process_wall_time_s": 28.640138851013035
+        },
+        "strategy": "freeform"
+      },
+      {
+        "candidate": "output-products",
+        "projection_failures": [],
+        "reason": "all 2 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout",
+        "stats": {
+          "process_peak_rss_kib": 183884,
+          "process_system_cpu_s": 0.0,
+          "process_user_cpu_s": 0.006638000000000588,
+          "process_wall_time_s": 29.23249391000718
+        },
+        "strategy": "sequence-pair"
+      }
+    ],
+    "attempt_reasons": [
+      "freeform/no-proliferator: every packing that wired was rejected by our own validator (flow.self_loop_primed, flow.conservation; findings: flow.self_loop_primed (): 'hydrogen''s loop lane does not close: x-ray-cracking's own output sorter never reaches its own input pickups, so there is no lane to prime and the group has no source of it ({'item': 'hydrogen', 'recipe_id': 'x-ray-cracking'}); flow.conservation (140, 279, 280, 281, 1245): hydrogen: directed flow obligations are short by at least 47/80 items/s ({'item': 'hydrogen', 'demand': '61/3', 'supply': '4739/240', 'shortfall': '47/80'})); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run",
+      "sequence-pair/no-proliferator: all 2 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout",
+      "freeform/all-products: the 30s deadline passed with no completed packing of 39 strips; 1 pack was routed in that time and the best of them still left 147 nets unrouted (worst 147), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec",
+      "sequence-pair/all-products: all 2 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout",
+      "freeform/output-products: the 30s deadline passed with no completed packing of 39 strips; 1 pack was routed in that time and the best of them still left 2 nets unrouted (worst 2), so a longer clock alone would not have wired this spec; 1 other pack stopped during exact preparation. This is a REFUSAL and not a verdict on the spec",
+      "sequence-pair/output-products: all 2 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout"
+    ],
+    "budget_s": 30.0,
+    "projection_failures": [],
+    "reason": "freeform/no-proliferator: every packing that wired was rejected by our own validator (flow.self_loop_primed, flow.conservation; findings: flow.self_loop_primed (): 'hydrogen''s loop lane does not close: x-ray-cracking's own output sorter never reaches its own input pickups, so there is no lane to prime and the group has no source of it ({'item': 'hydrogen', 'recipe_id': 'x-ray-cracking'}); flow.conservation (140, 279, 280, 281, 1245): hydrogen: directed flow obligations are short by at least 47/80 items/s ({'item': 'hydrogen', 'demand': '61/3', 'supply': '4739/240', 'shortfall': '47/80'})); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run; sequence-pair/no-proliferator: all 2 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; freeform/all-products: the 30s deadline passed with no completed packing of 39 strips; 1 pack was routed in that time and the best of them still left 147 nets unrouted (worst 147), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec; sequence-pair/all-products: all 2 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; freeform/output-products: the 30s deadline passed with no completed packing of 39 strips; 1 pack was routed in that time and the best of them still left 2 nets unrouted (worst 2), so a longer clock alone would not have wired this spec; 1 other pack stopped during exact preparation. This is a REFUSAL and not a verdict on the spec; sequence-pair/output-products: all 2 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout",
+    "spec_label": "no-proliferator, all-products, output-products",
+    "stats": {}
+  },
+  "elapsed_s": 32.89713183324784,
+  "exception_type": "NoValidLayout",
+  "finished_unix_s": 1789052656.7638729,
+  "message": "no valid layout for no-proliferator, all-products, output-products after 30s: freeform/no-proliferator: every packing that wired was rejected by our own validator (flow.self_loop_primed, flow.conservation; findings: flow.self_loop_primed (): 'hydrogen''s loop lane does not close: x-ray-cracking's own output sorter never reaches its own input pickups, so there is no lane to prime and the group has no source of it ({'item': 'hydrogen', 'recipe_id': 'x-ray-cracking'}); flow.conservation (140, 279, 280, 281, 1245): hydrogen: directed flow obligations are short by at least 47/80 items/s ({'item': 'hydrogen', 'demand': '61/3', 'supply': '4739/240', 'shortfall': '47/80'})); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run; sequence-pair/no-proliferator: all 2 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; freeform/all-products: the 30s deadline passed with no completed packing of 39 strips; 1 pack was routed in that time and the best of them still left 147 nets unrouted (worst 147), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec; sequence-pair/all-products: all 2 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; freeform/output-products: the 30s deadline passed with no completed packing of 39 strips; 1 pack was routed in that time and the best of them still left 2 nets unrouted (worst 2), so a longer clock alone would not have wired this spec; 1 other pack stopped during exact preparation. This is a REFUSAL and not a verdict on the spec; sequence-pair/output-products: all 2 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.",
+  "source_commit": "27483797fe9df3e8f1e22635b80953e500bdb842",
+  "started_unix_s": 1789052623.8667395,
+  "status": "refused",
+  "surface": "web",
+  "trace_enabled": false
+}

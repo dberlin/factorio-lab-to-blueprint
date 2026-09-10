@@ -1,0 +1,125 @@
+{
+  "kind": "derived-two-unit-mismatch",
+  "original_factory_gate": false,
+  "spec_sha256": "4e006b2eb388986cb301669a8b4bdc76bc64ffd6ddf8e5c8a5c3eebe82914f4a",
+  "budget_s": 30,
+  "global_router_calls": 0,
+  "lane_assignment": [
+    {
+      "item": "circuit-board",
+      "src": {
+        "block": 0,
+        "building": 18,
+        "item": "circuit-board",
+        "rate": "10/3"
+      },
+      "dst": {
+        "block": 1,
+        "building": 54,
+        "item": "circuit-board",
+        "rate": "4/3"
+      },
+      "rate": "4/3"
+    },
+    {
+      "item": "circuit-board",
+      "src": {
+        "block": 0,
+        "building": 18,
+        "item": "circuit-board",
+        "rate": "10/3"
+      },
+      "dst": {
+        "block": 1,
+        "building": 81,
+        "item": "circuit-board",
+        "rate": "4/3"
+      },
+      "rate": "4/3"
+    },
+    {
+      "item": "circuit-board",
+      "src": {
+        "block": 0,
+        "building": 18,
+        "item": "circuit-board",
+        "rate": "10/3"
+      },
+      "dst": {
+        "block": 1,
+        "building": 108,
+        "item": "circuit-board",
+        "rate": "4/3"
+      },
+      "rate": "2/3"
+    },
+    {
+      "item": "circuit-board",
+      "src": {
+        "block": 0,
+        "building": 45,
+        "item": "circuit-board",
+        "rate": "10/3"
+      },
+      "dst": {
+        "block": 1,
+        "building": 108,
+        "item": "circuit-board",
+        "rate": "4/3"
+      },
+      "rate": "2/3"
+    },
+    {
+      "item": "circuit-board",
+      "src": {
+        "block": 0,
+        "building": 45,
+        "item": "circuit-board",
+        "rate": "10/3"
+      },
+      "dst": {
+        "block": 1,
+        "building": 135,
+        "item": "circuit-board",
+        "rate": "4/3"
+      },
+      "rate": "4/3"
+    },
+    {
+      "item": "circuit-board",
+      "src": {
+        "block": 0,
+        "building": 45,
+        "item": "circuit-board",
+        "rate": "10/3"
+      },
+      "dst": {
+        "block": 1,
+        "building": 162,
+        "item": "circuit-board",
+        "rate": "4/3"
+      },
+      "rate": "4/3"
+    }
+  ],
+  "checks_run": 67,
+  "errors": 0,
+  "skipped": [],
+  "area": 5959,
+  "bounds": [
+    0,
+    0,
+    58,
+    100
+  ],
+  "outcome": "local-composition-clean",
+  "buildings": 1390,
+  "within_budget": true,
+  "elapsed_s": 1.2269061938859522,
+  "junctions": [
+    189,
+    197,
+    205
+  ],
+  "constructed_links": 23
+}

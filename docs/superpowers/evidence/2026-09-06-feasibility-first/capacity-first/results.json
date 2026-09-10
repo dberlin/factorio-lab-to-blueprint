@@ -1,0 +1,7011 @@
+{
+  "decision": "NO-GO for production promotion; exact flow and local interfaces demonstrated, fixed global geometry rejected",
+  "source_sha256": {
+    "2026-09-08-transport-first/capacity-pyrightconfig.json": "65b3bd50e4e8c03cd0e60686f5e78810bb53616adb72983c1376e862ae92dd71",
+    "2026-09-08-transport-first/capacity_geometry_audit.py": "0927f461182d0472a49c347ec8ebaa77391c3fe74b5ac2ab4342718798534fef",
+    "2026-09-08-transport-first/capacity_junction_witness.py": "c55b299adee5e3e8798514c08da9a1d1a1911c392df859bbcdf8c4177f70a7a4",
+    "2026-09-08-transport-first/capacity_topology.py": "ae76399af5d2d6d6c6f02cd938cc33255e2ae67e2afad21d68f904ad3ed7d196",
+    "2026-09-08-transport-first/channel_mechanics.py": "f1b9d160cbc89d95531a38aff92d01aea4b4f76cbd8468053246a6bb241ad470",
+    "2026-09-08-transport-first/channel_probe.py": "003c03bf6e6c0419f2860cb7ae986a46969a48fb069b05485cff7d9de559a1b0",
+    "2026-09-08-transport-first/constructive_composition.py": "ae00963a05dbd1943e2d486aa92180e9d7cae00fbac6dd63993e20983e497694",
+    "2026-09-08-transport-first/constructive_control.py": "5b199540db0a7ae8d0ce3e4af18847bfe82da23d67b05be07befe07652c65dbb",
+    "2026-09-08-transport-first/flight_reuse.py": "b5848556a3e3ff060d14b3cc5b6b717df36905b8bd8b8d6d1707c4f41954ae78",
+    "2026-09-08-transport-first/frozen/coated-mall.json": "2ac9f763d8bca40a93e11f6e6c45ca41ec3fb763a501aefa97a323d18cd0f68e",
+    "2026-09-08-transport-first/frozen/manifest.json": "199848529132a73724971e833c716060ae31b0b529b24c340ad8e16fc47261f9",
+    "2026-09-08-transport-first/frozen/three-output.json": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+    "2026-09-08-transport-first/frozen/universe-matrix.json": "8eb481d486228dfaed052af14cb8d8c9aeca8c1c3d35bf07fc6679cfe9bcb101",
+    "2026-09-08-transport-first/frozen/unsprayed-mall-075.json": "d6aade99fcafb5bdb4603a3cdde32115632305d3cf0bbec5a74f6fd53588e54c",
+    "2026-09-08-transport-first/frozen/unsprayed-mall-125.json": "8b767432f5260328ab80cbf2d8528ec8c02475d81a52074e8b242fa3db2a89e9",
+    "2026-09-08-transport-first/frozen/unsprayed-mall.json": "3995a1266312d463293bae0a8e01b6f95f254550df54c56e5888e6d846e00ff3",
+    "2026-09-08-transport-first/frozen/unsprayed-universe.json": "8337dfe1999a9f82d1bc8c92649db1fcaf1621dd3ef112bf9540ad9978d35033",
+    "2026-09-08-transport-first/junction_tree.py": "3846bf4af48af73e7c80d786b843e4170931b5f7c50fafb2ba1c0ec4d4335aec",
+    "2026-09-08-transport-first/planned_service.py": "bd2f3a2dfa1da3e90a885701dcfa97cb5bb9a6cef04277d97dea79da2c4fe592",
+    "2026-09-08-transport-first/reuse_capacity_certificate.py": "765b1d05de8d7f4ee0f5e3814dfa4df1a75fef681d54d32cfb9a4c7e563cb0fd",
+    "2026-09-08-transport-first/run_experiment.py": "1a115b159944b93cfa99cdfc7b88eecc171d07f86468b08334abab58fcb803a8",
+    "2026-09-08-transport-first/transport_first.py": "2202f3d6e73a83e204a01345704f232713910bb6f200f87d13f1431f63619fdd"
+  },
+  "runs": [
+    {
+      "case": "three-output",
+      "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+      "budget_s": 30.0,
+      "original_factory_gate": true,
+      "global_router_calls": 0,
+      "topology": {
+        "candidate_arcs": 28,
+        "selected_arcs": 26,
+        "added": 0,
+        "removed": 1
+      },
+      "obligations": 26,
+      "flights_required": 26,
+      "flights_available": 24,
+      "held_out": false,
+      "assigned_rates": {
+        "0": "5/3",
+        "1": "5/3",
+        "2": "20/3",
+        "3": "15",
+        "4": "10/3",
+        "5": "10/3",
+        "6": "10/3",
+        "7": "15/2",
+        "8": "20/3",
+        "9": "20/3",
+        "10": "20",
+        "11": "40/3",
+        "12": "50/3",
+        "13": "40/3",
+        "14": "10/3",
+        "15": "20/3",
+        "16": "30",
+        "17": "20/3",
+        "18": "15",
+        "19": "20/3",
+        "20": "35/6",
+        "21": "15",
+        "22": "15",
+        "23": "10/3",
+        "24": "10/3",
+        "25": "25/3"
+      },
+      "checks_run": 67,
+      "errors": 0,
+      "skipped": [],
+      "area": 36722,
+      "bounds": [
+        0,
+        0,
+        300,
+        121
+      ],
+      "outcome": "original-clean",
+      "buildings": 8213,
+      "flight_allocation": [
+        {
+          "id": 0,
+          "item": "graphene",
+          "role": "local-source",
+          "level": 1,
+          "exclusive_level": 1,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 1,
+          "item": "casimir-crystal",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 3,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 2,
+          "item": "casimir-crystal",
+          "role": "internal",
+          "level": 4,
+          "exclusive_level": 4,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "item": "circuit-board",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 5,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 4,
+          "item": "glass",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 6,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 5,
+          "item": "graphene",
+          "role": "internal",
+          "level": 5,
+          "exclusive_level": 7,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "item": "graphene",
+          "role": "internal",
+          "level": 6,
+          "exclusive_level": 8,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "item": "hydrogen",
+          "role": "internal",
+          "level": 7,
+          "exclusive_level": 9,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "item": "high-purity-silicon",
+          "role": "internal",
+          "level": 4,
+          "exclusive_level": 10,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "item": "microcrystalline-component",
+          "role": "internal",
+          "level": 8,
+          "exclusive_level": 11,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "item": "titanium-glass",
+          "role": "internal",
+          "level": 9,
+          "exclusive_level": 12,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "item": "hydrogen",
+          "role": "external",
+          "level": 3,
+          "exclusive_level": 13,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 12,
+          "item": "optical-grating-crystal",
+          "role": "external",
+          "level": 4,
+          "exclusive_level": 14,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 14,
+          "item": "optical-grating-crystal",
+          "role": "external",
+          "level": 8,
+          "exclusive_level": 16,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 15,
+          "item": "copper-ingot",
+          "role": "external",
+          "level": 10,
+          "exclusive_level": 17,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 16,
+          "item": "iron-ingot",
+          "role": "external",
+          "level": 11,
+          "exclusive_level": 18,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 17,
+          "item": "stone",
+          "role": "external",
+          "level": 12,
+          "exclusive_level": 19,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 18,
+          "item": "fire-ice",
+          "role": "external",
+          "level": 13,
+          "exclusive_level": 20,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 19,
+          "item": "silicon-ore",
+          "role": "external",
+          "level": 5,
+          "exclusive_level": 21,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 20,
+          "item": "copper-ingot",
+          "role": "external",
+          "level": 6,
+          "exclusive_level": 22,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 21,
+          "item": "high-purity-silicon",
+          "role": "external",
+          "level": 7,
+          "exclusive_level": 23,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 22,
+          "item": "titanium-ingot",
+          "role": "external",
+          "level": 14,
+          "exclusive_level": 24,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 23,
+          "item": "water",
+          "role": "external",
+          "level": 15,
+          "exclusive_level": 25,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 14,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 24,
+          "item": "plane-filter",
+          "role": "output",
+          "level": 3,
+          "exclusive_level": 26,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 25,
+          "item": "processor",
+          "role": "output",
+          "level": 4,
+          "exclusive_level": 27,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 26,
+          "item": "titanium-glass",
+          "role": "output",
+          "level": 4,
+          "exclusive_level": 28,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "item": "hydrogen",
+          "role": "external",
+          "level": 9,
+          "exclusive_level": 15,
+          "predecessors": [
+            14
+          ],
+          "rejected": []
+        }
+      ],
+      "elapsed_s": 3.42546643409878,
+      "constructed_links": 32,
+      "junctions": [
+        2924,
+        2932,
+        2941,
+        2950
+      ],
+      "junction_cells": [
+        [
+          70,
+          79,
+          0
+        ],
+        [
+          129,
+          38,
+          0
+        ],
+        [
+          5,
+          27,
+          0
+        ],
+        [
+          129,
+          24,
+          0
+        ]
+      ]
+    },
+    {
+      "case": "three-output",
+      "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+      "budget_s": 30.0,
+      "original_factory_gate": true,
+      "global_router_calls": 0,
+      "topology": {
+        "candidate_arcs": 28,
+        "selected_arcs": 26,
+        "added": 0,
+        "removed": 1
+      },
+      "obligations": 26,
+      "flights_required": 26,
+      "flights_available": 24,
+      "held_out": false,
+      "assigned_rates": {
+        "0": "5/3",
+        "1": "5/3",
+        "2": "20/3",
+        "3": "15",
+        "4": "10/3",
+        "5": "10/3",
+        "6": "10/3",
+        "7": "15/2",
+        "8": "20/3",
+        "9": "20/3",
+        "10": "20",
+        "11": "40/3",
+        "12": "50/3",
+        "13": "40/3",
+        "14": "10/3",
+        "15": "20/3",
+        "16": "30",
+        "17": "20/3",
+        "18": "15",
+        "19": "20/3",
+        "20": "35/6",
+        "21": "15",
+        "22": "15",
+        "23": "10/3",
+        "24": "10/3",
+        "25": "25/3"
+      },
+      "checks_run": 67,
+      "errors": 0,
+      "skipped": [],
+      "area": 36722,
+      "bounds": [
+        0,
+        0,
+        300,
+        121
+      ],
+      "outcome": "original-clean",
+      "buildings": 8213,
+      "flight_allocation": [
+        {
+          "id": 0,
+          "item": "graphene",
+          "role": "local-source",
+          "level": 1,
+          "exclusive_level": 1,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 1,
+          "item": "casimir-crystal",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 3,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 2,
+          "item": "casimir-crystal",
+          "role": "internal",
+          "level": 4,
+          "exclusive_level": 4,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "item": "circuit-board",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 5,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 4,
+          "item": "glass",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 6,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 5,
+          "item": "graphene",
+          "role": "internal",
+          "level": 5,
+          "exclusive_level": 7,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "item": "graphene",
+          "role": "internal",
+          "level": 6,
+          "exclusive_level": 8,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "item": "hydrogen",
+          "role": "internal",
+          "level": 7,
+          "exclusive_level": 9,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "item": "high-purity-silicon",
+          "role": "internal",
+          "level": 4,
+          "exclusive_level": 10,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "item": "microcrystalline-component",
+          "role": "internal",
+          "level": 8,
+          "exclusive_level": 11,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "item": "titanium-glass",
+          "role": "internal",
+          "level": 9,
+          "exclusive_level": 12,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "item": "hydrogen",
+          "role": "external",
+          "level": 3,
+          "exclusive_level": 13,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 12,
+          "item": "optical-grating-crystal",
+          "role": "external",
+          "level": 4,
+          "exclusive_level": 14,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 14,
+          "item": "optical-grating-crystal",
+          "role": "external",
+          "level": 8,
+          "exclusive_level": 16,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 15,
+          "item": "copper-ingot",
+          "role": "external",
+          "level": 10,
+          "exclusive_level": 17,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 16,
+          "item": "iron-ingot",
+          "role": "external",
+          "level": 11,
+          "exclusive_level": 18,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 17,
+          "item": "stone",
+          "role": "external",
+          "level": 12,
+          "exclusive_level": 19,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 18,
+          "item": "fire-ice",
+          "role": "external",
+          "level": 13,
+          "exclusive_level": 20,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 19,
+          "item": "silicon-ore",
+          "role": "external",
+          "level": 5,
+          "exclusive_level": 21,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 20,
+          "item": "copper-ingot",
+          "role": "external",
+          "level": 6,
+          "exclusive_level": 22,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 21,
+          "item": "high-purity-silicon",
+          "role": "external",
+          "level": 7,
+          "exclusive_level": 23,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 22,
+          "item": "titanium-ingot",
+          "role": "external",
+          "level": 14,
+          "exclusive_level": 24,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 23,
+          "item": "water",
+          "role": "external",
+          "level": 15,
+          "exclusive_level": 25,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 14,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 24,
+          "item": "plane-filter",
+          "role": "output",
+          "level": 3,
+          "exclusive_level": 26,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 25,
+          "item": "processor",
+          "role": "output",
+          "level": 4,
+          "exclusive_level": 27,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 26,
+          "item": "titanium-glass",
+          "role": "output",
+          "level": 4,
+          "exclusive_level": 28,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "item": "hydrogen",
+          "role": "external",
+          "level": 9,
+          "exclusive_level": 15,
+          "predecessors": [
+            14
+          ],
+          "rejected": []
+        }
+      ],
+      "elapsed_s": 4.545487816911191,
+      "constructed_links": 32,
+      "junctions": [
+        2924,
+        2932,
+        2941,
+        2950
+      ],
+      "junction_cells": [
+        [
+          70,
+          79,
+          0
+        ],
+        [
+          129,
+          38,
+          0
+        ],
+        [
+          5,
+          27,
+          0
+        ],
+        [
+          129,
+          24,
+          0
+        ]
+      ]
+    },
+    {
+      "case": "three-output",
+      "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+      "budget_s": 30.0,
+      "original_factory_gate": true,
+      "global_router_calls": 0,
+      "topology": {
+        "candidate_arcs": 28,
+        "selected_arcs": 26,
+        "added": 0,
+        "removed": 1
+      },
+      "obligations": 26,
+      "flights_required": 26,
+      "flights_available": 24,
+      "held_out": false,
+      "assigned_rates": {
+        "0": "5/3",
+        "1": "5/3",
+        "2": "20/3",
+        "3": "15",
+        "4": "10/3",
+        "5": "10/3",
+        "6": "10/3",
+        "7": "15/2",
+        "8": "20/3",
+        "9": "20/3",
+        "10": "20",
+        "11": "40/3",
+        "12": "50/3",
+        "13": "40/3",
+        "14": "10/3",
+        "15": "20/3",
+        "16": "30",
+        "17": "20/3",
+        "18": "15",
+        "19": "20/3",
+        "20": "35/6",
+        "21": "15",
+        "22": "15",
+        "23": "10/3",
+        "24": "10/3",
+        "25": "25/3"
+      },
+      "checks_run": 67,
+      "errors": 0,
+      "skipped": [],
+      "area": 36722,
+      "bounds": [
+        0,
+        0,
+        300,
+        121
+      ],
+      "outcome": "original-clean",
+      "buildings": 8213,
+      "flight_allocation": [
+        {
+          "id": 0,
+          "item": "graphene",
+          "role": "local-source",
+          "level": 1,
+          "exclusive_level": 1,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 1,
+          "item": "casimir-crystal",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 3,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 2,
+          "item": "casimir-crystal",
+          "role": "internal",
+          "level": 4,
+          "exclusive_level": 4,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "item": "circuit-board",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 5,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 4,
+          "item": "glass",
+          "role": "internal",
+          "level": 3,
+          "exclusive_level": 6,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 5,
+          "item": "graphene",
+          "role": "internal",
+          "level": 5,
+          "exclusive_level": 7,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "item": "graphene",
+          "role": "internal",
+          "level": 6,
+          "exclusive_level": 8,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "item": "hydrogen",
+          "role": "internal",
+          "level": 7,
+          "exclusive_level": 9,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "item": "high-purity-silicon",
+          "role": "internal",
+          "level": 4,
+          "exclusive_level": 10,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "item": "microcrystalline-component",
+          "role": "internal",
+          "level": 8,
+          "exclusive_level": 11,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "item": "titanium-glass",
+          "role": "internal",
+          "level": 9,
+          "exclusive_level": 12,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "item": "hydrogen",
+          "role": "external",
+          "level": 3,
+          "exclusive_level": 13,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 12,
+          "item": "optical-grating-crystal",
+          "role": "external",
+          "level": 4,
+          "exclusive_level": 14,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 14,
+          "item": "optical-grating-crystal",
+          "role": "external",
+          "level": 8,
+          "exclusive_level": 16,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 15,
+          "item": "copper-ingot",
+          "role": "external",
+          "level": 10,
+          "exclusive_level": 17,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 16,
+          "item": "iron-ingot",
+          "role": "external",
+          "level": 11,
+          "exclusive_level": 18,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 17,
+          "item": "stone",
+          "role": "external",
+          "level": 12,
+          "exclusive_level": 19,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 18,
+          "item": "fire-ice",
+          "role": "external",
+          "level": 13,
+          "exclusive_level": 20,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 19,
+          "item": "silicon-ore",
+          "role": "external",
+          "level": 5,
+          "exclusive_level": 21,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 20,
+          "item": "copper-ingot",
+          "role": "external",
+          "level": 6,
+          "exclusive_level": 22,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 21,
+          "item": "high-purity-silicon",
+          "role": "external",
+          "level": 7,
+          "exclusive_level": 23,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 22,
+          "item": "titanium-ingot",
+          "role": "external",
+          "level": 14,
+          "exclusive_level": 24,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 23,
+          "item": "water",
+          "role": "external",
+          "level": 15,
+          "exclusive_level": 25,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 4,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 5,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 6,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 7,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 8,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 9,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 10,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 11,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 12,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 13,
+              "reason": "horizontal-overlap"
+            },
+            {
+              "level": 14,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 24,
+          "item": "plane-filter",
+          "role": "output",
+          "level": 3,
+          "exclusive_level": 26,
+          "predecessors": [],
+          "rejected": []
+        },
+        {
+          "id": 25,
+          "item": "processor",
+          "role": "output",
+          "level": 4,
+          "exclusive_level": 27,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 26,
+          "item": "titanium-glass",
+          "role": "output",
+          "level": 4,
+          "exclusive_level": 28,
+          "predecessors": [],
+          "rejected": [
+            {
+              "level": 3,
+              "reason": "horizontal-overlap"
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "item": "hydrogen",
+          "role": "external",
+          "level": 9,
+          "exclusive_level": 15,
+          "predecessors": [
+            14
+          ],
+          "rejected": []
+        }
+      ],
+      "elapsed_s": 3.574981464073062,
+      "constructed_links": 32,
+      "junctions": [
+        2924,
+        2932,
+        2941,
+        2950
+      ],
+      "junction_cells": [
+        [
+          70,
+          79,
+          0
+        ],
+        [
+          129,
+          38,
+          0
+        ],
+        [
+          5,
+          27,
+          0
+        ],
+        [
+          129,
+          24,
+          0
+        ]
+      ]
+    },
+    {
+      "case": "unsprayed-mall",
+      "spec_sha256": "3995a1266312d463293bae0a8e01b6f95f254550df54c56e5888e6d846e00ff3",
+      "budget_s": 60.0,
+      "original_factory_gate": false,
+      "global_router_calls": 0,
+      "topology": {
+        "candidate_arcs": 515,
+        "selected_arcs": 141,
+        "added": 56,
+        "removed": 64
+      },
+      "obligations": 141,
+      "flights_required": 141,
+      "flights_available": 24,
+      "held_out": false,
+      "assigned_rates": {
+        "0": "20",
+        "1": "14/3",
+        "2": "18",
+        "3": "18",
+        "4": "44/3",
+        "5": "403/15",
+        "6": "13051/282",
+        "7": "4913/235",
+        "8": "6",
+        "9": "15271/840",
+        "10": "1655/56",
+        "11": "4303/336",
+        "12": "1655/112",
+        "13": "5/2",
+        "14": "5/2",
+        "15": "6",
+        "16": "98/5",
+        "17": "1001/40",
+        "18": "5/4",
+        "19": "5/4",
+        "20": "5",
+        "21": "88/3",
+        "22": "10975/147",
+        "23": "185819/2775",
+        "24": "58",
+        "25": "503539/5490",
+        "26": "529/6",
+        "27": "464531/5490",
+        "28": "851/122",
+        "29": "9752/2745",
+        "30": "851/366",
+        "31": "6736/141",
+        "32": "37/4230",
+        "33": "112/15",
+        "34": "488/65",
+        "35": "1098/65",
+        "36": "7/3",
+        "37": "7/3",
+        "38": "28/15",
+        "39": "28/3",
+        "40": "28/15",
+        "41": "7/6",
+        "42": "7/6",
+        "43": "12",
+        "44": "12",
+        "45": "12",
+        "46": "14/3",
+        "47": "14/3",
+        "48": "6",
+        "49": "14/3",
+        "50": "5",
+        "51": "10",
+        "52": "12",
+        "53": "223/30",
+        "54": "199/40",
+        "55": "14/3",
+        "56": "331/6",
+        "57": "93",
+        "58": "93",
+        "59": "2769/25",
+        "60": "2769/25",
+        "61": "2769/25",
+        "62": "74763/925",
+        "63": "74763/925",
+        "64": "11076/185",
+        "65": "503539/5490",
+        "66": "503539/5490",
+        "67": "503539/5490",
+        "68": "21893/244",
+        "69": "41668/645",
+        "70": "13258/215",
+        "71": "196/5",
+        "72": "20",
+        "73": "40",
+        "74": "1001/40",
+        "75": "539/40",
+        "76": "18",
+        "77": "1001/80",
+        "78": "539/80",
+        "79": "7/15",
+        "80": "1/8",
+        "81": "1/8",
+        "82": "7/30",
+        "83": "7/30",
+        "84": "6",
+        "85": "488/65",
+        "86": "1006/195",
+        "87": "176/15",
+        "88": "88/15",
+        "89": "2116/45",
+        "90": "229/9",
+        "91": "671/36",
+        "92": "529/12",
+        "93": "529/90",
+        "94": "122/5",
+        "95": "11359/282",
+        "96": "6",
+        "97": "6",
+        "98": "6736/141",
+        "99": "144307/6909",
+        "100": "350885/13818",
+        "101": "13051/282",
+        "102": "6",
+        "103": "17609/645",
+        "104": "13867/645",
+        "105": "14/3",
+        "106": "14/3",
+        "107": "176/15",
+        "108": "12",
+        "109": "4327/75",
+        "110": "44477/1175",
+        "111": "85666/1175",
+        "112": "69277/3525",
+        "113": "321152/3525",
+        "114": "109/75",
+        "115": "640669/135975",
+        "116": "56/15",
+        "117": "1874/185",
+        "118": "346/185",
+        "119": "26243/5490",
+        "120": "4303/112",
+        "121": "4965/112",
+        "122": "97864/2115",
+        "123": "13051/282",
+        "124": "403/15",
+        "125": "1351/90",
+        "126": "529/6",
+        "127": "193/45",
+        "128": "56/15",
+        "129": "1",
+        "130": "173/195",
+        "131": "22/195",
+        "132": "6",
+        "133": "10",
+        "134": "719/336",
+        "135": "331/336",
+        "136": "25/8",
+        "137": "6",
+        "138": "5/2",
+        "139": "5/2",
+        "140": "10"
+      },
+      "outcome": "constructive-control-refused",
+      "reason": "fixed paths contain a cyclic plane/riser height dependency",
+      "flight_allocation": [
+        {
+          "precedence_cycle": [
+            {
+              "id": 44,
+              "item": "electromagnetic-turbine",
+              "predecessors": [
+                125
+              ]
+            },
+            {
+              "id": 46,
+              "item": "electromagnetic-turbine",
+              "predecessors": [
+                54,
+                61
+              ]
+            },
+            {
+              "id": 49,
+              "item": "frame-material",
+              "predecessors": [
+                46,
+                125
+              ]
+            },
+            {
+              "id": 54,
+              "item": "graphene",
+              "predecessors": [
+                61
+              ]
+            },
+            {
+              "id": 61,
+              "item": "magnet",
+              "predecessors": [
+                114
+              ]
+            },
+            {
+              "id": 62,
+              "item": "magnet",
+              "predecessors": [
+                61,
+                114
+              ]
+            },
+            {
+              "id": 70,
+              "item": "microcrystalline-component",
+              "predecessors": [
+                46,
+                49,
+                125
+              ]
+            },
+            {
+              "id": 71,
+              "item": "microcrystalline-component",
+              "predecessors": [
+                166
+              ]
+            },
+            {
+              "id": 87,
+              "item": "titanium-ingot",
+              "predecessors": [
+                62
+              ]
+            },
+            {
+              "id": 114,
+              "item": "hydrogen",
+              "predecessors": [
+                61,
+                62
+              ]
+            },
+            {
+              "id": 115,
+              "item": "logistics-distributor",
+              "predecessors": [
+                174
+              ]
+            },
+            {
+              "id": 123,
+              "item": "circuit-board",
+              "predecessors": [
+                61,
+                62,
+                114
+              ]
+            },
+            {
+              "id": 125,
+              "item": "copper-ingot",
+              "predecessors": [
+                46
+              ]
+            },
+            {
+              "id": 166,
+              "item": "processor",
+              "predecessors": [
+                115,
+                174
+              ]
+            },
+            {
+              "id": 172,
+              "item": "super-magnetic-ring",
+              "predecessors": [
+                54,
+                71,
+                166,
+                173
+              ]
+            },
+            {
+              "id": 173,
+              "item": "super-magnetic-ring",
+              "predecessors": [
+                71,
+                166
+              ]
+            },
+            {
+              "id": 174,
+              "item": "titanium-alloy",
+              "predecessors": [
+                115
+              ]
+            }
+          ]
+        }
+      ],
+      "elapsed_s": 2.057309004943818,
+      "constructed_links": 30,
+      "junctions": [
+        16345,
+        16349,
+        16359,
+        16363,
+        16373,
+        16377,
+        16381,
+        16386,
+        16390,
+        16394,
+        16399,
+        16403,
+        16413,
+        16417,
+        16421,
+        16431,
+        16436,
+        16441,
+        16445,
+        16449,
+        16454,
+        16459,
+        16463,
+        16467,
+        16477,
+        16481,
+        16485,
+        16489,
+        16493,
+        16498,
+        16502,
+        16512,
+        16517,
+        16522,
+        16526,
+        16536,
+        16541,
+        16549,
+        16553,
+        16563,
+        16567,
+        16571,
+        16576,
+        16580,
+        16584,
+        16594,
+        16603,
+        16612,
+        16621,
+        16630,
+        16639,
+        16648,
+        16657,
+        16666,
+        16675,
+        16684,
+        16693,
+        16702,
+        16711,
+        16720,
+        16729,
+        16739,
+        16748,
+        16776
+      ],
+      "junction_cells": [
+        [
+          34,
+          38,
+          0
+        ],
+        [
+          34,
+          44,
+          0
+        ],
+        [
+          301,
+          37,
+          0
+        ],
+        [
+          301,
+          43,
+          0
+        ],
+        [
+          336,
+          87,
+          0
+        ],
+        [
+          406,
+          43,
+          0
+        ],
+        [
+          514,
+          61,
+          0
+        ],
+        [
+          427,
+          77,
+          0
+        ],
+        [
+          410,
+          96,
+          0
+        ],
+        [
+          648,
+          22,
+          0
+        ],
+        [
+          604,
+          87,
+          0
+        ],
+        [
+          604,
+          93,
+          0
+        ],
+        [
+          752,
+          22,
+          0
+        ],
+        [
+          797,
+          58,
+          0
+        ],
+        [
+          797,
+          64,
+          0
+        ],
+        [
+          912,
+          22,
+          0
+        ],
+        [
+          912,
+          40,
+          0
+        ],
+        [
+          891,
+          56,
+          0
+        ],
+        [
+          1141,
+          21,
+          0
+        ],
+        [
+          1141,
+          38,
+          0
+        ],
+        [
+          1138,
+          55,
+          0
+        ],
+        [
+          1067,
+          74,
+          0
+        ],
+        [
+          1063,
+          93,
+          0
+        ],
+        [
+          1063,
+          99,
+          0
+        ],
+        [
+          1183,
+          37,
+          0
+        ],
+        [
+          1243,
+          55,
+          0
+        ],
+        [
+          1297,
+          22,
+          0
+        ],
+        [
+          1297,
+          54,
+          0
+        ],
+        [
+          1293,
+          73,
+          0
+        ],
+        [
+          1313,
+          92,
+          0
+        ],
+        [
+          1313,
+          98,
+          0
+        ],
+        [
+          1457,
+          36,
+          0
+        ],
+        [
+          1449,
+          56,
+          0
+        ],
+        [
+          1457,
+          76,
+          0
+        ],
+        [
+          1457,
+          82,
+          0
+        ],
+        [
+          1427,
+          101,
+          0
+        ],
+        [
+          1533,
+          21,
+          0
+        ],
+        [
+          301,
+          61,
+          0
+        ],
+        [
+          301,
+          67,
+          0
+        ],
+        [
+          494,
+          24,
+          0
+        ],
+        [
+          644,
+          40,
+          0
+        ],
+        [
+          749,
+          40,
+          0
+        ],
+        [
+          797,
+          82,
+          0
+        ],
+        [
+          797,
+          100,
+          0
+        ],
+        [
+          361,
+          51,
+          0
+        ],
+        [
+          1388,
+          44,
+          0
+        ],
+        [
+          5,
+          12,
+          0
+        ],
+        [
+          539,
+          30,
+          0
+        ],
+        [
+          994,
+          64,
+          0
+        ],
+        [
+          1166,
+          13,
+          0
+        ],
+        [
+          1166,
+          28,
+          0
+        ],
+        [
+          199,
+          97,
+          0
+        ],
+        [
+          1268,
+          81,
+          0
+        ],
+        [
+          994,
+          82,
+          0
+        ],
+        [
+          199,
+          95,
+          0
+        ],
+        [
+          1166,
+          46,
+          0
+        ],
+        [
+          199,
+          76,
+          0
+        ],
+        [
+          199,
+          96,
+          0
+        ],
+        [
+          361,
+          13,
+          0
+        ],
+        [
+          1338,
+          47,
+          0
+        ],
+        [
+          361,
+          52,
+          0
+        ],
+        [
+          1166,
+          82,
+          0
+        ],
+        [
+          1166,
+          70,
+          0
+        ],
+        [
+          4,
+          -58,
+          0
+        ]
+      ]
+    },
+    {
+      "case": "unsprayed-mall-075",
+      "spec_sha256": "d6aade99fcafb5bdb4603a3cdde32115632305d3cf0bbec5a74f6fd53588e54c",
+      "budget_s": 60.0,
+      "original_factory_gate": false,
+      "global_router_calls": 0,
+      "topology": {
+        "candidate_arcs": 382,
+        "selected_arcs": 116,
+        "added": 41,
+        "removed": 48
+      },
+      "obligations": 116,
+      "flights_required": 116,
+      "flights_available": 24,
+      "held_out": true,
+      "assigned_rates": {
+        "0": "15",
+        "1": "7/2",
+        "2": "9",
+        "3": "27/2",
+        "4": "27/2",
+        "5": "154/15",
+        "6": "2821/136",
+        "7": "13457/284",
+        "8": "315013/9656",
+        "9": "9/2",
+        "10": "22583/1904",
+        "11": "331/14",
+        "12": "993/112",
+        "13": "331/28",
+        "14": "15/4",
+        "15": "9/2",
+        "16": "147/10",
+        "17": "693/40",
+        "18": "15/8",
+        "19": "15/4",
+        "20": "308/15",
+        "21": "174447/2780",
+        "22": "65329/1390",
+        "23": "87/2",
+        "24": "503539/5480",
+        "25": "503539/5480",
+        "26": "529/45",
+        "27": "396313/49320",
+        "28": "3789/71",
+        "29": "959/180",
+        "30": "28/5",
+        "31": "183/25",
+        "32": "549/50",
+        "33": "7/2",
+        "34": "7/5",
+        "35": "7",
+        "36": "7/5",
+        "37": "9",
+        "38": "9",
+        "39": "9",
+        "40": "7",
+        "41": "9/2",
+        "42": "7",
+        "43": "15/4",
+        "44": "15/2",
+        "45": "1597/272",
+        "46": "207/40",
+        "47": "297493/6390",
+        "48": "277/45",
+        "49": "7/4",
+        "50": "331/8",
+        "51": "3348/47",
+        "52": "6417/94",
+        "53": "693/40",
+        "54": "231/20",
+        "55": "58149/695",
+        "56": "58149/695",
+        "57": "224289/2780",
+        "58": "174447/2780",
+        "59": "503539/5480",
+        "60": "503539/5480",
+        "61": "197037/2192",
+        "62": "947/10",
+        "63": "147/5",
+        "64": "15",
+        "65": "30",
+        "66": "8307/139",
+        "67": "24921/556",
+        "68": "27/2",
+        "69": "693/80",
+        "70": "231/40",
+        "71": "7/20",
+        "72": "3/16",
+        "73": "7/20",
+        "74": "9/2",
+        "75": "183/25",
+        "76": "1457/150",
+        "77": "19/15",
+        "78": "77/15",
+        "79": "8993/180",
+        "80": "9937/1692",
+        "81": "186493/4230",
+        "82": "529/90",
+        "83": "183/10",
+        "84": "9/2",
+        "85": "9/2",
+        "86": "3789/71",
+        "87": "14735/284",
+        "88": "9/2",
+        "89": "183/5",
+        "90": "7",
+        "91": "154/15",
+        "92": "9",
+        "93": "30488/695",
+        "94": "3102062/49345",
+        "95": "1026517/49345",
+        "96": "224289/2780",
+        "97": "6353/2780",
+        "98": "14/5",
+        "99": "4269/556",
+        "100": "735/556",
+        "101": "396313/49320",
+        "102": "2979/112",
+        "103": "993/28",
+        "104": "2821/136",
+        "105": "451973/6120",
+        "106": "14/5",
+        "107": "51/100",
+        "108": "99/100",
+        "109": "9/2",
+        "110": "15/2",
+        "111": "489/112",
+        "112": "9/28",
+        "113": "9/2",
+        "114": "15/4",
+        "115": "15/2"
+      },
+      "outcome": "constructive-control-refused",
+      "reason": "fixed paths contain a cyclic plane/riser height dependency",
+      "flight_allocation": [
+        {
+          "precedence_cycle": [
+            {
+              "id": 31,
+              "item": "circuit-board",
+              "predecessors": [
+                59
+              ]
+            },
+            {
+              "id": 39,
+              "item": "electromagnetic-turbine",
+              "predecessors": [
+                31,
+                59
+              ]
+            },
+            {
+              "id": 40,
+              "item": "electromagnetic-turbine",
+              "predecessors": [
+                55,
+                67,
+                77
+              ]
+            },
+            {
+              "id": 55,
+              "item": "magnet",
+              "predecessors": [
+                77
+              ]
+            },
+            {
+              "id": 59,
+              "item": "magnetic-coil",
+              "predecessors": [
+                39
+              ]
+            },
+            {
+              "id": 67,
+              "item": "sorter-2",
+              "predecessors": [
+                39,
+                55,
+                59,
+                77
+              ]
+            },
+            {
+              "id": 77,
+              "item": "magnetic-coil",
+              "predecessors": [
+                40
+              ]
+            },
+            {
+              "id": 101,
+              "item": "miniature-particle-collider",
+              "predecessors": [
+                138
+              ]
+            },
+            {
+              "id": 138,
+              "item": "processor",
+              "predecessors": [
+                101
+              ]
+            },
+            {
+              "id": 144,
+              "item": "titanium-ingot",
+              "predecessors": [
+                138
+              ]
+            }
+          ]
+        }
+      ],
+      "elapsed_s": 1.5021339701488614,
+      "constructed_links": 22,
+      "junctions": [
+        12290,
+        12295,
+        12299,
+        12303,
+        12313,
+        12317,
+        12321,
+        12325,
+        12330,
+        12334,
+        12339,
+        12344,
+        12349,
+        12353,
+        12363,
+        12367,
+        12377,
+        12381,
+        12385,
+        12396,
+        12400,
+        12405,
+        12409,
+        12413,
+        12417,
+        12422,
+        12426,
+        12430,
+        12435,
+        12439,
+        12447,
+        12452,
+        12456,
+        12460,
+        12469,
+        12478,
+        12487,
+        12496,
+        12505,
+        12514,
+        12523,
+        12532,
+        12541,
+        12550,
+        12559,
+        12569,
+        12578,
+        12587,
+        12613
+      ],
+      "junction_cells": [
+        [
+          30,
+          38,
+          0
+        ],
+        [
+          22,
+          56,
+          0
+        ],
+        [
+          240,
+          37,
+          0
+        ],
+        [
+          240,
+          43,
+          0
+        ],
+        [
+          312,
+          81,
+          0
+        ],
+        [
+          308,
+          101,
+          0
+        ],
+        [
+          374,
+          23,
+          0
+        ],
+        [
+          454,
+          41,
+          0
+        ],
+        [
+          388,
+          57,
+          0
+        ],
+        [
+          494,
+          90,
+          0
+        ],
+        [
+          576,
+          51,
+          0
+        ],
+        [
+          624,
+          69,
+          0
+        ],
+        [
+          612,
+          87,
+          0
+        ],
+        [
+          612,
+          93,
+          0
+        ],
+        [
+          718,
+          68,
+          0
+        ],
+        [
+          718,
+          74,
+          0
+        ],
+        [
+          703,
+          90,
+          0
+        ],
+        [
+          911,
+          62,
+          0
+        ],
+        [
+          911,
+          68,
+          0
+        ],
+        [
+          844,
+          87,
+          0
+        ],
+        [
+          1016,
+          23,
+          0
+        ],
+        [
+          956,
+          41,
+          0
+        ],
+        [
+          1000,
+          59,
+          0
+        ],
+        [
+          1066,
+          36,
+          0
+        ],
+        [
+          1066,
+          55,
+          0
+        ],
+        [
+          1153,
+          78,
+          0
+        ],
+        [
+          1223,
+          24,
+          0
+        ],
+        [
+          1235,
+          44,
+          0
+        ],
+        [
+          1211,
+          63,
+          0
+        ],
+        [
+          1217,
+          80,
+          0
+        ],
+        [
+          237,
+          61,
+          0
+        ],
+        [
+          742,
+          22,
+          0
+        ],
+        [
+          1074,
+          74,
+          0
+        ],
+        [
+          337,
+          31,
+          0
+        ],
+        [
+          1178,
+          12,
+          0
+        ],
+        [
+          5,
+          12,
+          0
+        ],
+        [
+          337,
+          80,
+          0
+        ],
+        [
+          767,
+          77,
+          0
+        ],
+        [
+          939,
+          13,
+          0
+        ],
+        [
+          159,
+          91,
+          0
+        ],
+        [
+          337,
+          32,
+          0
+        ],
+        [
+          1041,
+          63,
+          0
+        ],
+        [
+          939,
+          12,
+          0
+        ],
+        [
+          159,
+          70,
+          0
+        ],
+        [
+          159,
+          90,
+          0
+        ],
+        [
+          1099,
+          13,
+          0
+        ],
+        [
+          939,
+          69,
+          0
+        ],
+        [
+          939,
+          74,
+          0
+        ],
+        [
+          4,
+          -52,
+          0
+        ]
+      ]
+    },
+    {
+      "case": "unsprayed-mall-125",
+      "spec_sha256": "8b767432f5260328ab80cbf2d8528ec8c02475d81a52074e8b242fa3db2a89e9",
+      "budget_s": 60.0,
+      "original_factory_gate": false,
+      "global_router_calls": 0,
+      "topology": {
+        "candidate_arcs": 579,
+        "selected_arcs": 148,
+        "added": 58,
+        "removed": 71
+      },
+      "obligations": 148,
+      "flights_required": 148,
+      "flights_available": 24,
+      "held_out": true,
+      "assigned_rates": {
+        "0": "25",
+        "1": "35/6",
+        "2": "15",
+        "3": "45/2",
+        "4": "45/2",
+        "5": "154/9",
+        "6": "22165/672",
+        "7": "2105/36",
+        "8": "81605/2016",
+        "9": "51385/2016",
+        "10": "21155/2016",
+        "11": "15/2",
+        "12": "30283/1344",
+        "13": "17125/672",
+        "14": "2677/224",
+        "15": "331/21",
+        "16": "6289/336",
+        "17": "25/8",
+        "18": "25/8",
+        "19": "15/2",
+        "20": "49/2",
+        "21": "154/5",
+        "22": "25/16",
+        "23": "25/16",
+        "24": "25/4",
+        "25": "308/9",
+        "26": "68045/732",
+        "27": "78209/924",
+        "28": "145/2",
+        "29": "503539/5496",
+        "30": "503539/5496",
+        "31": "503539/5496",
+        "32": "1058/59",
+        "33": "7118063/324264",
+        "34": "2105/36",
+        "35": "2105/36",
+        "36": "28/3",
+        "37": "305/32",
+        "38": "671/32",
+        "39": "35/12",
+        "40": "35/12",
+        "41": "7/3",
+        "42": "35/3",
+        "43": "7/3",
+        "44": "35/24",
+        "45": "35/24",
+        "46": "15",
+        "47": "15",
+        "48": "15",
+        "49": "35/6",
+        "50": "35/6",
+        "51": "15/2",
+        "52": "35/6",
+        "53": "25/4",
+        "54": "25/2",
+        "55": "12085/1344",
+        "56": "67/10",
+        "57": "117029/2124",
+        "58": "35/6",
+        "59": "1655/24",
+        "60": "465/4",
+        "61": "465/4",
+        "62": "4615/44",
+        "63": "4615/44",
+        "64": "15691/154",
+        "65": "15691/154",
+        "66": "15691/154",
+        "67": "15691/154",
+        "68": "23075/308",
+        "69": "503539/5496",
+        "70": "503539/5496",
+        "71": "503539/5496",
+        "72": "503539/5496",
+        "73": "328395/3664",
+        "74": "8523/106",
+        "75": "12311/159",
+        "76": "49",
+        "77": "25",
+        "78": "50",
+        "79": "154/5",
+        "80": "693/40",
+        "81": "45/2",
+        "82": "77/5",
+        "83": "693/80",
+        "84": "7/12",
+        "85": "5/32",
+        "86": "5/32",
+        "87": "7/24",
+        "88": "7/24",
+        "89": "15/2",
+        "90": "305/32",
+        "91": "5431/288",
+        "92": "19/9",
+        "93": "77/9",
+        "94": "10051/177",
+        "95": "23929/708",
+        "96": "5425/236",
+        "97": "3174/59",
+        "98": "529/59",
+        "99": "61/2",
+        "100": "15/2",
+        "101": "15/2",
+        "102": "2105/36",
+        "103": "14815/549",
+        "104": "69145/2196",
+        "105": "2105/36",
+        "106": "15/2",
+        "107": "3599/106",
+        "108": "2867/106",
+        "109": "35/6",
+        "110": "35/6",
+        "111": "154/9",
+        "112": "15",
+        "113": "5089/132",
+        "114": "31043/396",
+        "115": "2623/99",
+        "116": "17909/198",
+        "117": "7928/693",
+        "118": "15691/154",
+        "119": "835/231",
+        "120": "299701/56364",
+        "121": "14/3",
+        "122": "3875/308",
+        "123": "745/308",
+        "124": "7118063/324264",
+        "125": "5179807/324264",
+        "126": "6325/458",
+        "127": "107323/3206",
+        "128": "6289/112",
+        "129": "3583/1062",
+        "130": "22165/672",
+        "131": "743041/39648",
+        "132": "995657/19824",
+        "133": "1137271/19824",
+        "134": "1522/177",
+        "135": "14/3",
+        "136": "5/4",
+        "137": "227/192",
+        "138": "13/192",
+        "139": "15/2",
+        "140": "25/2",
+        "141": "17/7",
+        "142": "331/224",
+        "143": "125/32",
+        "144": "15/2",
+        "145": "25/8",
+        "146": "25/8",
+        "147": "25/2"
+      },
+      "outcome": "constructive-control-refused",
+      "reason": "fixed paths contain a cyclic plane/riser height dependency",
+      "flight_allocation": [
+        {
+          "precedence_cycle": [
+            {
+              "id": 38,
+              "item": "carbon-nanotube",
+              "predecessors": [
+                143
+              ]
+            },
+            {
+              "id": 40,
+              "item": "circuit-board",
+              "predecessors": [
+                38,
+                58,
+                102,
+                111,
+                118,
+                137,
+                143,
+                159
+              ]
+            },
+            {
+              "id": 50,
+              "item": "electromagnetic-turbine",
+              "predecessors": [
+                38,
+                40,
+                58,
+                102,
+                111,
+                118,
+                137,
+                143,
+                159
+              ]
+            },
+            {
+              "id": 51,
+              "item": "electromagnetic-turbine",
+              "predecessors": [
+                85
+              ]
+            },
+            {
+              "id": 58,
+              "item": "glass",
+              "predecessors": [
+                38,
+                102,
+                111,
+                118,
+                137,
+                143,
+                159
+              ]
+            },
+            {
+              "id": 69,
+              "item": "magnet",
+              "predecessors": [
+                159
+              ]
+            },
+            {
+              "id": 77,
+              "item": "photon-combiner",
+              "predecessors": [
+                69,
+                159
+              ]
+            },
+            {
+              "id": 78,
+              "item": "photon-combiner",
+              "predecessors": [
+                136
+              ]
+            },
+            {
+              "id": 81,
+              "item": "processor",
+              "predecessors": [
+                89,
+                91,
+                95
+              ]
+            },
+            {
+              "id": 82,
+              "item": "processor",
+              "predecessors": [
+                78
+              ]
+            },
+            {
+              "id": 85,
+              "item": "sorter-2",
+              "predecessors": [
+                81
+              ]
+            },
+            {
+              "id": 86,
+              "item": "sorter-3",
+              "predecessors": [
+                184
+              ]
+            },
+            {
+              "id": 89,
+              "item": "super-magnetic-ring",
+              "predecessors": [
+                173
+              ]
+            },
+            {
+              "id": 91,
+              "item": "titanium-alloy",
+              "predecessors": [
+                89,
+                95
+              ]
+            },
+            {
+              "id": 93,
+              "item": "electromagnetic-turbine",
+              "predecessors": [
+                81,
+                89,
+                91,
+                95,
+                164
+              ]
+            },
+            {
+              "id": 95,
+              "item": "magnetic-coil",
+              "predecessors": [
+                89
+              ]
+            },
+            {
+              "id": 102,
+              "item": "iron-ore",
+              "predecessors": [
+                38,
+                118,
+                143
+              ]
+            },
+            {
+              "id": 111,
+              "item": "iron-ore",
+              "predecessors": [
+                38,
+                102,
+                118,
+                143,
+                159
+              ]
+            },
+            {
+              "id": 114,
+              "item": "stone",
+              "predecessors": [
+                136,
+                137
+              ]
+            },
+            {
+              "id": 117,
+              "item": "fire-ice",
+              "predecessors": [
+                51
+              ]
+            },
+            {
+              "id": 118,
+              "item": "fire-ice",
+              "predecessors": [
+                38,
+                143
+              ]
+            },
+            {
+              "id": 119,
+              "item": "conveyor-belt-3",
+              "predecessors": [
+                121
+              ]
+            },
+            {
+              "id": 121,
+              "item": "hydrogen",
+              "predecessors": [
+                165
+              ]
+            },
+            {
+              "id": 123,
+              "item": "miniature-particle-collider",
+              "predecessors": [
+                175
+              ]
+            },
+            {
+              "id": 124,
+              "item": "miniature-particle-collider",
+              "predecessors": [
+                182
+              ]
+            },
+            {
+              "id": 129,
+              "item": "circuit-board",
+              "predecessors": [
+                175
+              ]
+            },
+            {
+              "id": 130,
+              "item": "circuit-board",
+              "predecessors": [
+                176
+              ]
+            },
+            {
+              "id": 136,
+              "item": "copper-ingot",
+              "predecessors": [
+                137
+              ]
+            },
+            {
+              "id": 137,
+              "item": "copper-ingot",
+              "predecessors": [
+                38,
+                102,
+                111,
+                118,
+                143,
+                159
+              ]
+            },
+            {
+              "id": 143,
+              "item": "gear",
+              "predecessors": [
+                50
+              ]
+            },
+            {
+              "id": 147,
+              "item": "high-purity-silicon",
+              "predecessors": [
+                69,
+                77,
+                114,
+                136,
+                137,
+                159
+              ]
+            },
+            {
+              "id": 159,
+              "item": "iron-ingot",
+              "predecessors": [
+                38,
+                102,
+                118,
+                143
+              ]
+            },
+            {
+              "id": 164,
+              "item": "magnet",
+              "predecessors": [
+                81,
+                89,
+                91,
+                95
+              ]
+            },
+            {
+              "id": 165,
+              "item": "magnet",
+              "predecessors": [
+                167
+              ]
+            },
+            {
+              "id": 167,
+              "item": "magnetic-coil",
+              "predecessors": [
+                69
+              ]
+            },
+            {
+              "id": 173,
+              "item": "prism",
+              "predecessors": [
+                164
+              ]
+            },
+            {
+              "id": 175,
+              "item": "processor",
+              "predecessors": [
+                123,
+                180
+              ]
+            },
+            {
+              "id": 176,
+              "item": "processor",
+              "predecessors": [
+                177
+              ]
+            },
+            {
+              "id": 177,
+              "item": "processor",
+              "predecessors": [
+                181
+              ]
+            },
+            {
+              "id": 178,
+              "item": "steel",
+              "predecessors": [
+                78,
+                82
+              ]
+            },
+            {
+              "id": 180,
+              "item": "super-magnetic-ring",
+              "predecessors": [
+                95
+              ]
+            },
+            {
+              "id": 181,
+              "item": "super-magnetic-ring",
+              "predecessors": [
+                182
+              ]
+            },
+            {
+              "id": 182,
+              "item": "super-magnetic-ring",
+              "predecessors": [
+                124
+              ]
+            },
+            {
+              "id": 183,
+              "item": "titanium-alloy",
+              "predecessors": [
+                58
+              ]
+            },
+            {
+              "id": 184,
+              "item": "titanium-alloy",
+              "predecessors": [
+                114,
+                136,
+                137,
+                147
+              ]
+            },
+            {
+              "id": 185,
+              "item": "titanium-ingot",
+              "predecessors": [
+                82
+              ]
+            }
+          ]
+        }
+      ],
+      "elapsed_s": 2.4948458620347083,
+      "constructed_links": 34,
+      "junctions": [
+        20420,
+        20425,
+        20429,
+        20433,
+        20443,
+        20447,
+        20452,
+        20456,
+        20460,
+        20464,
+        20468,
+        20472,
+        20477,
+        20481,
+        20491,
+        20495,
+        20499,
+        20509,
+        20514,
+        20519,
+        20523,
+        20527,
+        20538,
+        20542,
+        20546,
+        20556,
+        20560,
+        20564,
+        20568,
+        20572,
+        20577,
+        20581,
+        20591,
+        20596,
+        20601,
+        20605,
+        20615,
+        20620,
+        20628,
+        20632,
+        20642,
+        20646,
+        20651,
+        20655,
+        20659,
+        20663,
+        20667,
+        20676,
+        20685,
+        20694,
+        20703,
+        20712,
+        20721,
+        20730,
+        20739,
+        20748,
+        20757,
+        20766,
+        20775,
+        20784,
+        20793,
+        20802,
+        20811,
+        20821,
+        20830,
+        20839,
+        20848,
+        20857,
+        20866,
+        20896
+      ],
+      "junction_cells": [
+        [
+          38,
+          38,
+          0
+        ],
+        [
+          26,
+          56,
+          0
+        ],
+        [
+          365,
+          37,
+          0
+        ],
+        [
+          365,
+          43,
+          0
+        ],
+        [
+          404,
+          87,
+          0
+        ],
+        [
+          594,
+          24,
+          0
+        ],
+        [
+          482,
+          43,
+          0
+        ],
+        [
+          530,
+          61,
+          0
+        ],
+        [
+          526,
+          79,
+          0
+        ],
+        [
+          507,
+          95,
+          0
+        ],
+        [
+          680,
+          23,
+          0
+        ],
+        [
+          752,
+          41,
+          0
+        ],
+        [
+          862,
+          23,
+          0
+        ],
+        [
+          862,
+          29,
+          0
+        ],
+        [
+          871,
+          47,
+          0
+        ],
+        [
+          895,
+          83,
+          0
+        ],
+        [
+          895,
+          89,
+          0
+        ],
+        [
+          1031,
+          54,
+          0
+        ],
+        [
+          1031,
+          72,
+          0
+        ],
+        [
+          1004,
+          88,
+          0
+        ],
+        [
+          1203,
+          75,
+          0
+        ],
+        [
+          1203,
+          81,
+          0
+        ],
+        [
+          1313,
+          40,
+          0
+        ],
+        [
+          1313,
+          59,
+          0
+        ],
+        [
+          1313,
+          65,
+          0
+        ],
+        [
+          1249,
+          102,
+          0
+        ],
+        [
+          1490,
+          22,
+          0
+        ],
+        [
+          1430,
+          74,
+          0
+        ],
+        [
+          1548,
+          22,
+          0
+        ],
+        [
+          1544,
+          41,
+          0
+        ],
+        [
+          1568,
+          60,
+          0
+        ],
+        [
+          1568,
+          66,
+          0
+        ],
+        [
+          1677,
+          78,
+          0
+        ],
+        [
+          1775,
+          24,
+          0
+        ],
+        [
+          1787,
+          44,
+          0
+        ],
+        [
+          1787,
+          50,
+          0
+        ],
+        [
+          1750,
+          69,
+          0
+        ],
+        [
+          1762,
+          86,
+          0
+        ],
+        [
+          365,
+          61,
+          0
+        ],
+        [
+          365,
+          67,
+          0
+        ],
+        [
+          748,
+          59,
+          0
+        ],
+        [
+          868,
+          65,
+          0
+        ],
+        [
+          895,
+          107,
+          0
+        ],
+        [
+          1031,
+          22,
+          0
+        ],
+        [
+          1372,
+          21,
+          0
+        ],
+        [
+          1309,
+          84,
+          0
+        ],
+        [
+          429,
+          51,
+          0
+        ],
+        [
+          429,
+          69,
+          0
+        ],
+        [
+          1702,
+          12,
+          0
+        ],
+        [
+          1702,
+          32,
+          0
+        ],
+        [
+          5,
+          12,
+          0
+        ],
+        [
+          619,
+          49,
+          0
+        ],
+        [
+          1228,
+          30,
+          0
+        ],
+        [
+          1228,
+          49,
+          0
+        ],
+        [
+          1228,
+          74,
+          0
+        ],
+        [
+          429,
+          14,
+          0
+        ],
+        [
+          1515,
+          49,
+          0
+        ],
+        [
+          1228,
+          48,
+          0
+        ],
+        [
+          239,
+          95,
+          0
+        ],
+        [
+          1397,
+          13,
+          0
+        ],
+        [
+          239,
+          76,
+          0
+        ],
+        [
+          239,
+          96,
+          0
+        ],
+        [
+          429,
+          13,
+          0
+        ],
+        [
+          1593,
+          13,
+          0
+        ],
+        [
+          1702,
+          14,
+          0
+        ],
+        [
+          429,
+          52,
+          0
+        ],
+        [
+          429,
+          70,
+          0
+        ],
+        [
+          1397,
+          49,
+          0
+        ],
+        [
+          1397,
+          37,
+          0
+        ],
+        [
+          4,
+          -64,
+          0
+        ]
+      ]
+    },
+    {
+      "case": "unsprayed-universe",
+      "spec_sha256": "8337dfe1999a9f82d1bc8c92649db1fcaf1621dd3ef112bf9540ad9978d35033",
+      "budget_s": 60.0,
+      "original_factory_gate": false,
+      "global_router_calls": 0,
+      "topology": {
+        "candidate_arcs": 256,
+        "selected_arcs": 182,
+        "added": 19,
+        "removed": 23
+      },
+      "obligations": 182,
+      "flights_required": 182,
+      "flights_available": 24,
+      "held_out": true,
+      "assigned_rates": {
+        "0": "2",
+        "1": "1",
+        "2": "1",
+        "3": "7/2",
+        "4": "6",
+        "5": "1",
+        "6": "2",
+        "7": "5",
+        "8": "2",
+        "9": "4",
+        "10": "1/15",
+        "11": "1/15",
+        "12": "1/15",
+        "13": "1/15",
+        "14": "1/15",
+        "15": "1/15",
+        "16": "1/15",
+        "17": "1/15",
+        "18": "1/15",
+        "19": "1/15",
+        "20": "1/15",
+        "21": "1/15",
+        "22": "1/15",
+        "23": "1/15",
+        "24": "1/15",
+        "25": "2",
+        "26": "3",
+        "27": "261/34",
+        "28": "1/15",
+        "29": "1/15",
+        "30": "1/15",
+        "31": "1/15",
+        "32": "1/15",
+        "33": "1/15",
+        "34": "1/15",
+        "35": "1/15",
+        "36": "1/15",
+        "37": "1/15",
+        "38": "1/15",
+        "39": "1/15",
+        "40": "1/15",
+        "41": "1/15",
+        "42": "1/15",
+        "43": "4",
+        "44": "2",
+        "45": "3",
+        "46": "1/2",
+        "47": "1/15",
+        "48": "1/15",
+        "49": "1/15",
+        "50": "1/15",
+        "51": "1/15",
+        "52": "1/15",
+        "53": "1/15",
+        "54": "1/15",
+        "55": "1/15",
+        "56": "1/15",
+        "57": "1/15",
+        "58": "1/15",
+        "59": "1/15",
+        "60": "1/15",
+        "61": "1/15",
+        "62": "2",
+        "63": "1/15",
+        "64": "1/15",
+        "65": "1/15",
+        "66": "1/15",
+        "67": "1/15",
+        "68": "1/15",
+        "69": "1/15",
+        "70": "1/15",
+        "71": "1/15",
+        "72": "1/15",
+        "73": "1/15",
+        "74": "1/15",
+        "75": "1/15",
+        "76": "1/15",
+        "77": "1/15",
+        "78": "7",
+        "79": "4",
+        "80": "6",
+        "81": "3",
+        "82": "4",
+        "83": "2",
+        "84": "1/15",
+        "85": "1/15",
+        "86": "1/15",
+        "87": "1/15",
+        "88": "1/15",
+        "89": "1/15",
+        "90": "1/15",
+        "91": "1/15",
+        "92": "1/15",
+        "93": "1/15",
+        "94": "1/15",
+        "95": "1/15",
+        "96": "1/15",
+        "97": "1/15",
+        "98": "1/15",
+        "99": "1",
+        "100": "6",
+        "101": "1",
+        "102": "1",
+        "103": "1",
+        "104": "1",
+        "105": "1",
+        "106": "1/2",
+        "107": "1",
+        "108": "2",
+        "109": "1/2",
+        "110": "1/2",
+        "111": "1/15",
+        "112": "1/15",
+        "113": "1/15",
+        "114": "1/15",
+        "115": "1/15",
+        "116": "1/15",
+        "117": "1/15",
+        "118": "1/15",
+        "119": "1/15",
+        "120": "1/15",
+        "121": "1/15",
+        "122": "1/15",
+        "123": "1/15",
+        "124": "1/15",
+        "125": "1/15",
+        "126": "1",
+        "127": "2",
+        "128": "1",
+        "129": "48/17",
+        "130": "2",
+        "131": "12",
+        "132": "8",
+        "133": "8",
+        "134": "10",
+        "135": "198/17",
+        "136": "363/17",
+        "137": "4",
+        "138": "7/2",
+        "139": "28",
+        "140": "14",
+        "141": "6",
+        "142": "9",
+        "143": "1",
+        "144": "1",
+        "145": "2",
+        "146": "2",
+        "147": "18",
+        "148": "1/15",
+        "149": "1/15",
+        "150": "1/15",
+        "151": "1/15",
+        "152": "1/15",
+        "153": "1/15",
+        "154": "1/15",
+        "155": "1/15",
+        "156": "1/15",
+        "157": "1/15",
+        "158": "1/15",
+        "159": "1/15",
+        "160": "1/15",
+        "161": "1/15",
+        "162": "1/15",
+        "163": "6",
+        "164": "3",
+        "165": "3/2",
+        "166": "2",
+        "167": "1",
+        "168": "2",
+        "169": "1",
+        "170": "2",
+        "171": "2",
+        "172": "12",
+        "173": "1/2",
+        "174": "7",
+        "175": "1",
+        "176": "1",
+        "177": "1",
+        "178": "1",
+        "179": "1",
+        "180": "6",
+        "181": "2"
+      },
+      "outcome": "constructive-control-refused",
+      "reason": "fixed paths contain a cyclic plane/riser height dependency",
+      "flight_allocation": [
+        {
+          "precedence_cycle": [
+            {
+              "id": 28,
+              "item": "crystal-silicon",
+              "predecessors": [
+                81,
+                82
+              ]
+            },
+            {
+              "id": 32,
+              "item": "electromagnetic-matrix",
+              "predecessors": [
+                87,
+                88,
+                198
+              ]
+            },
+            {
+              "id": 33,
+              "item": "electromagnetic-matrix",
+              "predecessors": [
+                189
+              ]
+            },
+            {
+              "id": 34,
+              "item": "electromagnetic-matrix",
+              "predecessors": [
+                35,
+                114,
+                115,
+                137,
+                138
+              ]
+            },
+            {
+              "id": 35,
+              "item": "electromagnetic-matrix",
+              "predecessors": [
+                47,
+                102,
+                122,
+                203
+              ]
+            },
+            {
+              "id": 36,
+              "item": "electromagnetic-matrix",
+              "predecessors": [
+                28,
+                103,
+                200
+              ]
+            },
+            {
+              "id": 38,
+              "item": "electromagnetic-matrix",
+              "predecessors": [
+                95,
+                96,
+                134
+              ]
+            },
+            {
+              "id": 40,
+              "item": "electromagnetic-matrix",
+              "predecessors": [
+                35,
+                41,
+                47,
+                102,
+                122,
+                203
+              ]
+            },
+            {
+              "id": 41,
+              "item": "electromagnetic-matrix",
+              "predecessors": [
+                28,
+                36,
+                103,
+                200
+              ]
+            },
+            {
+              "id": 42,
+              "item": "electromagnetic-matrix",
+              "predecessors": [
+                43
+              ]
+            },
+            {
+              "id": 43,
+              "item": "electromagnetic-matrix",
+              "predecessors": [
+                38,
+                95,
+                96,
+                134
+              ]
+            },
+            {
+              "id": 44,
+              "item": "electromagnetic-matrix",
+              "predecessors": [
+                45
+              ]
+            },
+            {
+              "id": 45,
+              "item": "electromagnetic-matrix",
+              "predecessors": [
+                35,
+                40,
+                47,
+                102,
+                122,
+                203
+              ]
+            },
+            {
+              "id": 46,
+              "item": "electromagnetic-matrix",
+              "predecessors": [
+                28,
+                36,
+                41,
+                103,
+                200
+              ]
+            },
+            {
+              "id": 47,
+              "item": "electromagnetic-turbine",
+              "predecessors": [
+                102,
+                104
+              ]
+            },
+            {
+              "id": 50,
+              "item": "energy-matrix",
+              "predecessors": [
+                40,
+                41,
+                126
+              ]
+            },
+            {
+              "id": 51,
+              "item": "energy-matrix",
+              "predecessors": [
+                108,
+                109
+              ]
+            },
+            {
+              "id": 54,
+              "item": "energy-matrix",
+              "predecessors": [
+                55
+              ]
+            },
+            {
+              "id": 55,
+              "item": "energy-matrix",
+              "predecessors": [
+                89,
+                90,
+                132
+              ]
+            },
+            {
+              "id": 56,
+              "item": "energy-matrix",
+              "predecessors": [
+                57
+              ]
+            },
+            {
+              "id": 57,
+              "item": "energy-matrix",
+              "predecessors": [
+                116,
+                117,
+                139,
+                140
+              ]
+            },
+            {
+              "id": 58,
+              "item": "energy-matrix",
+              "predecessors": [
+                59
+              ]
+            },
+            {
+              "id": 59,
+              "item": "energy-matrix",
+              "predecessors": [
+                54
+              ]
+            },
+            {
+              "id": 60,
+              "item": "energy-matrix",
+              "predecessors": [
+                55,
+                61,
+                89,
+                90,
+                132
+              ]
+            },
+            {
+              "id": 61,
+              "item": "energy-matrix",
+              "predecessors": [
+                56
+              ]
+            },
+            {
+              "id": 62,
+              "item": "energy-matrix",
+              "predecessors": [
+                57,
+                63,
+                116,
+                117,
+                139,
+                140
+              ]
+            },
+            {
+              "id": 63,
+              "item": "energy-matrix",
+              "predecessors": [
+                58
+              ]
+            },
+            {
+              "id": 64,
+              "item": "energy-matrix",
+              "predecessors": [
+                54,
+                59
+              ]
+            },
+            {
+              "id": 66,
+              "item": "glass",
+              "predecessors": [
+                34,
+                35
+              ]
+            },
+            {
+              "id": 68,
+              "item": "graviton-lens",
+              "predecessors": [
+                196
+              ]
+            },
+            {
+              "id": 69,
+              "item": "gravity-matrix",
+              "predecessors": [
+                42,
+                43,
+                124
+              ]
+            },
+            {
+              "id": 70,
+              "item": "gravity-matrix",
+              "predecessors": [
+                68,
+                110,
+                111,
+                133,
+                196
+              ]
+            },
+            {
+              "id": 73,
+              "item": "gravity-matrix",
+              "predecessors": [
+                74,
+                202
+              ]
+            },
+            {
+              "id": 74,
+              "item": "gravity-matrix",
+              "predecessors": [
+                91,
+                107
+              ]
+            },
+            {
+              "id": 75,
+              "item": "gravity-matrix",
+              "predecessors": [
+                76
+              ]
+            },
+            {
+              "id": 76,
+              "item": "gravity-matrix",
+              "predecessors": [
+                118,
+                119,
+                141,
+                142
+              ]
+            },
+            {
+              "id": 77,
+              "item": "gravity-matrix",
+              "predecessors": [
+                78
+              ]
+            },
+            {
+              "id": 78,
+              "item": "gravity-matrix",
+              "predecessors": [
+                73,
+                202
+              ]
+            },
+            {
+              "id": 79,
+              "item": "gravity-matrix",
+              "predecessors": [
+                74,
+                80,
+                91,
+                107
+              ]
+            },
+            {
+              "id": 80,
+              "item": "gravity-matrix",
+              "predecessors": [
+                75
+              ]
+            },
+            {
+              "id": 81,
+              "item": "gravity-matrix",
+              "predecessors": [
+                76,
+                82,
+                118,
+                119,
+                141,
+                142
+              ]
+            },
+            {
+              "id": 82,
+              "item": "gravity-matrix",
+              "predecessors": [
+                77
+              ]
+            },
+            {
+              "id": 83,
+              "item": "gravity-matrix",
+              "predecessors": [
+                73,
+                78,
+                202
+              ]
+            },
+            {
+              "id": 84,
+              "item": "high-purity-silicon",
+              "predecessors": [
+                33
+              ]
+            },
+            {
+              "id": 86,
+              "item": "information-matrix",
+              "predecessors": [
+                47,
+                104,
+                131
+              ]
+            },
+            {
+              "id": 87,
+              "item": "information-matrix",
+              "predecessors": [
+                88
+              ]
+            },
+            {
+              "id": 88,
+              "item": "information-matrix",
+              "predecessors": [
+                33,
+                84
+              ]
+            },
+            {
+              "id": 89,
+              "item": "information-matrix",
+              "predecessors": [
+                90
+              ]
+            },
+            {
+              "id": 90,
+              "item": "information-matrix",
+              "predecessors": [
+                44,
+                45,
+                128,
+                132
+              ]
+            },
+            {
+              "id": 91,
+              "item": "information-matrix",
+              "predecessors": [
+                99,
+                112,
+                113,
+                135,
+                136
+              ]
+            },
+            {
+              "id": 93,
+              "item": "information-matrix",
+              "predecessors": [
+                33,
+                68,
+                84,
+                88,
+                94
+              ]
+            },
+            {
+              "id": 94,
+              "item": "information-matrix",
+              "predecessors": [
+                68,
+                89
+              ]
+            },
+            {
+              "id": 95,
+              "item": "information-matrix",
+              "predecessors": [
+                44,
+                45,
+                90,
+                96,
+                128,
+                132
+              ]
+            },
+            {
+              "id": 96,
+              "item": "information-matrix",
+              "predecessors": [
+                91,
+                99,
+                112,
+                113,
+                135,
+                136
+              ]
+            },
+            {
+              "id": 97,
+              "item": "information-matrix",
+              "predecessors": [
+                98
+              ]
+            },
+            {
+              "id": 98,
+              "item": "information-matrix",
+              "predecessors": [
+                33,
+                84,
+                88,
+                93
+              ]
+            },
+            {
+              "id": 99,
+              "item": "information-matrix",
+              "predecessors": [
+                89,
+                94
+              ]
+            },
+            {
+              "id": 102,
+              "item": "magnet",
+              "predecessors": [
+                50
+              ]
+            },
+            {
+              "id": 103,
+              "item": "magnet",
+              "predecessors": [
+                28
+              ]
+            },
+            {
+              "id": 104,
+              "item": "magnetic-coil",
+              "predecessors": [
+                32,
+                194
+              ]
+            },
+            {
+              "id": 105,
+              "item": "magnetic-coil",
+              "predecessors": [
+                38
+              ]
+            },
+            {
+              "id": 107,
+              "item": "antimatter",
+              "predecessors": [
+                68,
+                91,
+                93,
+                94
+              ]
+            },
+            {
+              "id": 108,
+              "item": "antimatter",
+              "predecessors": [
+                69,
+                109
+              ]
+            },
+            {
+              "id": 109,
+              "item": "antimatter",
+              "predecessors": [
+                66
+              ]
+            },
+            {
+              "id": 110,
+              "item": "antimatter",
+              "predecessors": [
+                68,
+                111,
+                196
+              ]
+            },
+            {
+              "id": 111,
+              "item": "antimatter",
+              "predecessors": [
+                68,
+                196
+              ]
+            },
+            {
+              "id": 112,
+              "item": "antimatter",
+              "predecessors": [
+                99,
+                113,
+                126
+              ]
+            },
+            {
+              "id": 113,
+              "item": "antimatter",
+              "predecessors": [
+                99
+              ]
+            },
+            {
+              "id": 114,
+              "item": "antimatter",
+              "predecessors": [
+                66,
+                109,
+                115
+              ]
+            },
+            {
+              "id": 115,
+              "item": "antimatter",
+              "predecessors": [
+                110
+              ]
+            },
+            {
+              "id": 116,
+              "item": "antimatter",
+              "predecessors": [
+                111,
+                117
+              ]
+            },
+            {
+              "id": 117,
+              "item": "antimatter",
+              "predecessors": [
+                112,
+                126
+              ]
+            },
+            {
+              "id": 118,
+              "item": "antimatter",
+              "predecessors": [
+                113,
+                119
+              ]
+            },
+            {
+              "id": 119,
+              "item": "antimatter",
+              "predecessors": [
+                66,
+                109,
+                114
+              ]
+            },
+            {
+              "id": 120,
+              "item": "antimatter",
+              "predecessors": [
+                110,
+                115
+              ]
+            },
+            {
+              "id": 122,
+              "item": "microcrystalline-component",
+              "predecessors": [
+                47,
+                102
+              ]
+            },
+            {
+              "id": 123,
+              "item": "particle-broadband",
+              "predecessors": [
+                34,
+                35,
+                66
+              ]
+            },
+            {
+              "id": 124,
+              "item": "particle-container",
+              "predecessors": [
+                42,
+                43
+              ]
+            },
+            {
+              "id": 126,
+              "item": "refined-oil",
+              "predecessors": [
+                40,
+                41
+              ]
+            },
+            {
+              "id": 128,
+              "item": "hydrogen",
+              "predecessors": [
+                44,
+                45,
+                132
+              ]
+            },
+            {
+              "id": 130,
+              "item": "processor",
+              "predecessors": [
+                32,
+                104,
+                194
+              ]
+            },
+            {
+              "id": 131,
+              "item": "quantum-chip",
+              "predecessors": [
+                47,
+                104
+              ]
+            },
+            {
+              "id": 132,
+              "item": "strange-matter",
+              "predecessors": [
+                44,
+                45,
+                89,
+                90
+              ]
+            },
+            {
+              "id": 133,
+              "item": "structure-matrix",
+              "predecessors": [
+                68,
+                110,
+                111,
+                196
+              ]
+            },
+            {
+              "id": 134,
+              "item": "structure-matrix",
+              "predecessors": [
+                95,
+                96
+              ]
+            },
+            {
+              "id": 135,
+              "item": "structure-matrix",
+              "predecessors": [
+                99,
+                112,
+                113,
+                136
+              ]
+            },
+            {
+              "id": 136,
+              "item": "structure-matrix",
+              "predecessors": [
+                99,
+                112,
+                113
+              ]
+            },
+            {
+              "id": 137,
+              "item": "structure-matrix",
+              "predecessors": [
+                38,
+                105,
+                114,
+                115,
+                138,
+                165
+              ]
+            },
+            {
+              "id": 138,
+              "item": "structure-matrix",
+              "predecessors": [
+                114,
+                115
+              ]
+            },
+            {
+              "id": 139,
+              "item": "structure-matrix",
+              "predecessors": [
+                116,
+                117,
+                140
+              ]
+            },
+            {
+              "id": 140,
+              "item": "structure-matrix",
+              "predecessors": [
+                116,
+                117,
+                120
+              ]
+            },
+            {
+              "id": 141,
+              "item": "structure-matrix",
+              "predecessors": [
+                118,
+                119,
+                136,
+                142
+              ]
+            },
+            {
+              "id": 142,
+              "item": "structure-matrix",
+              "predecessors": [
+                38,
+                105,
+                118,
+                119,
+                137,
+                165
+              ]
+            },
+            {
+              "id": 143,
+              "item": "structure-matrix",
+              "predecessors": [
+                138,
+                144
+              ]
+            },
+            {
+              "id": 144,
+              "item": "structure-matrix",
+              "predecessors": [
+                139
+              ]
+            },
+            {
+              "id": 145,
+              "item": "structure-matrix",
+              "predecessors": [
+                120,
+                140,
+                146,
+                198
+              ]
+            },
+            {
+              "id": 146,
+              "item": "structure-matrix",
+              "predecessors": [
+                136,
+                141,
+                198
+              ]
+            },
+            {
+              "id": 147,
+              "item": "structure-matrix",
+              "predecessors": [
+                38,
+                105,
+                122,
+                137,
+                142,
+                165
+              ]
+            },
+            {
+              "id": 149,
+              "item": "titanium-glass",
+              "predecessors": [
+                84,
+                124
+              ]
+            },
+            {
+              "id": 150,
+              "item": "titanium-ingot",
+              "predecessors": [
+                131
+              ]
+            },
+            {
+              "id": 163,
+              "item": "iron-ore",
+              "predecessors": [
+                75,
+                76
+              ]
+            },
+            {
+              "id": 165,
+              "item": "crude-oil",
+              "predecessors": [
+                38,
+                105
+              ]
+            },
+            {
+              "id": 171,
+              "item": "universe-matrix",
+              "predecessors": [
+                40,
+                45
+              ]
+            },
+            {
+              "id": 174,
+              "item": "universe-matrix",
+              "predecessors": [
+                146
+              ]
+            },
+            {
+              "id": 175,
+              "item": "universe-matrix",
+              "predecessors": [
+                180
+              ]
+            },
+            {
+              "id": 177,
+              "item": "universe-matrix",
+              "predecessors": [
+                120
+              ]
+            },
+            {
+              "id": 180,
+              "item": "universe-matrix",
+              "predecessors": [
+                99
+              ]
+            },
+            {
+              "id": 189,
+              "item": "diamond",
+              "predecessors": [
+                46
+              ]
+            },
+            {
+              "id": 191,
+              "item": "energetic-graphite",
+              "predecessors": [
+                105
+              ]
+            },
+            {
+              "id": 194,
+              "item": "high-purity-silicon",
+              "predecessors": [
+                32,
+                191
+              ]
+            },
+            {
+              "id": 196,
+              "item": "iron-ingot",
+              "predecessors": [
+                73,
+                74
+              ]
+            },
+            {
+              "id": 198,
+              "item": "iron-ingot",
+              "predecessors": [
+                87,
+                88
+              ]
+            },
+            {
+              "id": 200,
+              "item": "processor",
+              "predecessors": [
+                28,
+                103
+              ]
+            },
+            {
+              "id": 202,
+              "item": "titanium-ingot",
+              "predecessors": [
+                128
+              ]
+            },
+            {
+              "id": 203,
+              "item": "titanium-ingot",
+              "predecessors": [
+                36,
+                47,
+                102,
+                122
+              ]
+            }
+          ]
+        }
+      ],
+      "elapsed_s": 1.2939190110191703,
+      "constructed_links": 44,
+      "junctions": [
+        4290,
+        4294,
+        4299,
+        4303,
+        4307,
+        4311,
+        4321,
+        4331,
+        4341,
+        4351,
+        4361,
+        4372,
+        4376,
+        4381,
+        4385,
+        4395,
+        4405,
+        4415,
+        4425,
+        4435,
+        4446,
+        4451,
+        4455,
+        4465,
+        4475,
+        4485,
+        4495,
+        4505,
+        4516,
+        4520,
+        4524,
+        4534,
+        4544,
+        4554,
+        4564,
+        4574,
+        4585,
+        4589,
+        4594,
+        4598,
+        4602,
+        4606,
+        4610,
+        4620,
+        4630,
+        4640,
+        4650,
+        4660,
+        4675,
+        4679,
+        4683,
+        4693,
+        4703,
+        4713,
+        4723,
+        4733,
+        4744,
+        4748,
+        4755,
+        4764,
+        4773,
+        4783,
+        4792
+      ],
+      "junction_cells": [
+        [
+          26,
+          53,
+          0
+        ],
+        [
+          26,
+          70,
+          0
+        ],
+        [
+          26,
+          87,
+          0
+        ],
+        [
+          73,
+          63,
+          0
+        ],
+        [
+          206,
+          23,
+          0
+        ],
+        [
+          206,
+          29,
+          0
+        ],
+        [
+          206,
+          35,
+          0
+        ],
+        [
+          206,
+          41,
+          0
+        ],
+        [
+          206,
+          47,
+          0
+        ],
+        [
+          206,
+          53,
+          0
+        ],
+        [
+          206,
+          59,
+          0
+        ],
+        [
+          206,
+          90,
+          0
+        ],
+        [
+          221,
+          107,
+          0
+        ],
+        [
+          224,
+          126,
+          0
+        ],
+        [
+          224,
+          132,
+          0
+        ],
+        [
+          224,
+          138,
+          0
+        ],
+        [
+          224,
+          144,
+          0
+        ],
+        [
+          224,
+          150,
+          0
+        ],
+        [
+          224,
+          156,
+          0
+        ],
+        [
+          224,
+          162,
+          0
+        ],
+        [
+          306,
+          50,
+          0
+        ],
+        [
+          330,
+          83,
+          0
+        ],
+        [
+          330,
+          89,
+          0
+        ],
+        [
+          330,
+          95,
+          0
+        ],
+        [
+          330,
+          101,
+          0
+        ],
+        [
+          330,
+          107,
+          0
+        ],
+        [
+          330,
+          113,
+          0
+        ],
+        [
+          330,
+          119,
+          0
+        ],
+        [
+          406,
+          21,
+          0
+        ],
+        [
+          424,
+          40,
+          0
+        ],
+        [
+          424,
+          46,
+          0
+        ],
+        [
+          424,
+          52,
+          0
+        ],
+        [
+          424,
+          58,
+          0
+        ],
+        [
+          424,
+          64,
+          0
+        ],
+        [
+          424,
+          70,
+          0
+        ],
+        [
+          424,
+          76,
+          0
+        ],
+        [
+          385,
+          93,
+          0
+        ],
+        [
+          373,
+          110,
+          0
+        ],
+        [
+          385,
+          126,
+          0
+        ],
+        [
+          466,
+          23,
+          0
+        ],
+        [
+          462,
+          41,
+          0
+        ],
+        [
+          468,
+          60,
+          0
+        ],
+        [
+          468,
+          66,
+          0
+        ],
+        [
+          468,
+          72,
+          0
+        ],
+        [
+          468,
+          78,
+          0
+        ],
+        [
+          468,
+          84,
+          0
+        ],
+        [
+          468,
+          90,
+          0
+        ],
+        [
+          468,
+          96,
+          0
+        ],
+        [
+          614,
+          23,
+          0
+        ],
+        [
+          638,
+          72,
+          0
+        ],
+        [
+          638,
+          78,
+          0
+        ],
+        [
+          638,
+          84,
+          0
+        ],
+        [
+          638,
+          90,
+          0
+        ],
+        [
+          638,
+          96,
+          0
+        ],
+        [
+          638,
+          102,
+          0
+        ],
+        [
+          638,
+          108,
+          0
+        ],
+        [
+          614,
+          127,
+          0
+        ],
+        [
+          699,
+          37,
+          0
+        ],
+        [
+          249,
+          37,
+          0
+        ],
+        [
+          179,
+          68,
+          0
+        ],
+        [
+          179,
+          115,
+          0
+        ],
+        [
+          515,
+          69,
+          0
+        ],
+        [
+          55,
+          72,
+          0
+        ]
+      ]
+    },
+    {
+      "case": "coated-mall",
+      "spec_sha256": "2ac9f763d8bca40a93e11f6e6c45ca41ec3fb763a501aefa97a323d18cd0f68e",
+      "budget_s": 60.0,
+      "original_factory_gate": false,
+      "global_router_calls": 0,
+      "outcome": "constructive-control-refused",
+      "reason": "capacity-first probe requires uncoated, non-prelinked interfaces",
+      "flight_allocation": [],
+      "elapsed_s": 1.0277359378524125,
+      "constructed_links": 0,
+      "junctions": [],
+      "junction_cells": []
+    },
+    {
+      "case": "universe-matrix",
+      "spec_sha256": "8eb481d486228dfaed052af14cb8d8c9aeca8c1c3d35bf07fc6679cfe9bcb101",
+      "budget_s": 60.0,
+      "original_factory_gate": false,
+      "global_router_calls": 0,
+      "outcome": "constructive-control-refused",
+      "reason": "capacity-first probe requires uncoated, non-prelinked interfaces",
+      "flight_allocation": [],
+      "elapsed_s": 0.5493517559953034,
+      "constructed_links": 0,
+      "junctions": [],
+      "junction_cells": []
+    }
+  ],
+  "post_typecheck_control": {
+    "case": "three-output",
+    "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+    "budget_s": 30.0,
+    "original_factory_gate": true,
+    "global_router_calls": 0,
+    "topology": {
+      "candidate_arcs": 28,
+      "selected_arcs": 26,
+      "added": 0,
+      "removed": 1
+    },
+    "obligations": 26,
+    "flights_required": 26,
+    "flights_available": 24,
+    "held_out": false,
+    "assigned_rates": {
+      "0": "5/3",
+      "1": "5/3",
+      "2": "20/3",
+      "3": "15",
+      "4": "10/3",
+      "5": "10/3",
+      "6": "10/3",
+      "7": "15/2",
+      "8": "20/3",
+      "9": "20/3",
+      "10": "20",
+      "11": "40/3",
+      "12": "50/3",
+      "13": "40/3",
+      "14": "10/3",
+      "15": "20/3",
+      "16": "30",
+      "17": "20/3",
+      "18": "15",
+      "19": "20/3",
+      "20": "35/6",
+      "21": "15",
+      "22": "15",
+      "23": "10/3",
+      "24": "10/3",
+      "25": "25/3"
+    },
+    "checks_run": 67,
+    "errors": 0,
+    "skipped": [],
+    "area": 36722,
+    "bounds": [
+      0,
+      0,
+      300,
+      121
+    ],
+    "outcome": "original-clean",
+    "buildings": 8213,
+    "flight_allocation": [
+      {
+        "id": 0,
+        "item": "graphene",
+        "role": "local-source",
+        "level": 1,
+        "exclusive_level": 1,
+        "predecessors": [],
+        "rejected": []
+      },
+      {
+        "id": 1,
+        "item": "casimir-crystal",
+        "role": "internal",
+        "level": 3,
+        "exclusive_level": 3,
+        "predecessors": [],
+        "rejected": []
+      },
+      {
+        "id": 2,
+        "item": "casimir-crystal",
+        "role": "internal",
+        "level": 4,
+        "exclusive_level": 4,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "item": "circuit-board",
+        "role": "internal",
+        "level": 3,
+        "exclusive_level": 5,
+        "predecessors": [],
+        "rejected": []
+      },
+      {
+        "id": 4,
+        "item": "glass",
+        "role": "internal",
+        "level": 3,
+        "exclusive_level": 6,
+        "predecessors": [],
+        "rejected": []
+      },
+      {
+        "id": 5,
+        "item": "graphene",
+        "role": "internal",
+        "level": 5,
+        "exclusive_level": 7,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 4,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "item": "graphene",
+        "role": "internal",
+        "level": 6,
+        "exclusive_level": 8,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 4,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 5,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "item": "hydrogen",
+        "role": "internal",
+        "level": 7,
+        "exclusive_level": 9,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 4,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 5,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 6,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "item": "high-purity-silicon",
+        "role": "internal",
+        "level": 4,
+        "exclusive_level": 10,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "item": "microcrystalline-component",
+        "role": "internal",
+        "level": 8,
+        "exclusive_level": 11,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 4,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 5,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 6,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 7,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "item": "titanium-glass",
+        "role": "internal",
+        "level": 9,
+        "exclusive_level": 12,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 4,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 5,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 6,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 7,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 8,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "item": "hydrogen",
+        "role": "external",
+        "level": 3,
+        "exclusive_level": 13,
+        "predecessors": [],
+        "rejected": []
+      },
+      {
+        "id": 12,
+        "item": "optical-grating-crystal",
+        "role": "external",
+        "level": 4,
+        "exclusive_level": 14,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 14,
+        "item": "optical-grating-crystal",
+        "role": "external",
+        "level": 8,
+        "exclusive_level": 16,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 4,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 5,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 6,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 7,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 15,
+        "item": "copper-ingot",
+        "role": "external",
+        "level": 10,
+        "exclusive_level": 17,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 4,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 5,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 6,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 7,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 8,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 9,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 16,
+        "item": "iron-ingot",
+        "role": "external",
+        "level": 11,
+        "exclusive_level": 18,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 4,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 5,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 6,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 7,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 8,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 9,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 10,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 17,
+        "item": "stone",
+        "role": "external",
+        "level": 12,
+        "exclusive_level": 19,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 4,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 5,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 6,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 7,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 8,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 9,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 10,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 11,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 18,
+        "item": "fire-ice",
+        "role": "external",
+        "level": 13,
+        "exclusive_level": 20,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 4,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 5,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 6,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 7,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 8,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 9,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 10,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 11,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 12,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 19,
+        "item": "silicon-ore",
+        "role": "external",
+        "level": 5,
+        "exclusive_level": 21,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 4,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 20,
+        "item": "copper-ingot",
+        "role": "external",
+        "level": 6,
+        "exclusive_level": 22,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 4,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 5,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 21,
+        "item": "high-purity-silicon",
+        "role": "external",
+        "level": 7,
+        "exclusive_level": 23,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 4,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 5,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 6,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 22,
+        "item": "titanium-ingot",
+        "role": "external",
+        "level": 14,
+        "exclusive_level": 24,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 4,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 5,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 6,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 7,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 8,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 9,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 10,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 11,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 12,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 13,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 23,
+        "item": "water",
+        "role": "external",
+        "level": 15,
+        "exclusive_level": 25,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 4,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 5,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 6,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 7,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 8,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 9,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 10,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 11,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 12,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 13,
+            "reason": "horizontal-overlap"
+          },
+          {
+            "level": 14,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 24,
+        "item": "plane-filter",
+        "role": "output",
+        "level": 3,
+        "exclusive_level": 26,
+        "predecessors": [],
+        "rejected": []
+      },
+      {
+        "id": 25,
+        "item": "processor",
+        "role": "output",
+        "level": 4,
+        "exclusive_level": 27,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 26,
+        "item": "titanium-glass",
+        "role": "output",
+        "level": 4,
+        "exclusive_level": 28,
+        "predecessors": [],
+        "rejected": [
+          {
+            "level": 3,
+            "reason": "horizontal-overlap"
+          }
+        ]
+      },
+      {
+        "id": 13,
+        "item": "hydrogen",
+        "role": "external",
+        "level": 9,
+        "exclusive_level": 15,
+        "predecessors": [
+          14
+        ],
+        "rejected": []
+      }
+    ],
+    "elapsed_s": 3.7192316870205104,
+    "constructed_links": 32,
+    "junctions": [
+      2924,
+      2932,
+      2941,
+      2950
+    ],
+    "junction_cells": [
+      [
+        70,
+        79,
+        0
+      ],
+      [
+        129,
+        38,
+        0
+      ],
+      [
+        5,
+        27,
+        0
+      ],
+      [
+        129,
+        24,
+        0
+      ]
+    ]
+  },
+  "independent_audit": [
+    {
+      "case": "coated-mall",
+      "original_factory_gate": false,
+      "audited_links": 0,
+      "full_segment_intersections": [],
+      "partial_geometry_only": true
+    },
+    {
+      "case": "three-output",
+      "original_factory_gate": true,
+      "audited_links": 32,
+      "full_segment_intersections": [],
+      "partial_geometry_only": false
+    },
+    {
+      "case": "universe-matrix",
+      "original_factory_gate": false,
+      "audited_links": 0,
+      "full_segment_intersections": [],
+      "partial_geometry_only": true
+    },
+    {
+      "case": "unsprayed-mall",
+      "original_factory_gate": false,
+      "audited_links": 30,
+      "full_segment_intersections": [],
+      "partial_geometry_only": true,
+      "impossible_height_cycle": [
+        {
+          "higher": 61,
+          "higher_item": "magnet",
+          "lower": 114,
+          "lower_item": "hydrogen",
+          "plane_crosses_ground_riser_at": [
+            [
+              604,
+              83
+            ]
+          ]
+        },
+        {
+          "higher": 114,
+          "higher_item": "hydrogen",
+          "lower": 61,
+          "lower_item": "magnet",
+          "plane_crosses_ground_riser_at": [
+            [
+              967,
+              83
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "case": "unsprayed-mall-075",
+      "original_factory_gate": false,
+      "audited_links": 22,
+      "full_segment_intersections": [],
+      "partial_geometry_only": true,
+      "impossible_height_cycle": [
+        {
+          "higher": 31,
+          "higher_item": "circuit-board",
+          "lower": 59,
+          "lower_item": "magnetic-coil",
+          "plane_crosses_ground_riser_at": [
+            [
+              1045,
+              12
+            ]
+          ]
+        },
+        {
+          "higher": 59,
+          "higher_item": "magnetic-coil",
+          "lower": 39,
+          "lower_item": "electromagnetic-turbine",
+          "plane_crosses_ground_riser_at": [
+            [
+              456,
+              41
+            ]
+          ]
+        },
+        {
+          "higher": 39,
+          "higher_item": "electromagnetic-turbine",
+          "lower": 31,
+          "lower_item": "circuit-board",
+          "plane_crosses_ground_riser_at": [
+            [
+              1103,
+              12
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "case": "unsprayed-mall-125",
+      "original_factory_gate": false,
+      "audited_links": 34,
+      "full_segment_intersections": [],
+      "partial_geometry_only": true,
+      "impossible_height_cycle": [
+        {
+          "higher": 38,
+          "higher_item": "carbon-nanotube",
+          "lower": 143,
+          "lower_item": "gear",
+          "plane_crosses_ground_riser_at": [
+            [
+              433,
+              12
+            ]
+          ]
+        },
+        {
+          "higher": 143,
+          "higher_item": "gear",
+          "lower": 50,
+          "lower_item": "electromagnetic-turbine",
+          "plane_crosses_ground_riser_at": [
+            [
+              532,
+              61
+            ]
+          ]
+        },
+        {
+          "higher": 50,
+          "higher_item": "electromagnetic-turbine",
+          "lower": 38,
+          "lower_item": "carbon-nanotube",
+          "plane_crosses_ground_riser_at": [
+            [
+              623,
+              12
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "case": "unsprayed-universe",
+      "original_factory_gate": false,
+      "audited_links": 44,
+      "full_segment_intersections": [],
+      "partial_geometry_only": true,
+      "impossible_height_cycle": [
+        {
+          "higher": 35,
+          "higher_item": "electromagnetic-matrix",
+          "lower": 47,
+          "lower_item": "electromagnetic-turbine",
+          "plane_crosses_ground_riser_at": [
+            [
+              519,
+              13
+            ]
+          ]
+        },
+        {
+          "higher": 47,
+          "higher_item": "electromagnetic-turbine",
+          "lower": 102,
+          "lower_item": "magnet",
+          "plane_crosses_ground_riser_at": [
+            [
+              453,
+              13
+            ]
+          ]
+        },
+        {
+          "higher": 102,
+          "higher_item": "magnet",
+          "lower": 50,
+          "lower_item": "energy-matrix",
+          "plane_crosses_ground_riser_at": [
+            [
+              226,
+              126
+            ]
+          ]
+        },
+        {
+          "higher": 50,
+          "higher_item": "energy-matrix",
+          "lower": 40,
+          "lower_item": "electromagnetic-matrix",
+          "plane_crosses_ground_riser_at": [
+            [
+              208,
+              47
+            ]
+          ]
+        },
+        {
+          "higher": 40,
+          "higher_item": "electromagnetic-matrix",
+          "lower": 35,
+          "lower_item": "electromagnetic-matrix",
+          "plane_crosses_ground_riser_at": [
+            [
+              728,
+              13
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "junction_witness_count": 12,
+  "validation": {
+    "ruff_check": "pass",
+    "ruff_format_check": "pass",
+    "basedpyright": {
+      "filesAnalyzed": 5,
+      "errorCount": 0,
+      "warningCount": 0,
+      "informationCount": 0,
+      "timeInSec": 3.244
+    }
+  },
+  "production_changed": false,
+  "global_router_fallback": false
+}

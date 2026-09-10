@@ -1,0 +1,67 @@
+[
+  {
+    "case": "three-output",
+    "spec_sha256": "4ec83bc01b7ec835f6684fa3df432f7fd6fec96ca2e2c53b246ba18f2230a150",
+    "candidates": 28,
+    "selected": 26,
+    "added": 0,
+    "removed": 1,
+    "max_fanout": 2,
+    "max_fanin": 2,
+    "elapsed_s": 0.22950534569099545,
+    "rate_ledger": "exact",
+    "factory_gate": false
+  },
+  {
+    "case": "unsprayed-mall",
+    "spec_sha256": "3995a1266312d463293bae0a8e01b6f95f254550df54c56e5888e6d846e00ff3",
+    "candidates": 515,
+    "selected": 141,
+    "added": 56,
+    "removed": 64,
+    "max_fanout": 4,
+    "max_fanin": 3,
+    "elapsed_s": 1.039056435227394,
+    "rate_ledger": "exact",
+    "factory_gate": false
+  },
+  {
+    "case": "unsprayed-mall-075",
+    "spec_sha256": "d6aade99fcafb5bdb4603a3cdde32115632305d3cf0bbec5a74f6fd53588e54c",
+    "candidates": 382,
+    "selected": 116,
+    "added": 41,
+    "removed": 48,
+    "max_fanout": 5,
+    "max_fanin": 3,
+    "elapsed_s": 0.7311688321642578,
+    "rate_ledger": "exact",
+    "factory_gate": false
+  },
+  {
+    "case": "unsprayed-mall-125",
+    "spec_sha256": "8b767432f5260328ab80cbf2d8528ec8c02475d81a52074e8b242fa3db2a89e9",
+    "candidates": 579,
+    "selected": 148,
+    "added": 58,
+    "removed": 71,
+    "max_fanout": 5,
+    "max_fanin": 3,
+    "elapsed_s": 1.104539048857987,
+    "rate_ledger": "exact",
+    "factory_gate": false
+  },
+  {
+    "case": "unsprayed-universe",
+    "spec_sha256": "8337dfe1999a9f82d1bc8c92649db1fcaf1621dd3ef112bf9540ad9978d35033",
+    "candidates": 256,
+    "selected": 182,
+    "added": 19,
+    "removed": 23,
+    "max_fanout": 15,
+    "max_fanin": 3,
+    "elapsed_s": 0.6427621766924858,
+    "rate_ledger": "exact",
+    "factory_gate": false
+  }
+]

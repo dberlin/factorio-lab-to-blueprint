@@ -1,0 +1,215 @@
+[
+  {
+    "case": "coated-mall",
+    "original_factory_gate": false,
+    "audited_links": 0,
+    "full_segment_intersections": [],
+    "partial_geometry_only": true
+  },
+  {
+    "case": "three-output",
+    "original_factory_gate": true,
+    "audited_links": 32,
+    "full_segment_intersections": [],
+    "partial_geometry_only": false
+  },
+  {
+    "case": "universe-matrix",
+    "original_factory_gate": false,
+    "audited_links": 0,
+    "full_segment_intersections": [],
+    "partial_geometry_only": true
+  },
+  {
+    "case": "unsprayed-mall",
+    "original_factory_gate": false,
+    "audited_links": 30,
+    "full_segment_intersections": [],
+    "partial_geometry_only": true,
+    "impossible_height_cycle": [
+      {
+        "higher": 61,
+        "higher_item": "magnet",
+        "lower": 114,
+        "lower_item": "hydrogen",
+        "plane_crosses_ground_riser_at": [
+          [
+            604,
+            83
+          ]
+        ]
+      },
+      {
+        "higher": 114,
+        "higher_item": "hydrogen",
+        "lower": 61,
+        "lower_item": "magnet",
+        "plane_crosses_ground_riser_at": [
+          [
+            967,
+            83
+          ]
+        ]
+      }
+    ]
+  },
+  {
+    "case": "unsprayed-mall-075",
+    "original_factory_gate": false,
+    "audited_links": 22,
+    "full_segment_intersections": [],
+    "partial_geometry_only": true,
+    "impossible_height_cycle": [
+      {
+        "higher": 31,
+        "higher_item": "circuit-board",
+        "lower": 59,
+        "lower_item": "magnetic-coil",
+        "plane_crosses_ground_riser_at": [
+          [
+            1045,
+            12
+          ]
+        ]
+      },
+      {
+        "higher": 59,
+        "higher_item": "magnetic-coil",
+        "lower": 39,
+        "lower_item": "electromagnetic-turbine",
+        "plane_crosses_ground_riser_at": [
+          [
+            456,
+            41
+          ]
+        ]
+      },
+      {
+        "higher": 39,
+        "higher_item": "electromagnetic-turbine",
+        "lower": 31,
+        "lower_item": "circuit-board",
+        "plane_crosses_ground_riser_at": [
+          [
+            1103,
+            12
+          ]
+        ]
+      }
+    ]
+  },
+  {
+    "case": "unsprayed-mall-125",
+    "original_factory_gate": false,
+    "audited_links": 34,
+    "full_segment_intersections": [],
+    "partial_geometry_only": true,
+    "impossible_height_cycle": [
+      {
+        "higher": 38,
+        "higher_item": "carbon-nanotube",
+        "lower": 143,
+        "lower_item": "gear",
+        "plane_crosses_ground_riser_at": [
+          [
+            433,
+            12
+          ]
+        ]
+      },
+      {
+        "higher": 143,
+        "higher_item": "gear",
+        "lower": 50,
+        "lower_item": "electromagnetic-turbine",
+        "plane_crosses_ground_riser_at": [
+          [
+            532,
+            61
+          ]
+        ]
+      },
+      {
+        "higher": 50,
+        "higher_item": "electromagnetic-turbine",
+        "lower": 38,
+        "lower_item": "carbon-nanotube",
+        "plane_crosses_ground_riser_at": [
+          [
+            623,
+            12
+          ]
+        ]
+      }
+    ]
+  },
+  {
+    "case": "unsprayed-universe",
+    "original_factory_gate": false,
+    "audited_links": 44,
+    "full_segment_intersections": [],
+    "partial_geometry_only": true,
+    "impossible_height_cycle": [
+      {
+        "higher": 35,
+        "higher_item": "electromagnetic-matrix",
+        "lower": 47,
+        "lower_item": "electromagnetic-turbine",
+        "plane_crosses_ground_riser_at": [
+          [
+            519,
+            13
+          ]
+        ]
+      },
+      {
+        "higher": 47,
+        "higher_item": "electromagnetic-turbine",
+        "lower": 102,
+        "lower_item": "magnet",
+        "plane_crosses_ground_riser_at": [
+          [
+            453,
+            13
+          ]
+        ]
+      },
+      {
+        "higher": 102,
+        "higher_item": "magnet",
+        "lower": 50,
+        "lower_item": "energy-matrix",
+        "plane_crosses_ground_riser_at": [
+          [
+            226,
+            126
+          ]
+        ]
+      },
+      {
+        "higher": 50,
+        "higher_item": "energy-matrix",
+        "lower": 40,
+        "lower_item": "electromagnetic-matrix",
+        "plane_crosses_ground_riser_at": [
+          [
+            208,
+            47
+          ]
+        ]
+      },
+      {
+        "higher": 40,
+        "higher_item": "electromagnetic-matrix",
+        "lower": 35,
+        "lower_item": "electromagnetic-matrix",
+        "plane_crosses_ground_riser_at": [
+          [
+            728,
+            13
+          ]
+        ]
+      }
+    ]
+  }
+]

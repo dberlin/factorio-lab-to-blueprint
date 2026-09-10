@@ -1,0 +1,23 @@
+{
+  "command": [
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/transport-first-current/.venv/bin/python",
+    "-m",
+    "2026-09-09-cadical-integer-flow.template_experiment",
+    "run",
+    "unsprayed-mall"
+  ],
+  "exit": -15,
+  "hard_deadline_terminated": true,
+  "bootstrap_inclusive_seconds": 66.06247548991814,
+  "original_budget_s": 60.0,
+  "progress": {
+    "case": "unsprayed-mall",
+    "started_monotonic": 2150308.529355916,
+    "deadline": 2150368.529355916,
+    "budget_s": 60.0,
+    "outcome": "UNKNOWN"
+  },
+  "final_report_written": true,
+  "outcome": "UNKNOWN",
+  "reason": "hard deadline or missing final report; not infeasibility or acceptance"
+}

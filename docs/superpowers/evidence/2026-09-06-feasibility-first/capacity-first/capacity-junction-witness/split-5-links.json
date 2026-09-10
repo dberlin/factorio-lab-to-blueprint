@@ -1,0 +1,220 @@
+[
+  {
+    "item": "iron-ingot",
+    "source": 5,
+    "sink": 6,
+    "rate": "12/25",
+    "cells": [
+      [
+        10,
+        10,
+        0
+      ],
+      [
+        10,
+        11,
+        0
+      ],
+      [
+        10,
+        12,
+        0
+      ],
+      [
+        10,
+        13,
+        0
+      ],
+      [
+        10,
+        14,
+        0
+      ],
+      [
+        10,
+        15,
+        0
+      ],
+      [
+        10,
+        16,
+        0
+      ]
+    ],
+    "role": "local-junction-tree"
+  },
+  {
+    "item": "iron-ingot",
+    "source": 15,
+    "sink": 1,
+    "rate": "3/5",
+    "cells": [
+      [
+        7,
+        10,
+        0
+      ],
+      [
+        8,
+        10,
+        0
+      ],
+      [
+        9,
+        10,
+        0
+      ],
+      [
+        10,
+        10,
+        0
+      ]
+    ],
+    "role": "witness-boundary"
+  },
+  {
+    "item": "iron-ingot",
+    "source": 2,
+    "sink": 18,
+    "rate": "1/25",
+    "cells": [
+      [
+        10,
+        10,
+        0
+      ],
+      [
+        11,
+        10,
+        0
+      ],
+      [
+        12,
+        10,
+        0
+      ],
+      [
+        13,
+        10,
+        0
+      ]
+    ],
+    "role": "witness-boundary"
+  },
+  {
+    "item": "iron-ingot",
+    "source": 3,
+    "sink": 21,
+    "rate": "2/25",
+    "cells": [
+      [
+        10,
+        10,
+        0
+      ],
+      [
+        10,
+        9,
+        0
+      ],
+      [
+        10,
+        8,
+        0
+      ],
+      [
+        10,
+        7,
+        0
+      ]
+    ],
+    "role": "witness-boundary"
+  },
+  {
+    "item": "iron-ingot",
+    "source": 12,
+    "sink": 24,
+    "rate": "3/25",
+    "cells": [
+      [
+        10,
+        16,
+        0
+      ],
+      [
+        11,
+        16,
+        0
+      ],
+      [
+        12,
+        16,
+        0
+      ],
+      [
+        13,
+        16,
+        0
+      ]
+    ],
+    "role": "witness-boundary"
+  },
+  {
+    "item": "iron-ingot",
+    "source": 13,
+    "sink": 27,
+    "rate": "4/25",
+    "cells": [
+      [
+        10,
+        16,
+        0
+      ],
+      [
+        9,
+        16,
+        0
+      ],
+      [
+        8,
+        16,
+        0
+      ],
+      [
+        7,
+        16,
+        0
+      ]
+    ],
+    "role": "witness-boundary"
+  },
+  {
+    "item": "iron-ingot",
+    "source": 14,
+    "sink": 30,
+    "rate": "1/5",
+    "cells": [
+      [
+        10,
+        16,
+        0
+      ],
+      [
+        10,
+        17,
+        0
+      ],
+      [
+        10,
+        18,
+        0
+      ],
+      [
+        10,
+        19,
+        0
+      ]
+    ],
+    "role": "witness-boundary"
+  }
+]
