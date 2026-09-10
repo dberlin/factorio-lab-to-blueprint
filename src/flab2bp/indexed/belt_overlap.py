@@ -28,9 +28,10 @@ cached, exactly as if this module did not exist for that call.
 
 Backend: a plain dict bucket grid, matching the real
 `_belt_overlap_candidates` exactly -- cell size `8.0`, one item registered at
-every cell its reach-expanded box occupies (`math.hypot(box.half...) +
-BELT_PROBE_RADIUS` on float box centres), looked up by ONE probe-derived key
-with no neighbour expansion (registration already over-covers by `reach`).
+every cell its reach-expanded box occupies, looked up by ONE probe-derived
+key with no neighbour expansion (registration already over-covers by `reach`).
+Flat geometry uses world XZ cells; projected geometry uses world XYZ cells
+and the full box circumradius plus `BELT_PROBE_RADIUS`.
 `littletable` adds nothing to a bucket grid and `polars` cannot express one.
 
 This module is deliberately geometry-agnostic: it knows cells and item
@@ -47,7 +48,7 @@ from __future__ import annotations
 from collections.abc import Callable, Hashable, Iterable, Sequence
 from typing import Any
 
-Cell = tuple[int, int]
+Cell = tuple[int, int] | tuple[int, int, int]
 
 
 class BeltOverlap:

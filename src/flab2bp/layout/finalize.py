@@ -228,6 +228,7 @@ class _ProjectionInvariants:
     ]
     coaters: tuple[tuple[int, colliders.Placed], ...]
     splitters: tuple[tuple[int, colliders.Placed], ...]
+    previews: tuple[colliders.Preview, ...]
 
 
 @dataclass(slots=True)
@@ -263,6 +264,16 @@ type _StaticFailureCache = Callable[
 type _FailureCache = Callable[..., ProjectionFailure | None]
 
 
+type _BeltProjectionContext = tuple[
+    tuple[colliders.Preview, ...],
+    tuple[tuple[float, float], ...],
+    planet.Band,
+    int,
+    float,
+    int,
+]
+
+
 @dataclass(slots=True)
 class _ProjectionCache:
     counters: _ProjectionCounters
@@ -280,6 +291,16 @@ class _ProjectionCache:
         tuple[int, int, int, int, float, bool],
         tuple[tuple[int, PlacedBuilding], ...],
     ] = field(default_factory=dict)
+    belt_failures: dict[
+        tuple[tuple[colliders.Preview, ...], planet.Projection],
+        ProjectionFailure | None,
+    ] = field(default_factory=dict)
+    belt_shapes: dict[tuple[colliders.Preview, ...], tuple[colliders.Preview, ...]] = field(
+        default_factory=dict
+    )
+    belt_context_failures: dict[_BeltProjectionContext, ProjectionFailure | None] = field(
+        default_factory=dict
+    )
     _sorter_misses: int = field(init=False, default=0)
     _static_misses: int = field(init=False, default=0)
     _power_misses: int = field(init=False, default=0)
@@ -290,6 +311,47 @@ class _ProjectionCache:
     _power_failure: _FailureCache = field(init=False, repr=False)
     _addon_failure: _FailureCache = field(init=False, repr=False)
     _addon_splitter_failure: _FailureCache = field(init=False, repr=False)
+
+    def belt_failure(
+        self, previews: tuple[colliders.Preview, ...], projection: planet.Projection
+    ) -> ProjectionFailure | None:
+        if self.cancelled is not None and self.cancelled():
+            raise ProjectionCancelled
+        key = (previews, projection)
+        if key in self.belt_failures:
+            return self.belt_failures[key]
+        shape = self.belt_shapes.get(previews)
+        if shape is None:
+            # Flags and link indices are part of collision rescue, not merely
+            # geometry. Preserve the complete preview except its XY position.
+            shape = tuple(replace(preview, x=0.0, y=0.0) for preview in previews)
+            self.belt_shapes[previews] = shape
+        coordinates = tuple(
+            (preview.y, projection.anchor_row + preview.x)
+            if projection.rotated
+            else (preview.x, projection.anchor_row + preview.y)
+            for preview in previews
+        )
+        # These are exactly Projection.direction's arithmetic inputs. Keep
+        # absolute longitude and raw latitude, even at the poles: congruent
+        # configurations need not have identical floating-point predicates.
+        context = (
+            shape,
+            coordinates,
+            projection.band,
+            projection.segment,
+            projection.radius,
+            projection.quadrant,
+        )
+        if context in self.belt_context_failures:
+            failure = self.belt_context_failures[context]
+        else:
+            failure = _projected_belt_failure(previews, projection, cancelled=self.cancelled)
+            if self.cancelled is not None and self.cancelled():
+                raise ProjectionCancelled
+            self.belt_context_failures[context] = failure
+        self.belt_failures[key] = failure
+        return failure
 
     def __post_init__(self) -> None:
         @cache
@@ -1861,6 +1923,24 @@ def _projected_addon_splitter_failure(
     return None
 
 
+def _projected_belt_failure(
+    previews: tuple[colliders.Preview, ...],
+    projection: planet.Projection,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> ProjectionFailure | None:
+    hits = colliders.stable_belt_collisions(previews, projection=projection, cancelled=cancelled)
+    if not hits:
+        return None
+    hit = hits[0]
+    return ProjectionFailure(
+        "game.belt_collide",
+        (hit.belt, hit.collider),
+        "belt probe overlaps the projected build collider",
+        projection.band.area_segments,
+    )
+
+
 def _projection_invariants(
     placement: Placement,
     *,
@@ -1915,6 +1995,25 @@ def _projection_invariants(
     else:
         nodes = _power_nodes(placement, cancelled=cancelled)
         sorters = _planet_sorters(placement, cancelled=cancelled)
+    previews: list[colliders.Preview] = []
+    for building in placement.buildings:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        previews.append(
+            colliders.Preview(
+                building.model_index,
+                *codec.tile_to_local_offset(
+                    building.x, building.y, building.z, building.width, building.height
+                ),
+                building.yaw,
+                is_belt=catalog.is_belt(building.item_id),
+                is_inserter=catalog.is_sorter(building.item_id),
+                is_splitter=building.item_id == catalog.SPLITTER_ID,
+                is_belt_addon=catalog.building(building.item_id).is_belt_addon,
+                output=building.output_obj,
+                input=building.input_obj,
+            )
+        )
     return _ProjectionInvariants(
         tested=tuple(tested),
         nodes=nodes,
@@ -1923,6 +2022,7 @@ def _projection_invariants(
         addons=addons,
         coaters=tuple(coaters),
         splitters=tuple(splitters),
+        previews=tuple(previews),
     )
 
 
@@ -2025,6 +2125,11 @@ def _failure_at_projection(
             invariants.splitters,
             projection,
         )
+    belt_failure = (
+        cache.belt_failure(invariants.previews, projection)
+        if use_cache and cache is not None
+        else _projected_belt_failure(invariants.previews, projection, cancelled=cancelled)
+    )
     if cancelled is not None and cancelled():
         raise ProjectionCancelled
     for failure in (
@@ -2033,6 +2138,7 @@ def _failure_at_projection(
         static_failure,
         addon_failure,
         addon_splitter_failure,
+        belt_failure,
     ):
         if failure is not None:
             failures.append(failure)

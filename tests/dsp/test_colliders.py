@@ -16,7 +16,7 @@ from collections.abc import Sequence
 import pytest
 
 from flab2bp.dsp import catalog as cat
-from flab2bp.dsp import colliders, geometry_kernel
+from flab2bp.dsp import colliders, geometry_kernel, planet
 from flab2bp.dsp import colliders as C
 from flab2bp.dsp.codec import decode
 from flab2bp.dsp.records import BlueprintBuilding
@@ -1119,3 +1119,44 @@ def test_forced_python_backend_disables_the_kernel(monkeypatch: pytest.MonkeyPat
     assert colliders.obb_overlap(a, a) is True
     assert colliders.any_box_overlap([a], [a]) is True
     assert colliders.any_box_overlap([], [a]) is False
+
+
+def test_projected_particle_collider_flank_keeps_graph_rescue_and_anchor_geometry() -> None:
+    # The upper box reaches farther left than right. At latitude -122 rows,
+    # five compressed columns clear its right side but collide on its left.
+    machine = C.Preview(69, 13.0, 8.0, 0.0)
+    left = C.Preview(36, 8.0, 8.0, 1.0, is_belt=True)
+    right = C.Preview(36, 18.0, 8.0, 1.0, is_belt=True)
+    previews = (machine, left, right)
+    projection = planet.Projection(planet.bands_by_segment()[160], -130, 200, 200.0)
+    assert C.stable_belt_collisions(previews) == []
+    assert C.stable_belt_collisions(previews, projection=projection) == [
+        C.StableBeltCollision(1, 0)
+    ]
+
+    # A new anchor must not reuse the compressed frame's broadphase cells.
+    equator = planet.Projection(planet.bands_by_segment()[200], 0, 200, 200.0)
+    assert C.stable_belt_collisions(previews, projection=equator) == []
+    linked = (machine, C.Preview(36, 8.0, 8.0, 1.0, is_belt=True, output=0))
+    assert C.stable_belt_collisions(linked, projection=projection) == []
+
+
+@pytest.mark.parametrize("yaw", (0.0, 90.0, 180.0, 270.0))
+def test_quantum_chemical_left_overhead_needs_spherical_clearance(yaw: float) -> None:
+    # full11's belt (33, 35, 5) is three columns left of model376 at (36, 36).
+    # The extracted left tower tops out at 6.6 world units: the flat z=5
+    # sphere clears by only 0.0367, which the planet's curvature consumes.
+    angle = math.radians(yaw)
+    dx = -3.0 * math.cos(angle) - math.sin(angle)
+    dy = 3.0 * math.sin(angle) - math.cos(angle)
+    machine = C.Preview(376, 36.0, 36.0, 0.0, yaw)
+    left = C.Preview(36, 36.0 + dx, 36.0 + dy, 5.0, is_belt=True)
+    middle = C.Preview(36, 36.0, 36.0, 3.0, is_belt=True)
+    raised = C.Preview(36, left.x, left.y, 6.0, is_belt=True)
+    previews = (machine, left, middle, raised)
+    projection = planet.Projection(planet.bands_by_segment()[200], -36, 200, 200.0)
+
+    assert C.stable_belt_collisions(previews) == []
+    assert C.stable_belt_collisions(previews, projection=projection) == [
+        C.StableBeltCollision(1, 0)
+    ]
