@@ -329,3 +329,34 @@ def test_self_loop_lane_head_is_found_for_a_multi_machine_series_tap() -> None:
     assert set(heads) == {"hydrogen"}
     head = placement.buildings[heads["hydrogen"]]
     assert (head.x, head.y) == (3, 21)
+
+
+def test_self_loop_crosses_splitter_and_marks_own_output() -> None:
+    placement = _self_loop_placement()
+    buildings = list(placement.buildings)
+    buildings[2] = replace(buildings[2], output_obj=6)
+    buildings[3] = replace(buildings[3], input_obj=7)
+    splitter = catalog.building(catalog.SPLITTER_ID)
+    buildings.extend(
+        (
+            PlacedBuilding(
+                item_id=catalog.SPLITTER_ID, model_index=splitter.model_index, x=3, y=22
+            ),
+            _belt(3, 23, item="hydrogen", input_obj=6, output=6),
+        )
+    )
+    placement = replace(placement, buildings=tuple(buildings))
+    spec = _self_loop_spec()
+    assert markers.self_loop_prime_heads(placement, spec) == {"hydrogen": 2}
+    marked = markers.mark_external_belts(placement, spec)
+    assert marked.buildings[2].parameters == catalog.belt_marker(catalog.item_id("hydrogen"))
+    assert marked.buildings[4].parameters == ()
+
+
+def test_external_same_item_cannot_prime_disconnected_output_cycle() -> None:
+    placement = _self_loop_placement()
+    buildings = list(placement.buildings)
+    buildings[2] = replace(buildings[2], output_obj=2)
+    buildings[3] = replace(buildings[3], input_obj=4)
+    placement = replace(placement, buildings=tuple(buildings))
+    assert markers.self_loop_prime_heads(placement, _self_loop_spec()) == {}

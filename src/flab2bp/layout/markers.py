@@ -85,46 +85,13 @@ def output_belt_tails(placement: Placement) -> list[int]:
 
 
 def self_loop_prime_heads(placement: Placement, spec: BuildSpec) -> dict[str, int]:
-    """Loop-lane head belt index per self-loop item, for the prime icon.
+    """Find a seed head reached from the same recipe group's own output.
 
-    The loop lane is the run that both RECEIVES the item from a group's output
-    sorter and DELIVERS it to that same group's input sorters.  Its head is
-    where a hand or a temporary belt puts the seed in, so that is the tile that
-    gets the icon -- and unlike an external input it is not in
-    ``spec.external_inputs``, which is exactly why nothing marked it before.
-
-    Identified purely from the placement's own sorter graph, never from the
-    item name alone: the same item can also arrive on an unrelated external
-    run feeding the very same group (``BuildSpec.planning_stack``'s docstring
-    names ``universe-matrix``'s hydrogen as exactly that corpus case -- fed
-    both externally and internally), and that run must not be mistaken for the
-    loop.  A self-loop's group is every building whose ``recipe_id`` is the
-    seed's DSP recipe id (belts and sorters never carry a real recipe id, so
-    this alone selects machines); the loop's OUTPUT sorter is one fed directly
-    from a group machine (``input_obj`` is a group machine) and the loop's
-    INPUT sorter feeds directly into one (``output_obj`` is a group machine).
-    Only a belt run that starts right after the former and, walking forward
-    tile by tile, reaches the latter is the loop; a same-item run that starts
-    anywhere else (an external head, another group's output) is passed over
-    even though it carries an identical ``carries_item``.
-
-    "Reaches the latter" covers TWO physical shapes, not one.  A single-machine
-    loop's run is short enough that the belt's own forward chain
-    (``output_obj``) terminates right at the input sorter -- the run ends
-    there because nothing is downstream of it.  A multi-machine group's run
-    does not: design section 1.2 decodes the real corpus case as ONE shared
-    belt collecting from every machine's own output sorter and feeding every
-    machine's own input sorter IN SERIES, each input sorter TAPPING the run at
-    an interior tile (its ``input_obj`` names a belt mid-run) while the run's
-    own forward chain carries on past that tap toward the boundary surplus
-    tail.  A walk that only checked the chain's own terminal ``output_obj``
-    missed every multi-machine loop outright -- measured against the real
-    ``reforming-refine`` corpus case (20 machines): every one of its 20 input
-    sorters taps an interior tile of a chain led by one of the group's own
-    output sorters, so the loop demonstrably closes, and the untapped walk
-    returned no head for it at all.  So the walk also checks, at every tile it
-    visits, whether that tile is one of the group's own input sorters' source
-    -- an interior tap closes the loop exactly as a terminal one does.
+    The directed transport walk crosses splitters, pilers and compatible
+    transfer sorters, and accepts input sorters tapping interior belt tiles.
+    Starting only at a group's own output excludes unrelated external lanes
+    carrying the same item. Reachability locates the marker; it does not
+    replace the independent steady-state flow certificate.
     """
     buildings = placement.buildings
     heads: dict[str, int] = {}
@@ -156,30 +123,14 @@ def self_loop_prime_heads(placement: Placement, spec: BuildSpec) -> dict[str, in
         # Tiles an input sorter draws from directly -- an interior tap on a
         # shared multi-machine run closes the loop there, not only where the
         # run's own forward chain happens to terminate.
-        taps = {buildings[i].input_obj for i in input_sorters} - {None}
+        taps = {source for i in input_sorters if (source := buildings[i].input_obj) is not None}
         for start in output_sorters:
             head = buildings[start].output_obj
             if head is None or not 0 <= head < len(buildings):
                 continue
             if not catalog.is_belt(buildings[head].item_id):
                 continue
-            cursor = head
-            seen: set[int] = set()
-            closes_loop = False
-            while cursor not in seen:
-                seen.add(cursor)
-                if cursor in taps:
-                    closes_loop = True
-                    break
-                following = buildings[cursor].output_obj
-                if following is None or not 0 <= following < len(buildings):
-                    break
-                if catalog.is_belt(buildings[following].item_id):
-                    cursor = following
-                    continue
-                closes_loop = following in input_sorters
-                break
-            if closes_loop:
+            if indexed.transport_reaches_any(head, taps, seed.item_id):
                 heads[seed.item_id] = head
                 break
     return heads

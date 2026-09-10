@@ -28,7 +28,7 @@ and ``tests/test_backend_containment.py`` fails if that boundary is breached.
 from __future__ import annotations
 
 import bisect
-from collections.abc import Collection, Iterable, Iterator, Mapping, MutableSequence, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, MutableSequence, Sequence
 from enum import Enum
 from fractions import Fraction
 from typing import TYPE_CHECKING, overload
@@ -388,6 +388,42 @@ class _BuildingsQueries:
             ):
                 return (target,)
         return _EMPTY
+
+    def transport_reaches_any(
+        self,
+        start: int,
+        targets: Collection[int],
+        item: str,
+        *,
+        sorter_item: Callable[[int], str | None] | None = None,
+    ) -> bool:
+        """Reach a transport tap through directed devices and same-cargo sorters.
+
+        Validation may supply context-resolved sorter cargo; planning markers
+        use the placement's attribution. Machines never become transit nodes.
+        """
+        pending = [start]
+        seen: set[int] = set()
+        while pending:
+            index = pending.pop()
+            if index in seen or self.by_index(index) is None:
+                continue
+            seen.add(index)
+            if index in targets:
+                return True
+            pending.extend(self.transport_successors(index))
+            for sorter_index in self.sorters_out_of(index):
+                sorter = self._records[sorter_index]
+                cargo = sorter.carries_item if sorter_item is None else sorter_item(sorter_index)
+                destination = sorter.output_obj
+                if (
+                    cargo == item
+                    and destination is not None
+                    and self.by_index(destination) is not None
+                    and self._kinds[destination] in (Kind.BELT, Kind.OTHER)
+                ):
+                    pending.append(destination)
+        return False
 
     def transport_predecessors(self, index: int) -> tuple[int, ...]:
         """The inverse transport edges, in ascending live-bucket order."""

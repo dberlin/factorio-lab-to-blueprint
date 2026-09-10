@@ -4636,26 +4636,9 @@ def _fraction_gcd(one: Fraction, two: Fraction) -> Fraction:
 
 
 def _belt_reaches_any(ctx: Context, start: int, targets: set[int], item: str) -> bool:
-    pending = [start]
-    seen: set[int] = set()
-    sorters = ctx.sorters()
-    while pending:
-        index = pending.pop()
-        if index in seen:
-            continue
-        seen.add(index)
-        if index in targets:
-            return True
-        pending.extend(ctx.buildings_index.transport_successors(index))
-        for sorter_index in sorters.drawing_from_carrying(index, item):
-            destination = sorters.building(sorter_index).output_obj
-            if (
-                destination is not None
-                and 0 <= destination < len(ctx.kinds)
-                and ctx.kinds[destination] in (Kind.BELT, Kind.SPLITTER)
-            ):
-                pending.append(destination)
-    return False
+    return ctx.buildings_index.transport_reaches_any(
+        start, targets, item, sorter_item=ctx.sorters().item
+    )
 
 
 @check("flow.coproduct_buffer", needs_spec=True, needs_groups=True)
