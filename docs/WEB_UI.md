@@ -240,6 +240,14 @@ Build button stays enabled: it is a warning, not a gate.
 the CLI makes without `--allow-invalid`, moved to the place the string would be copied from.
 The page then offers a button that says what you would be asking for.
 
+A refused job's `refusal.attempts` preserves a tree of actual solver outcomes. Each entry
+contains `candidate`, `strategy`, `reason`, `stats`, `projection_failures`, and `children`;
+`children` is always an array and is empty for a leaf. Sequence-island children retain their
+own `sequence-pair/island-<id>` identity, seed, observed stages, and projection evidence instead
+of merging counters from different islands. Unobserved non-finite numeric statistics are
+serialized as `null`, never as zero. A routing-clock refusal means work was unfinished, not
+that the requested geometry has been proved impossible.
+
 ## Working on the TypeScript
 
 ```bash
