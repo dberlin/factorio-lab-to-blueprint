@@ -206,9 +206,12 @@ export function BuildPanel() {
             if (strategy.success) set('strategy', strategy.data);
           }}
         >
-          <option value="best">best (freeform + sequence-pair, smallest valid wins)</option>
+          <option value="best">
+            best (freeform + sequence-pair + transport-routing, smallest valid wins)
+          </option>
           <option value="freeform">freeform</option>
           <option value="sequence-pair">sequence-pair</option>
+          <option value="transport-routing">transport-routing</option>
           <option value="hierarchical">
             hierarchical (explicit only: block decomposition, experimental; may overshoot the budget
             by its settlement phase)
@@ -406,9 +409,8 @@ export function BuildPanel() {
 
       {/* The budget box has no ceiling — how long to search is your call, and
           nothing here or on the server clamps it. But the number in that box is
-          per LAYOUT, and the default `best` request runs six of them, so a
-          budget that reads as "a minute" is really most of ten. Saying so is
-          the whole job here: the Build button stays enabled. */}
+          per LAYOUT, and the default `best` request runs nine of them. The
+          panel shows that multiplication; the Build button stays enabled. */}
       {projected.totalS > WARN_TOTAL_SECONDS && (
         <output className="note warn" data-testid="budget-warning">
           That is a long build: about {projected.totalS}s of solving in total — {projected.attempts}{' '}
@@ -511,7 +513,7 @@ export function BuildPanel() {
  *
  * Once `pipeline.build` reaches its layout loop it reports each (candidate,
  * strategy) pair as it starts and as it ends, so the bar is a real count of
- * work finished — 2 of 6 means two pairs are done, not that two sixths of the
+ * work finished — 2 of 9 means two pairs are done, not that two ninths of the
  * clock has passed.
  *
  * Before that it has nothing to report: parsing the URL and solving the rates

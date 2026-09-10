@@ -16,6 +16,7 @@
  * Free of React and three.js, per web/tests/architecture.test.ts.
  */
 import { z } from 'zod';
+import { ExplicitStrategy } from './build';
 
 /** Ten positional numbers, in `TRACE_BUILDING_FIELDS` order (web/trace.py):
     item_id, model_index, x, y, z, yaw, recipe_id, filter_id, output_obj,
@@ -48,7 +49,7 @@ export const TracePhase = z.enum([
 export const TraceFrame = z.object({
   seq: z.number(),
   t: z.number(),
-  strategy: z.enum(['freeform', 'sequence-pair', 'hierarchical']),
+  strategy: ExplicitStrategy,
   candidate: z.string(),
   phase: TracePhase,
   height: z.number().nullable(),

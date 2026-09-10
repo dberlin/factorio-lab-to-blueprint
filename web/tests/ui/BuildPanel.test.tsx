@@ -510,7 +510,7 @@ test('an unpinned report offers both automatic fetch and a supplied flow', async
   expect(report).not.toHaveTextContent('is not offered here');
 });
 
-test('a refusal is shown as a result, with one line per pair', async () => {
+test('a refusal preserves nested attempts and distinguishes unobserved statistics from zero', async () => {
   serving({
     status: 202,
     body: aJob({
@@ -538,6 +538,16 @@ test('a refusal is shown as a result, with one line per pair', async () => {
                 detail: 'power envelopes; north; south',
               },
             ],
+            children: [
+              {
+                candidate: 'no-proliferator',
+                strategy: 'sequence-pair/island-3',
+                reason: 'routing clock expired',
+                stats: { best_bound: null, routed_edges: 0 },
+                projection_failures: [],
+                children: [],
+              },
+            ],
           },
           {
             candidate: 'max-proliferation',
@@ -545,6 +555,7 @@ test('a refusal is shown as a result, with one line per pair', async () => {
             reason: 'unroutable',
             stats: {},
             projection_failures: [],
+            children: [],
           },
           {
             candidate: 'direct-spec',
@@ -552,6 +563,7 @@ test('a refusal is shown as a result, with one line per pair', async () => {
             reason: 'request has no legal layout',
             stats: {},
             projection_failures: [],
+            children: [],
           },
         ],
       },
@@ -572,6 +584,10 @@ test('a refusal is shown as a result, with one line per pair', async () => {
   );
   expect(refusal).toHaveTextContent('freeform / max-proliferation: unroutable');
   expect(refusal).toHaveTextContent('direct-spec: request has no legal layout');
+  expect(refusal).toHaveTextContent('sequence-pair/island-3 / no-proliferator: routing clock expired');
+  fireEvent.click(within(refusal).getByText('Solver statistics'));
+  expect(within(refusal).getByText('unobserved')).toBeVisible();
+  expect(within(refusal).getByText('0')).toBeVisible();
   // Not an alert: a refusal is an answer, and nothing should announce a failure.
   expect(screen.queryByRole('alert')).toBeNull();
 });
@@ -678,6 +694,7 @@ test('the strategy choices are exactly the request strategy set', () => {
   expect(strategy).toHaveTextContent('best');
   expect(strategy).toHaveTextContent('freeform');
   expect(strategy).toHaveTextContent('sequence-pair');
+  expect(strategy).toHaveTextContent('transport-routing');
   expect(strategy).toHaveTextContent('hierarchical');
 });
 
@@ -710,33 +727,32 @@ test.each([
 
 test('the budget copy follows selected and pinned effective candidates', () => {
   mount();
-  // Defaults: 3 candidates x 2 active production strategies x 15s.
-  expect(screen.getByText(/up to 90s of solving/)).toBeInTheDocument();
+  // Defaults: 3 candidates x 3 active production strategies x 15s.
+  expect(screen.getByText(/up to 135s of solving/)).toBeInTheDocument();
 
   const group = screen.getByRole('group', { name: 'Candidate policies' });
   fireEvent.click(within(group).getByRole('checkbox', { name: 'output-products' }));
   fireEvent.click(within(group).getByRole('checkbox', { name: 'no-proliferator' }));
-  expect(screen.getByText(/1 candidate × 2 strategies × 15s/)).toBeInTheDocument();
-  expect(screen.getByText(/up to 30s of solving/)).toBeInTheDocument();
+  expect(screen.getByText(/1 candidate × 3 strategies × 15s/)).toBeInTheDocument();
+  expect(screen.getByText(/up to 45s of solving/)).toBeInTheDocument();
 
   fireEvent.click(within(group).getByRole('checkbox', { name: 'output-products' }));
   fireEvent.click(within(group).getByRole('checkbox', { name: 'no-proliferator' }));
   fireEvent.click(screen.getByRole('checkbox', { name: 'Fetch FactorioLab flow automatically' }));
-  expect(screen.getByText(/1 candidate × 2 strategies × 15s/)).toBeInTheDocument();
-  expect(screen.getByText(/up to 30s of solving/)).toBeInTheDocument();
+  expect(screen.getByText(/1 candidate × 3 strategies × 15s/)).toBeInTheDocument();
+  expect(screen.getByText(/up to 45s of solving/)).toBeInTheDocument();
 });
 
 test('a long projected total warns instead of blocking the build', () => {
   mount();
-  // Defaults: 3 candidates x 2 strategies x (15s budget + 6s grace) = 126s.
+  // Defaults: 3 candidates x 3 strategies x (15s budget + 6s grace) = 189s.
   // Unremarkable, and a warning that is always on screen is one nobody reads.
   expect(screen.queryByTestId('budget-warning')).not.toBeInTheDocument();
 
   fireEvent.change(screen.getByLabelText('Budget (s/layout)'), { target: { value: '45' } });
   const warning = screen.getByTestId('budget-warning');
-  // BOTH numbers, or the multiplication that turned 45 into five minutes is
-  // invisible: 6 layouts x (45s + 6s) = 306s.
-  expect(warning).toHaveTextContent('306s');
+  // Both numbers make the total visible: 9 layouts x (45s + 6s) = 459s.
+  expect(warning).toHaveTextContent('459s');
   expect(warning).toHaveTextContent('45s per layout');
 
   // ...and it is a warning. The button still builds.
@@ -951,6 +967,7 @@ test('a refusal marks the blueprint on screen as the previous build', async () =
             reason: 'unroutable',
             stats: {},
             projection_failures: [],
+            children: [],
           },
         ],
       },

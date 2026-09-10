@@ -266,6 +266,7 @@ test('a refusal settles the job like any other answer', async () => {
                 detail: 'first collision; left machine; right machine',
               },
             ],
+            children: [],
           },
           {
             candidate: 'direct-spec',
@@ -273,6 +274,7 @@ test('a refusal settles the job like any other answer', async () => {
             reason: 'request has no legal layout',
             stats: {},
             projection_failures: [],
+            children: [],
           },
         ],
       },

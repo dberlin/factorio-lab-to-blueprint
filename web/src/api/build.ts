@@ -32,10 +32,21 @@ export const BAND_OPTIONS = BandDimension.array()
 export const BandSelection = z.enum(['portable', ...BAND_OPTIONS.map(({ value }) => value)]);
 
 /** Strategies accepted on every build request. */
-export const RequestStrategy = z.enum(['best', 'freeform', 'sequence-pair', 'hierarchical']);
+export const RequestStrategy = z.enum([
+  'best',
+  'freeform',
+  'sequence-pair',
+  'transport-routing',
+  'hierarchical',
+]);
 
 /** Strategies the server may report for an actual layout attempt or result. */
-export const ExplicitStrategy = z.enum(['freeform', 'sequence-pair', 'hierarchical']);
+export const ExplicitStrategy = z.enum([
+  'freeform',
+  'sequence-pair',
+  'transport-routing',
+  'hierarchical',
+]);
 
 export const ProliferatorTier = z.enum(['auto', 'none', '1', '2', '3']);
 export const PowerTower = z.enum(['auto', 'tesla', 'substation', 'wireless']);
@@ -69,10 +80,14 @@ const PlacementStats = z.record(z.string(), PlacementStat);
 
 export const AttemptFailure = z.object({
   candidate: z.string(),
-  strategy: ExplicitStrategy.nullable(),
+  /** Nested attempts carry identities such as `sequence-pair/island-3`. */
+  strategy: z.string().nullable(),
   reason: z.string(),
-  stats: PlacementStats,
+  stats: z.record(z.string(), z.union([z.number(), z.string(), z.null()])),
   projection_failures: z.array(ProjectionFailure),
+  get children() {
+    return z.array(AttemptFailure);
+  },
 });
 
 const Report = z.object({
@@ -277,7 +292,7 @@ export const DEFAULT_OPTIONS: BuildOptions = {
 };
 
 /** Active production strategies — `pipeline.PRODUCTION_STRATEGY_COUNT`. */
-const PRODUCTION_STRATEGY_COUNT = 2;
+const PRODUCTION_STRATEGY_COUNT = 3;
 
 /**
  * What ONE layout attempt may spend on top of its search budget, in seconds.
@@ -319,8 +334,8 @@ export interface ProjectedSolve {
  * The wall clock a request is asking for, before it is submitted.
  *
  * The number on the budget box is per LAYOUT, and a default `best` request runs
- * six of them. Someone typing 60 into it is asking for six minutes, not one, so
- * the panel does the multiplication rather than leaving it to be discovered.
+ * nine of them. Someone typing 60 into it is asking for nine minutes, not one,
+ * so the panel does the multiplication rather than leaving it to be discovered.
  */
 export function projectSolve(options: BuildOptions): ProjectedSolve {
   const candidates =
