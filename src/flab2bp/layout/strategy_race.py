@@ -27,7 +27,7 @@ import queue
 import sys
 import time
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 
 from flab2bp.dsp import catalog
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.base import Placement, ProjectionFailureRecord
+from flab2bp.layout.base import LayoutAttemptFailure, Placement, ProjectionFailureRecord
 from flab2bp.layout.compact_seed import CompactSeedConfig
 from flab2bp.layout.observe import (
     TRACE_CHILD_SAMPLE_INTERVAL_S,
@@ -374,6 +374,8 @@ class _StrategyRaceOutcome:
     process_user_cpu_s: float = 0.0
     process_system_cpu_s: float = 0.0
     process_peak_rss_kib: int = 0
+    refusal_stats: dict[str, float | str] = field(default_factory=dict)
+    refusal_attempt_failures: tuple[LayoutAttemptFailure, ...] = ()
 
     @classmethod
     def refused(
@@ -384,6 +386,8 @@ class _StrategyRaceOutcome:
         budget_s: float,
         *,
         projection_failures: tuple[ProjectionFailureRecord, ...] = (),
+        stats: Mapping[str, float | str] | None = None,
+        attempt_failures: tuple[LayoutAttemptFailure, ...] = (),
         published_incumbents: int = 0,
         consumed_incumbents: int = 0,
         published_no_goods: int = 0,
@@ -397,6 +401,8 @@ class _StrategyRaceOutcome:
             refusal_spec_label=spec_label,
             refusal_budget_s=budget_s,
             refusal_projection_failures=projection_failures,
+            refusal_stats=dict(stats or {}),
+            refusal_attempt_failures=attempt_failures,
             published_incumbents=published_incumbents,
             consumed_incumbents=consumed_incumbents,
             published_no_goods=published_no_goods,
@@ -623,6 +629,8 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
             exc.spec_label,
             exc.budget_s,
             projection_failures=exc.projection_failures,
+            stats=exc.stats,
+            attempt_failures=exc.attempt_failures,
             published_incumbents=published,
             consumed_incumbents=consumed,
             published_no_goods=published_no_goods,

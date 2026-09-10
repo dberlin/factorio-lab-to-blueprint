@@ -207,6 +207,7 @@ def test_direct_refusal_without_attempt_strategy_serializes_null_not_an_invalid_
                 "process_peak_rss_kib": 123_456,
             },
             "projection_failures": [],
+            "children": [],
         }
     finally:
         builder.shutdown()

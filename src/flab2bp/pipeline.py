@@ -305,12 +305,8 @@ def _raced_result(
         if outcome.trace_dropped:
             outcome.placement.stats["trace_dropped"] = outcome.trace_dropped
         return outcome.placement
-    #: `dict[str, float]`, not `PlacementStats`: `NoValidLayout.stats` takes a
-    #: plain `Mapping[str, float | str] | None`, and a `PlacementStats`
-    #: TypedDict (whose OTHER fields include `int` and `list[str]`) is not
-    #: structurally one, even though every value actually placed here is a
-    #: float.
-    stats: dict[str, float] = {
+    stats: dict[str, float | str] = {
+        **outcome.refusal_stats,
         "process_wall_time_s": outcome.process_wall_time_s,
         "process_user_cpu_s": outcome.process_user_cpu_s,
         "process_system_cpu_s": outcome.process_system_cpu_s,
@@ -323,6 +319,7 @@ def _raced_result(
         spec_label=spec_label,
         budget_s=budget_s,
         projection_failures=outcome.refusal_projection_failures,
+        attempt_failures=outcome.refusal_attempt_failures,
         stats=stats,
     )
 
@@ -1150,6 +1147,7 @@ def build(
                     reason=result.reason,
                     projection_failures=result.projection_failures,
                     stats=cast(PlacementStats, result.stats),
+                    children=result.attempt_failures,
                 )
                 refused.append(failure)
                 if on_progress is not None:

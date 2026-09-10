@@ -4833,9 +4833,11 @@ class FreeformLayout:
                 note = (
                     f"{tried} routed in that time and the best of them still "
                     f"left {min(failed_counts)} nets unrouted (worst "
-                    f"{max(failed_counts)}), so a longer clock alone would not have "
-                    "wired this spec"
+                    f"{max(failed_counts)})"
                 )
+                bound = _routing_failure_bound(routing_attempts)
+                if bound is not None:
+                    note += f"; {bound}"
             if preparation_cancellations and routing_attempts:
                 noun = "pack" if preparation_cancellations == 1 else "packs"
                 note += (

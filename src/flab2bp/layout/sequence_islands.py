@@ -4,20 +4,27 @@ from __future__ import annotations
 
 import multiprocessing
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor, wait
-from dataclasses import dataclass, replace
-from typing import Literal
+from dataclasses import dataclass, field, replace
+from typing import Literal, cast
 
 from flab2bp.dsp import catalog
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.base import NoValidLayout, Placement, ProjectionFailureRecord
+from flab2bp.layout.base import (
+    LayoutAttemptFailure,
+    NoValidLayout,
+    Placement,
+    PlacementStats,
+    ProjectionFailureRecord,
+)
 from flab2bp.layout.compact_seed import CompactSeedConfig
 from flab2bp.layout.sequence_pair import derive_stage_seed
 from flab2bp.layout.sequence_solver import (
     SequenceSolverConfig,
     _exact_key,
     _production_run,
+    _refusal_stats,
     _serial_compact_seed_attempt,
     _with_observational_stats,
 )
@@ -56,6 +63,8 @@ class _SequenceIslandOutcome:
     refusal_spec_label: str = ""
     refusal_budget_s: float = 0.0
     refusal_projection_failures: tuple[ProjectionFailureRecord, ...] = ()
+    refusal_stats: dict[str, float | str] = field(default_factory=dict)
+    refusal_attempt_failures: tuple[LayoutAttemptFailure, ...] = ()
 
     @classmethod
     def completed(
@@ -76,6 +85,8 @@ class _SequenceIslandOutcome:
         budget_s: float,
         *,
         projection_failures: tuple[ProjectionFailureRecord, ...] = (),
+        stats: Mapping[str, float | str] | None = None,
+        attempt_failures: tuple[LayoutAttemptFailure, ...] = (),
     ) -> _SequenceIslandOutcome:
         return cls(
             island_id,
@@ -85,6 +96,8 @@ class _SequenceIslandOutcome:
             refusal_spec_label=spec_label,
             refusal_budget_s=budget_s,
             refusal_projection_failures=projection_failures,
+            refusal_stats=dict(stats or {}),
+            refusal_attempt_failures=attempt_failures,
         )
 
     @classmethod
@@ -145,6 +158,7 @@ def _sequence_island_deadlines(
 def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutcome:
     """Reconstruct and run one production solver entirely inside a child."""
     config = replace(request.config, seed=request.seed)
+    run = None
     try:
         run = _production_run(
             request.spec,
@@ -162,6 +176,8 @@ def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutc
         result = run.solver.search(feasibility_continuation=True)
         placement = _with_observational_stats(result, run, request.power, config)
     except NoValidLayout as exc:
+        stats = _refusal_stats(run) if run is not None else {}
+        stats.update(exc.stats)
         return _SequenceIslandOutcome.refused(
             request.island_id,
             request.seed,
@@ -169,6 +185,8 @@ def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutc
             exc.spec_label,
             exc.budget_s,
             projection_failures=exc.projection_failures,
+            stats=stats,
+            attempt_failures=exc.attempt_failures,
         )
 
     return _SequenceIslandOutcome.completed(request.island_id, request.seed, placement)
@@ -225,6 +243,17 @@ def _merge_sequence_island_outcomes(
         spec_label=spec_label,
         budget_s=budget_s,
         projection_failures=projection_failures,
+        attempt_failures=tuple(
+            LayoutAttemptFailure(
+                candidate=outcome.refusal_spec_label or spec_label,
+                strategy=f"sequence-pair/island-{outcome.island_id}",
+                reason=outcome.refusal_reason or "island returned no placement",
+                projection_failures=outcome.refusal_projection_failures,
+                stats=cast(PlacementStats, {**outcome.refusal_stats, "seed": outcome.seed}),
+                children=outcome.refusal_attempt_failures,
+            )
+            for outcome in refused
+        ),
     )
 
 

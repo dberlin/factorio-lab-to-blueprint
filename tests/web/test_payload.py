@@ -288,6 +288,7 @@ def test_a_refusal_keeps_structured_projection_records_inside_attempt_boundaries
                         "detail": "power envelopes; north; south",
                     },
                 ],
+                "children": [],
             },
             {
                 "candidate": "b",
@@ -295,6 +296,7 @@ def test_a_refusal_keeps_structured_projection_records_inside_attempt_boundaries
                 "reason": "unroutable",
                 "projection_failures": [],
                 "stats": {},
+                "children": [],
             },
         ],
     }

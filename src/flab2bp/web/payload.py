@@ -19,6 +19,7 @@ Two rules the CLI already follows and this must not break:
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Sequence
 from fractions import Fraction
 from typing import cast
@@ -209,10 +210,14 @@ def attempt_failure(attempt: LayoutAttemptFailure) -> Json:
         "candidate": attempt.candidate,
         "strategy": attempt.strategy,
         "reason": attempt.reason,
-        "stats": cast(Json, dict(attempt.stats)),
+        "stats": {
+            key: None if isinstance(value, float) and not math.isfinite(value) else value
+            for key, value in attempt.stats.items()
+        },
         "projection_failures": _array(
             projection_failure(failure) for failure in attempt.projection_failures
         ),
+        "children": _array(attempt_failure(child) for child in attempt.children),
     }
 
 

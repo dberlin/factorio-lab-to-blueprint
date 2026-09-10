@@ -159,6 +159,71 @@ def test_all_refused_raises_structured_no_valid_layout() -> None:
     )
 
 
+def test_refused_island_keeps_its_observed_stage_through_race_and_json() -> None:
+    import json
+
+    from flab2bp.layout.base import LayoutAttemptFailure
+    from flab2bp.layout.strategy_race import _StrategyRaceOutcome
+    from flab2bp.pipeline import _raced_result
+    from flab2bp.web.payload import attempt_failure
+
+    config = SequenceSolverConfig.test()
+    request = _SequenceIslandRequest(
+        spec=two_stage_spec(),
+        time_budget_s=0.001,
+        soft_deadline=time.monotonic(),
+        power=False,
+        band_policy=BandPolicy("portable"),
+        belt_rules=_BELT_RULES,
+        strip_len=6,
+        config=config,
+        island_id=3,
+        seed=config.seed,
+        compact_seed_attempt=None,
+        compact_seed_base_seed=config.seed,
+        compact_seed_config=CompactSeedConfig(max_deterministic_time=0.01),
+    )
+    outcome = pickle.loads(pickle.dumps(_run_sequence_island(request)))
+    with pytest.raises(NoValidLayout) as refused:
+        _merge_sequence_island_outcomes(
+            (outcome,), requested=1, spec_label=request.spec.label, budget_s=request.time_budget_s
+        )
+    assert len(refused.value.attempt_failures) == 1
+    child = refused.value.attempt_failures[0]
+    assert child.stats["stages"] == 0
+    assert child.stats["backend"] == "sequence-pair"
+    assert child.strategy == "sequence-pair/island-3"
+    raced = _StrategyRaceOutcome.refused(
+        "sequence-pair",
+        refused.value.reason,
+        request.spec.label,
+        request.time_budget_s,
+        attempt_failures=refused.value.attempt_failures,
+    )
+    result = _raced_result(
+        pickle.loads(pickle.dumps(raced)), request.spec.label, request.time_budget_s
+    )
+    assert isinstance(result, NoValidLayout)
+    body = attempt_failure(
+        LayoutAttemptFailure(
+            request.spec.label, "sequence-pair", result.reason, children=result.attempt_failures
+        )
+    )
+    assert isinstance(body, dict)
+    children = body["children"]
+    assert isinstance(children, list)
+    leaf = children[0]
+    assert isinstance(leaf, dict)
+    assert leaf["reason"] == child.reason
+    assert leaf["strategy"] == "sequence-pair/island-3"
+    stats = leaf["stats"]
+    assert isinstance(stats, dict)
+    assert stats["stages"] == 0
+    assert stats["backend"] == "sequence-pair"
+    assert stats["seed"] == config.seed
+    json.dumps(body, allow_nan=False)
+
+
 class _ExecutorKwargs(TypedDict):
     max_workers: int
     mp_context: BaseContext

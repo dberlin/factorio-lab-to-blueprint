@@ -31,7 +31,7 @@ is where it picks up and ``output_obj`` is where it puts down.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from fractions import Fraction
 from typing import TYPE_CHECKING, Protocol, TypedDict
@@ -616,6 +616,7 @@ class LayoutAttemptFailure:
     reason: str
     projection_failures: tuple[ProjectionFailureRecord, ...] = ()
     stats: PlacementStats = field(default_factory=PlacementStats)
+    children: tuple[LayoutAttemptFailure, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -626,6 +627,7 @@ class LayoutAttemptFailure:
         stats = PlacementStats()
         stats.update(self.stats)
         object.__setattr__(self, "stats", stats)
+        object.__setattr__(self, "children", tuple(replace(child) for child in self.children))
 
     def __str__(self) -> str:
         pair = "/".join(part for part in (self.strategy, self.candidate) if part)
