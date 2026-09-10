@@ -3,7 +3,6 @@
 from fractions import Fraction
 
 import pytest
-
 from flab2bp.layout.physical_flow import Arc, Model, Resource, solve
 
 

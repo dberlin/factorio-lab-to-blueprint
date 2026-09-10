@@ -109,20 +109,28 @@ Within the equatorial band that is the supremum of the real spacing
 avoid, and latitude compression can only ever add more.  :func:`preview_pose`
 keeps the exact spherical formula for anything that wants to ask the
 where-can-this-paste question instead.
+
+The finalizer passes each candidate :class:`~flab2bp.dsp.planet.Projection`
+to :func:`stable_belt_collisions` as well: a flat-clear belt beside an
+asymmetric upper collider can overlap it after longitude compression.
 """
 
 from __future__ import annotations
 
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import cache, lru_cache
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from flab2bp.dsp import geometry_kernel
 from flab2bp.indexed import BeltOverlap
+
+if TYPE_CHECKING:
+    from flab2bp.dsp import planet
+    from flab2bp.indexed.belt_overlap import Cell
 
 __all__ = [
     "BELT_PROBE_LIFT",
@@ -1765,41 +1773,115 @@ def _belt_boxes(previews: Sequence[Preview]) -> list[list[Box]]:
     return [target_boxes(p, *poses[i]) if not p.is_belt else [] for i, p in enumerate(previews)]
 
 
-def _belt_cells(boxes: Sequence[Sequence[Box]]) -> list[list[tuple[int, int]]]:
+def _belt_cells(boxes: Sequence[Sequence[Box]], *, spherical: bool = False) -> list[list[Cell]]:
     """The grid cells each preview's boxes occupy, reach-expanded by ``BELT_PROBE_RADIUS``.
 
-    An OBB's horizontal circumradius is rotation-invariant. Index exactly the
-    grid cells its probe-expanded AABB can reach instead of copying every
-    collider into a fixed 3x3 neighbourhood.
+    On a flat grid the horizontal circumradius is rotation-invariant. On a
+    planet the local vertical tilts into the indexed world axes, so transform
+    all three half extents into a world AABB. Index all three world axes for
+    projected boxes: world XZ alone collapses latitude near the equator.
     """
     cell = 8.0
-    out: list[list[tuple[int, int]]] = []
+    out: list[list[Cell]] = []
     for bxs in boxes:
-        cells: list[tuple[int, int]] = []
+        cells: list[Cell] = []
         for box in bxs:
-            reach = math.hypot(box.half[0], box.half[2]) + BELT_PROBE_RADIUS
-            min_x = math.floor((box.centre[0] - reach) / cell)
-            max_x = math.floor((box.centre[0] + reach) / cell)
-            min_y = math.floor((box.centre[2] - reach) / cell)
-            max_y = math.floor((box.centre[2] + reach) / cell)
-            cells.extend((x, y) for x in range(min_x, max_x + 1) for y in range(min_y, max_y + 1))
+            if spherical:
+                a, b, c = _axes(box.rot)
+                hx, hy, hz = box.half
+                # Target boxes inherit the unit pose quaternion. The AABB
+                # support is sum(abs(axis component) * half); adding the probe
+                # radius encloses the sphere/box Minkowski sum. Allow for pose,
+                # inverse-rotation and bound arithmetic at bucket boundaries:
+                # 1e-12 is over 4,000 binary64 epsilons at the geometry's scale.
+                margin = 1e-12 * (
+                    1.0
+                    + max(abs(box.centre[0]), abs(box.centre[1]), abs(box.centre[2]))
+                    + hx
+                    + hy
+                    + hz
+                )
+                reach_x = (
+                    abs(a[0]) * hx + abs(b[0]) * hy + abs(c[0]) * hz + BELT_PROBE_RADIUS + margin
+                )
+                reach_y = (
+                    abs(a[2]) * hx + abs(b[2]) * hy + abs(c[2]) * hz + BELT_PROBE_RADIUS + margin
+                )
+                reach_z = (
+                    abs(a[1]) * hx + abs(b[1]) * hy + abs(c[1]) * hz + BELT_PROBE_RADIUS + margin
+                )
+            else:
+                reach_x = reach_y = math.hypot(box.half[0], box.half[2]) + BELT_PROBE_RADIUS
+            min_x = math.floor((box.centre[0] - reach_x) / cell)
+            max_x = math.floor((box.centre[0] + reach_x) / cell)
+            min_y = math.floor((box.centre[2] - reach_y) / cell)
+            max_y = math.floor((box.centre[2] + reach_y) / cell)
+            if spherical:
+                min_z = math.floor((box.centre[1] - reach_z) / cell)
+                max_z = math.floor((box.centre[1] + reach_z) / cell)
+                cells.extend(
+                    (x, z, y)
+                    for x in range(min_x, max_x + 1)
+                    for z in range(min_z, max_z + 1)
+                    for y in range(min_y, max_y + 1)
+                )
+            else:
+                cells.extend(
+                    (x, y) for x in range(min_x, max_x + 1) for y in range(min_y, max_y + 1)
+                )
         out.append(cells)
     return out
 
 
 def _belt_overlap_candidates(
     previews: Sequence[Preview],
+    *,
+    projection: planet.Projection | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[tuple[int, tuple[int, ...]], ...]:
     """Raw belt/collider probe hits after flag excusals, before graph rescue."""
-    boxes = _belt_boxes(previews)
-    index = BeltOverlap.for_previews(previews, lambda _p: _belt_cells(boxes))
+    from flab2bp.dsp.planet import ProjectionCancelled
+
+    if projection is None:
+        boxes = _belt_boxes(previews)
+        index = BeltOverlap.for_previews(previews, lambda _p: _belt_cells(boxes))
+    else:
+        boxes = []
+        for preview in previews:
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            boxes.append(
+                []
+                if preview.is_belt or preview.is_inserter or preview.is_belt_addon
+                else target_boxes(
+                    preview,
+                    *projection.pose(preview.x, preview.y, preview.z, preview.yaw),
+                )
+            )
+        # A preview-only cache key would reuse flat or another anchor's cells.
+        index = BeltOverlap.of(_belt_cells(boxes, spherical=True))
     cell = 8.0
     candidates: list[tuple[int, tuple[int, ...]]] = []
     for i, belt in enumerate(previews):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         if not belt.is_belt:
             continue
-        probe = belt_probe(belt.x, belt.y, belt.z)
-        key = (int(probe[0] // cell), int(probe[2] // cell))
+        if projection is None:
+            probe = belt_probe(belt.x, belt.y, belt.z)
+        else:
+            radius = projection.shell_radius(belt.z)
+            direction = projection.direction(belt.x, belt.y)
+            probe = (
+                direction[0] * radius + direction[0] * BELT_PROBE_LIFT,
+                direction[1] * radius + direction[1] * BELT_PROBE_LIFT,
+                direction[2] * radius + direction[2] * BELT_PROBE_LIFT,
+            )
+        key = (
+            (int(probe[0] // cell), int(probe[2] // cell))
+            if projection is None
+            else (int(probe[0] // cell), int(probe[1] // cell), int(probe[2] // cell))
+        )
         hits: list[int] = []
         for j in index.candidates(key):
             if j == i:
@@ -1914,6 +1996,9 @@ def _belt_run_stably_ends_in_a_building(
 
 def stable_belt_collisions(
     previews: Sequence[Preview],
+    *,
+    projection: planet.Projection | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> list[StableBeltCollision]:
     """Collisions that survive universal last-writer reverse-link reasoning.
 
@@ -1926,11 +2011,20 @@ def stable_belt_collisions(
     The direct-good-building override is likewise accepted only when its
     relevant link is stable.  Each returned value carries the collider and any
     merge at which rescuing and non-rescuing choices diverge.
+
+    Pass the actual planet projection to certify a latitude frame. Flat
+    clearance alone cannot certify an asymmetric machine's elevated flank:
+    longitude compression can push a belt into its upper build collider.
     """
     choices = _reverse_input_choices(previews)
     recorded_links = tuple(_resolve(previews, preview.input) for preview in previews)
     hits: list[StableBeltCollision] = []
-    for belt, candidates in _belt_overlap_candidates(previews):
+    candidates_by_belt = (
+        _belt_overlap_candidates(previews)
+        if projection is None and cancelled is None
+        else _belt_overlap_candidates(previews, projection=projection, cancelled=cancelled)
+    )
+    for belt, candidates in candidates_by_belt:
         if _belt_run_stably_ends_in_a_building(previews, choices, belt):
             continue
         for other in candidates:

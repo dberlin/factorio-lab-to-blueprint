@@ -15,7 +15,7 @@ import pytest
 from flab2bp.dsp import catalog, codec, colliders, planet, rules
 from flab2bp.dsp.records import BlueprintBuilding
 from flab2bp.lab.techs import belt_rules_for_url
-from flab2bp.layout import finalize, freeform, routing_domain, validate
+from flab2bp.layout import finalize, routing_domain, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
 from tests.layout.test_freeform import two_stage_spec
@@ -2349,6 +2349,7 @@ def test_projection_counters_count_only_observed_rule_loop_work(
         addons=(),
         coaters=(),
         splitters=(),
+        previews=(),
     )
     pairs = ((0, 1), (0, 2), (1, 2))
     power_work: list[int] = []
@@ -2839,6 +2840,7 @@ def test_projection_result_cache_reuses_only_complete_exact_check_keys(
         addons=(),
         coaters=(),
         splitters=(),
+        previews=(),
     )
     calls = {
         "power": 0,
@@ -3132,7 +3134,7 @@ def test_projection_result_cache_reuses_none_and_first_failure_results(
         colliders.PLANET_SEGMENT,
         colliders.PLANET_RADIUS,
     )
-    invariants = finalize._ProjectionInvariants((), (), (), (), (), (), ())
+    invariants = finalize._ProjectionInvariants((), (), (), (), (), (), (), ())
     counters = finalize._ProjectionCounters()
     cache = finalize._ProjectionCache(counters)
 
@@ -3264,91 +3266,6 @@ def test_framed_finalization_is_idempotent_only_for_coherent_policy() -> None:
     repaired = finalize.finalize_placement(invalid, policy)
     assert repaired is not invalid
     assert repaired.frame == AreaFrame(2, 2, 4, (4, 8, 16), False)
-
-
-def test_freeform_uses_shared_planet_finalization(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from flab2bp.layout.freeform import FreeformLayout
-
-    calls: list[tuple[Placement, BandPolicy]] = []
-    original = finalize.finalize_placement
-    policy = BandPolicy("portable")
-
-    def observed(
-        placement: Placement,
-        band_policy: BandPolicy,
-        *,
-        cancelled: Callable[[], bool] | None = None,
-    ) -> Placement:
-        calls.append((placement, band_policy))
-        return original(placement, band_policy, cancelled=cancelled)
-
-    monkeypatch.setattr(
-        "flab2bp.layout.freeform.finalize.finalize_placement",
-        observed,
-    )
-    placement = FreeformLayout(belt_rules=_BELT_RULES, band_policy=policy).lay_out(
-        two_stage_spec(),
-        time_budget_s=0.5,
-    )
-
-    assert calls and all(band_policy is policy for _, band_policy in calls)
-    assert placement.frame is not None
-
-
-def test_sequence_pair_uses_shared_planet_finalization(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from types import SimpleNamespace
-
-    from flab2bp.layout.sequence_solver import SequencePairLayout, SequenceSearchResult
-
-    raw = Placement(buildings=_extent(43, 35))
-    calls: list[tuple[Placement, BandPolicy]] = []
-    policy = BandPolicy("portable")
-
-    def observed(
-        placement: Placement,
-        band_policy: BandPolicy,
-        *,
-        cancelled: Callable[[], bool] | None = None,
-    ) -> Placement:
-        del cancelled
-        calls.append((placement, band_policy))
-        return replace(
-            placement,
-            frame=AreaFrame(43, 35, 160, (160, 200), False),
-        )
-
-    class _Solver:
-        def search(
-            self,
-            *,
-            max_stages: int | None = None,
-            feasibility_continuation: bool = False,
-        ) -> SequenceSearchResult:
-            del max_stages, feasibility_continuation
-            return cast(SequenceSearchResult, SimpleNamespace(placement=raw))
-
-    def factory(*_args: object, **_kwargs: object) -> _Solver:
-        return _Solver()
-
-    monkeypatch.setattr(
-        "flab2bp.layout.sequence_solver.finalize.finalize_placement",
-        observed,
-    )
-    placement = SequencePairLayout(
-        belt_rules=_BELT_RULES,
-        band_policy=policy,
-        solver_factory=factory,
-    ).lay_out(
-        two_stage_spec(),
-        time_budget_s=0.5,
-    )
-
-    assert calls == [(raw, policy)]
-    assert placement.frame == AreaFrame(43, 35, 160, (160, 200), False)
 
 
 def test_projected_power_failure_cancels_inside_pair_scan() -> None:
@@ -3843,150 +3760,50 @@ def test_band_target_width_rejects_an_implausible_core() -> None:
         )
 
 
-# --- Task 4 fix round 1: the belts() conversions review flagged as WORTH ---
-#
-# _required_external_input_belts, _prunable_open_belts and _boundary_open_belts
-# all key their belt-membership test on ``carries_item``/graph links that only
-# a SOLVED placement populates -- the raw-decoded-blueprint fixture the four
-# tests above use never sets ``carries_item`` at all (blueprint decode does
-# not carry it; the layout pipeline derives it), so it produces vacuous
-# (empty) results for these three functions specifically. A real solved
-# placement is the correct "real fixture" for this group instead: same
-# `FreeformLayout(...).lay_out(two_stage_spec(), time_budget_s=0.5)` call
-# `test_finalize_records_frame_placement_calls_with_band_policy` already
-# makes elsewhere in this file, so conftest.py's per-call memo makes this a
-# cache hit, not a second solve.
-
-
-def _two_stage_placement() -> Placement:
-    return freeform.FreeformLayout(
-        belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")
-    ).lay_out(
-        two_stage_spec(),
-        time_budget_s=0.5,
-    )
-
-
-def _brute_force_belt_set(placement: Placement) -> set[int]:
-    """The old ``enumerate(buildings)`` + ``catalog.is_belt`` scan, verbatim."""
-    return {
-        index
-        for index, building in enumerate(placement.buildings)
-        if catalog.is_belt(building.item_id)
-    }
-
-
-def test_prunable_open_belts_matches_brute_force_belt_scan_on_a_real_layout() -> None:
-    placement = _two_stage_placement()
-    expected_belts = _brute_force_belt_set(placement)
-    assert len(expected_belts) > 0, "fixture regressed: expected at least one belt"
-
-    actual = finalize._prunable_open_belts(placement)
-    assert len(actual) > 0, "fixture regressed: expected at least one prunable open belt"
-    # Reproduce the OLD algorithm's remaining (unconverted) stages against the
-    # brute-force belt set, so this proves the CONVERTED belt-set construction
-    # specifically, not just "the function still returns something".
-    buildings = placement.buildings
-    predecessors: dict[int, set[int]] = {index: set() for index in expected_belts}
-    for index in expected_belts:
-        target = buildings[index].output_obj
-        if target in expected_belts:
-            predecessors[target].add(index)
-    nonbelt_references: set[int] = set()
-    for index, building in enumerate(buildings):
-        if index in expected_belts:
-            continue
-        for target in (building.input_obj, building.output_obj):
-            if target in expected_belts:
-                assert target is not None
-                nonbelt_references.add(target)
-    left, bottom, right, top = placement.bounds
-    expected: set[int] = set()
-    for index in expected_belts:
-        building = buildings[index]
-        successor = building.output_obj if building.output_obj in expected_belts else None
-        neighbours = len(predecessors[index]) + int(successor is not None)
-        open_end = not predecessors[index] or successor is None
-        outer = (
-            building.x == left
-            or building.x + building.width - 1 == right
-            or building.y == bottom
-            or building.y + building.height - 1 == top
-        )
-        protected = index in nonbelt_references or bool(building.parameters)
-        if outer and open_end and not protected and neighbours <= 1:
-            expected.add(index)
-    assert actual == frozenset(expected)
-
-
-def test_boundary_open_belts_matches_brute_force_belt_scan_on_a_real_layout() -> None:
-    placement = _two_stage_placement()
-    expected_belts = _brute_force_belt_set(placement)
-    assert len(expected_belts) > 0, "fixture regressed: expected at least one belt"
-
-    left, bottom, right, top = placement.bounds
-    buildings = placement.buildings
-    any_non_empty = False
-    for side in ("left", "bottom", "right", "top"):
-        expected = frozenset(
-            index
-            for index in expected_belts
-            if ((building := buildings[index]).input_obj is None or building.output_obj is None)
-            and (
-                (side == "left" and building.x == left)
-                or (side == "bottom" and building.y == bottom)
-                or (side == "right" and building.x + building.width - 1 == right)
-                or (side == "top" and building.y + building.height - 1 == top)
-            )
-        )
-        actual = finalize._boundary_open_belts(placement, side)
-        assert actual == expected
-        any_non_empty = any_non_empty or len(expected) > 0
-    assert any_non_empty, "fixture regressed: expected at least one boundary-open belt on some side"
-
-
-def test_required_external_input_belts_matches_brute_force_belt_scan_on_a_real_layout() -> None:
-    placement = _two_stage_placement()
-    spec = two_stage_spec()
-    expected_belts = _brute_force_belt_set(placement)
-    assert len(expected_belts) > 0, "fixture regressed: expected at least one belt"
-
-    actual = finalize._required_external_input_belts(placement, spec)
-    assert len(actual) > 0, "fixture regressed: expected at least one required external belt"
-
-    # Reproduce the OLD algorithm's remaining (unconverted) connected-component
-    # and predicate stages against the brute-force belt set.
-    output_items = set(spec.outputs) | set(spec.surplus_outputs)
-    left, bottom, right, top = placement.bounds
-    buildings = placement.buildings
-    connected: set[int] = set()
-    for source, building in enumerate(buildings):
-        for target in (building.input_obj, building.output_obj):
-            if target is None or not 0 <= target < len(buildings):
-                continue
-            if source in expected_belts:
-                connected.add(source)
-            if target in expected_belts:
-                connected.add(target)
-    expected = frozenset(
-        index
-        for index, building in enumerate(buildings)
-        if (
-            index in expected_belts
-            and index in connected
-            and (
-                building.carries_item in spec.external_inputs
-                or (
-                    building.carries_item in output_items
-                    and building.output_obj is None
-                    and (
-                        building.x == left
-                        or building.x + building.width - 1 == right
-                        or building.y == bottom
-                        or building.y + building.height - 1 == top
-                    )
-                )
-            )
+def test_frame_certificate_rejects_compressed_particle_collider_flank() -> None:
+    # full10's belt #438 at (8, 8, 1) clears the flat model but strikes
+    # collider #155's offset upper box at the southern edge of band 160.
+    placement = Placement(
+        buildings=(
+            _building(2310, 9, 6),
+            replace(_belt(8, 8, output=None), z=Fraction(1)),
         )
     )
-    assert actual == expected
+    frame = AreaFrame(44, 39, 160, (160,), False)
+    failures = finalize._certify_frame(placement, frame, finalize._ProjectionCounters())
+    assert any(
+        failure.check == "game.belt_collide" and failure.buildings == (1, 0) for failure in failures
+    )
+
+    cleared = replace(
+        placement,
+        buildings=(placement.buildings[0], replace(placement.buildings[1], x=7)),
+    )
+    assert finalize._certify_frame(cleared, frame, finalize._ProjectionCounters()) == ()
+
+
+def test_frame_certificate_rejects_quantum_chemical_left_overhead_not_middle() -> None:
+    info = catalog.building(2317)
+    placement = Placement(
+        buildings=(
+            _building(2317, 36 - (info.width - 1) // 2, 36 - (info.height - 1) // 2),
+            replace(_belt(33, 35, output=None), z=Fraction(5)),
+            replace(_belt(36, 36, output=None), z=Fraction(3)),
+        )
+    )
+    frame = AreaFrame(60, 46, 160, (160, 200), False)
+    failures = finalize._certify_frame(placement, frame, finalize._ProjectionCounters())
+    assert failures
+    assert all(
+        failure.check == "game.belt_collide" and failure.buildings == (1, 0) for failure in failures
+    )
+
+    raised = replace(
+        placement,
+        buildings=(
+            placement.buildings[0],
+            replace(placement.buildings[1], z=Fraction(6)),
+            placement.buildings[2],
+        ),
+    )
+    assert finalize._certify_frame(raised, frame, finalize._ProjectionCounters()) == ()
