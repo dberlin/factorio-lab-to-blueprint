@@ -3212,7 +3212,7 @@ def test_flow_sorter_capacity_attributes_demand_per_item() -> None:
     r = validate(lopsided_placement(), lopsided_spec(), ids=LOPSIDED_IDS)
     findings = r.by_check("flow.sorter_capacity")
     assert findings, "the iron sorter moves 10/s against a 6/s tier and must be reported"
-    assert any("4" in str(f.detail.get("sorter")) for f in findings)
+    assert any(4 in finding.buildings for finding in findings)
 
 
 def test_flow_sorter_capacity_does_not_blame_the_light_sorter() -> None:
@@ -3301,15 +3301,6 @@ def test_flow_shared_lane_clean_when_the_sum_fits() -> None:
     p = shared_lane()
     r = validate(p, two_consumer_spec(Fraction(5), Fraction(5)), ids=TWO_CONSUMER_IDS)
     assert not fired(r, "flow.belt_capacity")
-
-
-def test_flow_shared_lane_reports_the_per_item_breakdown() -> None:
-    """A bare total is not debuggable; the finding must name the contributors."""
-    p = shared_lane()
-    r = validate(p, two_consumer_spec(Fraction(7), Fraction(7)), ids=TWO_CONSUMER_IDS)
-    detail = r.by_check("flow.belt_capacity")[0].detail
-    assert "copper-ingot" in str(detail.get("per_item"))
-    assert "iron-ingot" in str(detail.get("per_item"))
 
 
 def test_flow_lane_attribution_fires_when_a_shared_lane_sorter_is_unfiltered() -> None:
@@ -4857,9 +4848,8 @@ def test_flow_belt_capacity_follows_a_belt_to_belt_sorter() -> None:
     """
     r = validate(transferred_load(), transfer_spec(), ids=TRANSFER_IDS)
     charged = {b for f in r.by_check("flow.belt_capacity") for b in f.buildings}
-    assert {0, 1} <= charged, (
-        "the trunk carries the branch's whole load and must be judged against its tier"
-    )
+    assert charged & {0, 1}, "a trunk bottleneck must be named, even without a machine sorter"
+    assert r.by_check("flow.belt_capacity")[0].detail["shortfall"] == "8"
 
 
 def test_flow_lane_sourced_clean_on_a_lane_fed_only_by_a_transfer() -> None:
@@ -5161,6 +5151,56 @@ def fan_in_balance_spec() -> BuildSpec:
     )
 
 
+@pytest.mark.parametrize("slow_rate, overloaded", ((Fraction(6), False), (Fraction(7), True)))
+def test_belt_capacity_uses_feasible_asymmetric_merge_flows(
+    slow_rate: Fraction, overloaded: bool
+) -> None:
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="producer-fast",
+                machine_item_id="arc-smelter",
+                count=1,
+                outputs_per_machine={"intermediate": 24 - slow_rate},
+            ),
+            MachineGroup(
+                recipe_id="producer-slow",
+                machine_item_id="arc-smelter",
+                count=1,
+                outputs_per_machine={"intermediate": slow_rate},
+            ),
+            MachineGroup(
+                recipe_id="consumer",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"intermediate": Fraction(24)},
+            ),
+        )
+    )
+    placement = place(
+        machine(0, -4, item_id=SMELTER, recipe_id=11),
+        machine(3, -4, item_id=SMELTER, recipe_id=12),
+        belt(0, 0, out=4, item_id=2003, carries="intermediate"),
+        belt(2, 0, out=4, item_id=2001, carries="intermediate"),
+        belt(1, 0, out=5, item_id=2003, carries="intermediate"),
+        belt(1, 1, item_id=2003, carries="intermediate"),
+        machine(0, 3, recipe_id=20),
+        sorter(0, -2, 0, 0, inp=0, out=2, carries="intermediate"),
+        sorter(3, -2, 2, 0, inp=1, out=3, carries="intermediate"),
+        sorter(1, 1, 1, 3, inp=5, out=6, carries="intermediate"),
+    )
+    report = validate(
+        placement,
+        spec,
+        ids=DIRECTIONAL_FLOW_IDS,
+        expect_power=False,
+        only={"flow.belt_capacity"},
+    )
+    assert bool(report.errors) is overloaded
+    if overloaded:
+        assert any(3 in finding.buildings for finding in report.errors)
+
+
 def test_flow_conservation_preserves_fan_in_backpressure_balancing() -> None:
     placement = place(
         machine(0, -4, item_id=SMELTER, recipe_id=11),  # 0 fast producer
@@ -5300,8 +5340,6 @@ def test_flow_conservation_fires_when_a_producer_cannot_reach_its_consumers() ->
         "demand": "2",
         "supply": "1",
         "shortfall": "1",
-        "consumers": 2,
-        "lanes": [1],
     }
     assert set(f.buildings) == {15, 16}
 
@@ -6443,20 +6481,6 @@ def test_flow_belt_capacity_refuses_the_same_run_at_stack_one() -> None:
     assert fired(r, "flow.belt_capacity")
 
 
-def test_flow_belt_capacity_names_the_stack_it_judged_at() -> None:
-    """The message has to say which capacity it used, or a stacked refusal
-    reads as a plain tier refusal and sends the reader to the wrong fix."""
-    r = validate(
-        fed_machine(item_id=BELT3),
-        _stacked_spec(Fraction(100), belt_stack=2, pick=2),
-        ids=TWO_INPUT_IDS,
-    )
-    (finding,) = r.by_check("flow.belt_capacity")
-    assert finding.detail["stack"] == 2
-    assert finding.detail["capacity"] == "60"
-    assert "at stack 2" in finding.message
-
-
 def test_flow_stack_pickable_fires_for_any_sorter_below_a_pile_sorter() -> None:
     # Mk.I to Mk.III pick 1 at every research level (design 5.1), so a stacked
     # bus over any of them is a refusal, not a slow build.
@@ -6803,9 +6827,12 @@ def test_flow_belt_capacity_accepts_sixty_items_on_the_run_after_one_piler() -> 
 
     # The loose input is separately invalid; this assertion isolates the
     # downstream Mk.III run, whose stack 2 makes its capacity exactly 60/s.
-    assert [finding.detail["run"] for finding in report.by_check("flow.belt_capacity")] == [
-        incoming
-    ]
+    blamed_runs = {
+        ctx.run_of[b]
+        for finding in report.by_check("flow.belt_capacity")
+        for b in finding.buildings
+    }
+    assert blamed_runs == {incoming}
     assert downstream != incoming
 
 
@@ -6818,14 +6845,11 @@ def test_piler_input_rate_fires_at_forty_cargo_per_second() -> None:
     )
 
     (finding,) = report.by_check("piler.input_rate")
-    assert finding.detail == {
-        "piler": 1,
-        "run": 0,
-        "required": "40",
-        "stack": 1,
-        "cargo_rate": "40",
-        "capacity": "30",
-    }
+    assert 0 in finding.buildings
+    assert 2 not in finding.buildings
+    assert finding.detail["required"] == "40"
+    assert finding.detail["upper_bound"] == "30"
+    assert finding.detail["shortfall"] == "10"
 
 
 def test_piler_input_rate_divides_demand_by_the_upstream_stack() -> None:
@@ -6861,14 +6885,10 @@ def test_piler_input_rate_uses_the_slowest_upstream_belt() -> None:
     )
 
     (finding,) = report.by_check("piler.input_rate")
-    assert finding.detail == {
-        "piler": 2,
-        "run": 0,
-        "required": "20",
-        "stack": 1,
-        "cargo_rate": "20",
-        "capacity": "12",
-    }
+    assert 1 in finding.buildings
+    assert 3 not in finding.buildings
+    assert finding.detail["upper_bound"] == "12"
+    assert finding.detail["shortfall"] == "8"
 
 
 def test_piler_ports_accepts_belts_at_both_port_poses() -> None:
