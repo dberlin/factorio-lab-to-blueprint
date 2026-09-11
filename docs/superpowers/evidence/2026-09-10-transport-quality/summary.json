@@ -23,5 +23,30 @@
   "follow_up": [
     "Fix all coater failures"
   ],
+  "quantum_follow_up": {
+    "base_commit": "184220540878e89c7aeaf1e7cf4d0aa27f8f5a12",
+    "local_evidence": ".local-evidence/2026-09-10-quantum-chip",
+    "comparison": "quantum-final-comparison.json",
+    "corpus": {
+      "cells": 108,
+      "clean": 96,
+      "refused": 12,
+      "invalid": 0,
+      "quantum_clean": 9,
+      "prior_candidate_clean_losses": [],
+      "recorded_baseline_clean_losses": [],
+      "source_stable": true,
+      "clean_checks_run": 67,
+      "clean_checks_skipped": 0,
+      "codec_and_import_pins_verified": true
+    },
+    "search_policy": "Island zero may use half its existing ledger for the first exact seed; other islands retain short probes. Wall deadlines, completion grace and total expansion limits are unchanged.",
+    "focused_tests": "49 primitive/reservation/island tests and 18 ledger/topology tests passed.",
+    "static_checks": "All six changed Python files pass Ruff, formatting and mypy.",
+    "reviews": "Two independent read-only reviews found no actionable defects.",
+    "remaining_refusals": "Three information-matrix cells and all nine universe-matrix cells; unchanged from the pre-fix candidate.",
+    "full_suite": "Not rerun for this follow-up; the release suite result above remains historical.",
+    "raw_evidence_tracked": false
+  },
   "probes": "Retained for post-merge diagnosis; complete archive is independently verified."
 }

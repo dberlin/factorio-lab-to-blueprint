@@ -9,6 +9,7 @@ All MutableMapping mutations pass through the same two indexed writers.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
+from typing import overload
 
 Cell = tuple[int, int, int]
 
@@ -30,6 +31,17 @@ class PortReservations(MutableMapping[Cell, Cell]):
 
     def __getitem__(self, cell: Cell) -> Cell:
         return self._cells[cell]
+
+    @overload
+    def get(self, key: Cell) -> Cell | None: ...
+
+    @overload
+    def get[DefaultT](self, key: Cell, default: DefaultT) -> Cell | DefaultT: ...
+
+    def get[DefaultT](self, key: Cell, default: DefaultT | None = None) -> Cell | DefaultT | None:
+        # Most routing cells are unreserved. Avoid MutableMapping.get's
+        # __getitem__/KeyError path for every vacant occupancy probe.
+        return self._cells.get(key, default)
 
     def __setitem__(self, cell: Cell, port: Cell) -> None:
         if cell in self._cells:

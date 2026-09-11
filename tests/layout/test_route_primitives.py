@@ -59,7 +59,7 @@ def test_locked_save_routes_and_emits_real_parallel_height_connector() -> None:
         ((0, 1, 0), (0, 1, 1)),
         ((0, 1, 1), (0, 1, 0)),
         ((0, 1, 2), (0, 1, 3)),
-        ((0, 1, 3), (0, 1, 2)),
+        ((13, -8, 3), (13, -8, 2)),
     ),
 )
 def test_foreign_reservation_blocks_connector_body_and_owner_release_restores_it(
@@ -73,8 +73,9 @@ def test_foreign_reservation_blocks_connector_body_and_owner_release_restores_it
             storage_level=2,
         )
     )
-    bounds = (-1, -1, 1, 1)
-    grid = routing_domain._make_grid(canvas, bounds, (-3, -3, 3, 3), {})
+    x, y = start[:2]
+    bounds = (x - 1, y - 2, x + 1, y)
+    grid = routing_domain._make_grid(canvas, bounds, (x - 3, y - 4, x + 3, y + 2), {})
     primitives = RoutePrimitives(canvas.belt_rules)
 
     def available() -> bool:
@@ -91,6 +92,9 @@ def test_foreign_reservation_blocks_connector_body_and_owner_release_restores_it
     )
     owner = (91, 92, 0)
     canvas.reserved[body] = owner
+    assert not available()
+    # Fresh enumeration must check the translated body, not the origin template.
+    primitives = RoutePrimitives(canvas.belt_rules)
     assert not available()
     canvas.routing_ports = frozenset((owner,))
     assert available()
@@ -172,8 +176,9 @@ def test_late_foreign_boundary_route_avoids_emitted_non_dock_body() -> None:
     assert result.routed == (identity,)
     # The direct elevated row crosses the unused rear arm. It must detour,
     # not exploit the absence of an anchor or dock belt on that body cell.
+    body_altitudes = {(x, y, Fraction(z)) for x, y, z in candidate.foreign_keepout}
     assert all(
-        (belt.x, belt.y, belt.z) not in candidate.foreign_keepout
+        (belt.x, belt.y, belt.z) not in body_altitudes
         for belt in canvas.buildings[first_late_belt:]
     )
     assert not canvas.free(body)

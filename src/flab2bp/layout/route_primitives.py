@@ -62,6 +62,23 @@ def _templates(
 
 
 @lru_cache(maxsize=32)
+def _template_levels(rules: catalog.BeltAltitudeRules) -> tuple[int, ...]:
+    return tuple(
+        sorted(
+            {
+                cell[2]
+                for template in _templates(rules)
+                for cell in (
+                    template.entry.dock,
+                    template.exit.dock,
+                    *template.foreign_keepout,
+                )
+            }
+        )
+    )
+
+
+@lru_cache(maxsize=32)
 def _template_groups(
     rules: catalog.BeltAltitudeRules,
 ) -> tuple[tuple[Cell, int, dict[int, tuple[int, junction.SplitterRouteCandidate]]], ...]:
@@ -144,6 +161,11 @@ class RoutePrimitives:
         if deadline is not None and time.monotonic() >= deadline:
             return {}
         groups = _template_groups(self.rules)
+        # Connector occupancy only needs levels used by a dock or body. The
+        # ordinary belt graph still retains every canvas level.
+        levels = tuple(
+            height for height in _template_levels(self.rules) if 0 <= height < canvas.levels
+        )
         # Occupancy is fixed throughout this enumeration, but reservations and
         # guards may change before the next call. Cache exact Canvas.free results
         # locally, not grid.occ: the latter also encodes search bounds and omits
@@ -156,7 +178,7 @@ class RoutePrimitives:
             if cached is not None:
                 return cached
             mask = 0
-            for height in range(canvas.levels):
+            for height in levels:
                 cell = x, y, height
                 if cell not in forbidden_cells and canvas.free(cell):
                     mask |= 1 << height
@@ -212,14 +234,22 @@ class RoutePrimitives:
                     if edge in excluded_edges:
                         continue
                     candidate = self.witnesses.get(edge)
+                    # Reject occupied bodies before allocating translated
+                    # buildings and ports. Cached witnesses are already absolute.
                     if candidate is None:
-                        candidate = _translated(template, x, y)
+                        keepout = template.foreign_keepout
+                        offset_x, offset_y = x, y
+                    else:
+                        keepout = candidate.foreign_keepout
+                        offset_x = offset_y = 0
                     if any(
-                        not free_levels(cell[0], cell[1]) & (1 << cell[2])
-                        for cell in candidate.foreign_keepout
-                        if 0 <= cell[2] < canvas.levels
+                        not free_levels(cx + offset_x, cy + offset_y) & (1 << cz)
+                        for cx, cy, cz in keepout
+                        if 0 <= cz < canvas.levels
                     ):
                         continue
+                    if candidate is None:
+                        candidate = _translated(template, x, y)
                     if power_allows is not None and any(
                         not power_allows(member) for member in candidate.stack_members
                     ):

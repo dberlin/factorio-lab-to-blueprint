@@ -4855,6 +4855,7 @@ def _production_run(
     publish_incumbent: Callable[[Placement], None] | None = None,
     observer: SearchObserver | None = None,
     prepared_bound_pruning: bool = True,
+    complete_initial_seed: bool = False,
 ) -> _ProductionRun:
     started = time.monotonic()
     ceiling = time_budget_s
@@ -6036,7 +6037,9 @@ def _production_run(
                     direct_candidates=direct_candidates,
                 ),
                 reason="shared-pack",
-                allowance_cap=exact_candidate_allowance,
+                allowance_cap=(
+                    expansion_total // 2 if complete_initial_seed else exact_candidate_allowance
+                ),
             )
             telemetry.shared_pack_candidates = 1
         if shared_stage_started is not None:
@@ -6178,7 +6181,11 @@ def _production_run(
                 topology_beam_height,
                 decoded,
                 reason="topology-beam",
-                allowance_cap=topology_allowance,
+                allowance_cap=(
+                    expansion_total // 2
+                    if complete_initial_seed and telemetry.detailed_routes == 0
+                    else topology_allowance
+                ),
             )
             budget_signature = _topology_budget_signature(closed)
             repeated_budget = (

@@ -172,6 +172,10 @@ def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutc
             compact_seed_attempt=request.compact_seed_attempt,
             compact_seed_base_seed=request.compact_seed_base_seed,
             compact_seed_config=request.compact_seed_config,
+            # Keep the short-probe role on every other island. Island zero
+            # spends up to half its existing ledger closing the initial seed
+            # instead of duplicating the same prematurely exhausted probe.
+            complete_initial_seed=request.island_id == 0,
         )
         result = run.solver.search(feasibility_continuation=True)
         placement = _with_observational_stats(result, run, request.power, config)
