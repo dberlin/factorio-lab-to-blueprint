@@ -590,7 +590,7 @@ def test_belt_overlap_broadphase_visits_only_geometrically_near_colliders(
 
     monkeypatch.setattr(C, "sphere_box_overlap", counted_overlap)
 
-    assert C._belt_overlap_candidates(previews) == tuple(
+    assert tuple(C._belt_overlap_candidates(previews)) == tuple(
         (count + index, (index,)) for index in range(count)
     )
     assert calls <= 9 * count // 4
@@ -1121,6 +1121,63 @@ def test_forced_python_backend_disables_the_kernel(monkeypatch: pytest.MonkeyPat
     assert colliders.any_box_overlap([], [a]) is False
 
 
+@pytest.mark.skipif(not geometry_kernel.compiled_available(), reason="geometry kernel not built")
+def test_compiled_sphere_overlap_matches_rotated_python_geometry() -> None:
+    compiled = geometry_kernel._compiled_sphere_overlap
+    assert compiled is not None
+    rng = random.Random(20260910)
+    outcomes: set[bool] = set()
+    for _ in range(10_000):
+        box = _random_box(rng, spread=3.0)
+        centre = (rng.uniform(-3, 3), rng.uniform(-3, 3), rng.uniform(-3, 3))
+        radius = rng.uniform(0.0, 2.0)
+        expected = colliders._sphere_box_overlap_python(centre, radius, box)
+        outcomes.add(expected)
+        assert compiled(centre, radius, box) is expected, (centre, radius, box)
+    assert outcomes == {False, True}
+
+
+@pytest.mark.parametrize("axis", (0, 1, 2))
+def test_sphere_overlap_preserves_strict_touching_boundary(
+    axis: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    box = colliders.Box((0.0, 0.0, 0.0), (1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 1.0))
+    compiled = geometry_kernel._compiled_sphere_overlap
+    for backend in (compiled, None):
+        monkeypatch.setattr(geometry_kernel, "_compiled_sphere_overlap", backend)
+        for coordinate, expected in (
+            (math.nextafter(1.25, 0.0), True),
+            (1.25, False),
+            (math.nextafter(1.25, math.inf), False),
+        ):
+            centre = tuple(coordinate if dimension == axis else 0.0 for dimension in range(3))
+            assert (
+                colliders.sphere_box_overlap((centre[0], centre[1], centre[2]), 0.25, box)
+                is expected
+            )
+
+
+@pytest.mark.skipif(not geometry_kernel.compiled_available(), reason="geometry kernel not built")
+def test_compiled_sphere_candidates_preserve_target_identity_and_order() -> None:
+    compiled = geometry_kernel._compiled_sphere_candidates
+    assert compiled is not None
+    rng = random.Random(20260911)
+    for _ in range(500):
+        targets = [
+            [_random_box(rng, spread=2.0) for _ in range(rng.randrange(4))] for _ in range(8)
+        ]
+        candidates = rng.sample(range(8), rng.randrange(9))
+        centre = (rng.uniform(-2, 2), rng.uniform(-2, 2), rng.uniform(-2, 2))
+        expected = [
+            index
+            for index in candidates
+            if any(
+                colliders._sphere_box_overlap_python(centre, 0.25, box) for box in targets[index]
+            )
+        ]
+        assert compiled(centre, 0.25, targets, candidates) == expected
+
+
 def test_projected_particle_collider_flank_keeps_graph_rescue_and_anchor_geometry() -> None:
     # The upper box reaches farther left than right. At latitude -122 rows,
     # five compressed columns clear its right side but collide on its left.
@@ -1128,15 +1185,15 @@ def test_projected_particle_collider_flank_keeps_graph_rescue_and_anchor_geometr
     left = C.Preview(36, 8.0, 8.0, 1.0, is_belt=True)
     right = C.Preview(36, 18.0, 8.0, 1.0, is_belt=True)
     previews = (machine, left, right)
+    query = C.StableBeltCollisionQuery(previews)
     projection = planet.Projection(planet.bands_by_segment()[160], -130, 200, 200.0)
-    assert C.stable_belt_collisions(previews) == []
-    assert C.stable_belt_collisions(previews, projection=projection) == [
-        C.StableBeltCollision(1, 0)
-    ]
+    assert list(query.collisions()) == []
+    assert query.first(projection=projection) == C.StableBeltCollision(1, 0)
 
     # A new anchor must not reuse the compressed frame's broadphase cells.
     equator = planet.Projection(planet.bands_by_segment()[200], 0, 200, 200.0)
-    assert C.stable_belt_collisions(previews, projection=equator) == []
+    assert query.first(projection=equator) is None
+    assert query.first(projection=projection) == C.StableBeltCollision(1, 0)
     linked = (machine, C.Preview(36, 8.0, 8.0, 1.0, is_belt=True, output=0))
     assert C.stable_belt_collisions(linked, projection=projection) == []
 
@@ -1160,3 +1217,104 @@ def test_quantum_chemical_left_overhead_needs_spherical_clearance(yaw: float) ->
     assert C.stable_belt_collisions(previews, projection=projection) == [
         C.StableBeltCollision(1, 0)
     ]
+
+
+@pytest.mark.skipif(not geometry_kernel.compiled_available(), reason="geometry kernel not built")
+def test_compiled_belt_probe_preserves_rotation_and_pole_rounding() -> None:
+    compiled = geometry_kernel._compiled_belt_probe
+    assert compiled is not None
+    rng = random.Random(20260912)
+    coordinates = [
+        (value, -value, 0.25)
+        for value in (
+            -0.0,
+            0.0,
+            -250.0,
+            250.0,
+            math.nextafter(250.0, 0.0),
+            math.nextafter(250.0, math.inf),
+        )
+    ]
+    coordinates.extend(
+        (rng.uniform(-400, 400), rng.uniform(-400, 400), rng.uniform(0, 20)) for _ in range(100)
+    )
+    for quadrant in (0, 1):
+        for anchor in (-130, 0, 130):
+            projection = planet.Projection(
+                planet.bands_by_segment()[160], anchor, 200, 200.0, quadrant
+            )
+            probe = compiled(
+                projection.anchor_row,
+                projection.latitude_step,
+                projection.longitude_step,
+                projection.radius,
+                C.BELT_PROBE_LIFT,
+                projection.rotated,
+            )
+            for x, y, z in coordinates:
+                direction = projection.direction(x, y)
+                radius = projection.shell_radius(z)
+                expected = tuple(
+                    component * radius + component * C.BELT_PROBE_LIFT for component in direction
+                )
+                assert tuple(value.hex() for value in probe(x, y, z)) == tuple(
+                    value.hex() for value in expected
+                )
+
+
+def test_projected_belt_batch_keeps_sparse_target_ids_flags_and_rescue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Cross a native scan boundary before two multi-box targets in the same
+    # bucket. Excused targets must neither collide nor shift returned IDs.
+    previews = (
+        *(C.Preview(36, 100.0, 100.0, 10.0, is_belt=True) for _ in range(300)),
+        C.Preview(69, 13.0, 8.0, 0.0),
+        C.Preview(69, 13.0, 8.0, 0.0, is_inserter=True),
+        C.Preview(69, 13.0, 8.0, 0.0, is_belt_addon=True),
+        C.Preview(69, 13.0, 8.0, 0.0),
+        C.Preview(36, 8.0, 8.0, 1.0, is_belt=True),
+        C.Preview(36, 8.0, 8.0, 1.0, is_belt=True, output=300),
+        C.Preview(36, 18.0, 8.0, 1.0, is_belt=True),
+    )
+    projection = planet.Projection(planet.bands_by_segment()[160], -130, 200, 200.0)
+    compiled = geometry_kernel._compiled_projected_belt_scan
+    for backend in (compiled, None):
+        monkeypatch.setattr(geometry_kernel, "_compiled_projected_belt_scan", backend)
+        assert tuple(C._belt_overlap_candidates(previews, projection=projection)) == (
+            (304, (300, 303)),
+            (305, (300, 303)),
+        )
+        assert C.stable_belt_collisions(previews, projection=projection) == [
+            C.StableBeltCollision(304, 300),
+            C.StableBeltCollision(304, 303),
+        ]
+
+
+def test_projected_belt_first_hit_precedes_later_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Scanning an entire batch before returning its first raw hit would observe
+    # the later cancellation and discard a finding that is already available.
+    previews = (
+        C.Preview(69, 13.0, 8.0, 0.0),
+        C.Preview(36, 8.0, 8.0, 1.0, is_belt=True),
+        C.Preview(36, 8.0, 8.0, 1.0, is_belt=True),
+    )
+    projection = planet.Projection(planet.bands_by_segment()[160], -130, 200, 200.0)
+    compiled = geometry_kernel._compiled_projected_belt_scan
+    for backend in (compiled, None):
+        monkeypatch.setattr(geometry_kernel, "_compiled_projected_belt_scan", backend)
+        calls = 0
+
+        def cancelled() -> bool:
+            nonlocal calls
+            calls += 1
+            return calls > len(previews) + 2
+
+        findings = C.StableBeltCollisionQuery(previews).collisions(
+            projection=projection, cancelled=cancelled
+        )
+        assert next(findings) == C.StableBeltCollision(1, 0)
+        with pytest.raises(planet.ProjectionCancelled):
+            next(findings)

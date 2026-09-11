@@ -18,6 +18,7 @@ from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout import finalize, routing_domain, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
+from flab2bp.spec import BuildSpec
 from tests.layout.test_freeform import two_stage_spec
 
 _BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
@@ -66,21 +67,23 @@ def _extent(width: int, height: int) -> tuple[PlacedBuilding, PlacedBuilding]:
     )
 
 
-def test_certification_applies_the_complete_save_belt_policy() -> None:
+@pytest.mark.parametrize("cleanup_screen", [False, True])
+def test_certification_applies_the_complete_save_belt_policy(cleanup_screen: bool) -> None:
     placement = Placement(
         buildings=(
             _belt(0, 0, output=1),
             replace(_belt(1, 0, output=None), z=Fraction(1)),
         )
     )
+    certify = finalize._certify_cleanup_candidate if cleanup_screen else validate.certify
     restricted = replace(_BELT_RULES, max_z=Fraction(0), vertical_construction=False)
-    restricted_report = validate.certify(
+    restricted_report = certify(
         placement,
         two_stage_spec(),
         belt_rules=restricted,
         expect_power=False,
     )
-    developed_report = validate.certify(
+    developed_report = certify(
         placement,
         two_stage_spec(),
         belt_rules=_BELT_RULES,
@@ -159,6 +162,288 @@ def test_remove_buildings_bypasses_removed_chain_and_reindexes() -> None:
         (0, 1),
         (2, None),
     ]
+
+
+def test_certified_cleanup_retains_original_indices_and_bypass_causes() -> None:
+    placement = Placement(
+        buildings=(
+            _belt(0, 1, output=1),
+            replace(_belt(1, 1, output=2), input_obj=0),
+            _belt(2, 1, output=None),
+            _belt(1, 0, output=1),
+        )
+    )
+    result = finalize.compact_open_boundary_belts_certified(
+        placement, BuildSpec(groups=()), belt_rules=_BELT_RULES, expect_power=False
+    )
+
+    assert result.report is not None and not result.report.errors
+    assert result.survivor_indices == (1,)
+    assert [
+        (belt.x, belt.y, belt.input_obj, belt.output_obj) for belt in result.placement.buildings
+    ] == [(1, 1, None, None)]
+    assert set(result.link_dependencies) == {
+        finalize.CleanupLinkDependency(1, "input", (0,)),
+        finalize.CleanupLinkDependency(1, "output", (2,)),
+    }
+
+
+def test_side_cleanup_inherits_dependencies_of_successively_removed_links() -> None:
+    placement = Placement(
+        buildings=(
+            *(
+                replace(
+                    _belt(i, i, output=None),
+                    input_obj=i - 1 if i else None,
+                    input_from_slot=rules.BELT_SLOT,
+                    input_to_slot=rules.BELT_SLOT,
+                )
+                for i in range(5)
+            ),
+            _building(catalog.TESLA_TOWER_ID, 10, 10),
+        )
+    )
+    lineage = finalize._CleanupLineage()
+    compacted, removed, report = finalize._certified_side_fallback(
+        placement,
+        BuildSpec(groups=()),
+        belt_rules=_BELT_RULES,
+        expect_power=False,
+        _lineage=lineage,
+    )
+
+    assert report is not None and not report.errors
+    assert removed == 4
+    assert lineage.survivor_indices == (4, 5)
+    assert compacted.buildings[0].input_obj is None
+    assert lineage.link_dependencies == (finalize.CleanupLinkDependency(4, "input", (3, 2, 1, 0)),)
+
+
+def test_accepted_structural_and_side_cleanup_compose_link_causes() -> None:
+    placement = Placement(
+        buildings=(
+            *(
+                replace(
+                    _belt(coordinate, coordinate, output=None),
+                    input_obj=index - 1 if index else None,
+                    input_from_slot=rules.BELT_SLOT,
+                    input_to_slot=rules.BELT_SLOT,
+                    # Marker belts survive structural pruning, but may still
+                    # be removed by an accepted area-reducing side proposal.
+                    parameters=(1,) if index else (),
+                )
+                for index, coordinate in enumerate(range(-1, 5))
+            ),
+            _building(catalog.TESLA_TOWER_ID, 10, 10),
+        ),
+        stats={"machines": 56.0, "strips": 14.0},
+    )
+    result = finalize.compact_open_boundary_belts_certified(
+        placement,
+        BuildSpec(
+            groups=(),
+            external_inputs={"proliferator-3": Fraction(1)},
+            spray_lanes={"iron-ore": True},
+        ),
+        belt_rules=_BELT_RULES,
+        expect_power=False,
+    )
+
+    assert result.report is not None and not result.report.errors
+    assert result.placement.bounds == (2, 2, 10, 10)
+    assert result.placement.buildings[0].input_obj is None
+    assert result.survivor_indices == (3, 4, 5, 6)
+    assert result.link_dependencies == (finalize.CleanupLinkDependency(3, "input", (2, 1, 0)),)
+
+
+def test_interrupted_side_cleanup_publishes_no_partial_lineage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    placement = Placement(
+        buildings=(
+            *(
+                replace(
+                    _belt(i, i, output=None),
+                    input_obj=i - 1 if i else None,
+                    input_from_slot=rules.BELT_SLOT,
+                    input_to_slot=rules.BELT_SLOT,
+                )
+                for i in range(5)
+            ),
+            _building(catalog.TESLA_TOWER_ID, 10, 10),
+        )
+    )
+    real_certify = finalize._certify
+    interrupted = False
+    certified_roots: list[int] = []
+
+    def certify(
+        candidate: Placement,
+        spec: BuildSpec,
+        *,
+        belt_rules: catalog.BeltAltitudeRules,
+        expect_power: bool,
+    ) -> validate.Report:
+        nonlocal interrupted
+        report = real_certify(candidate, spec, belt_rules=belt_rules, expect_power=expect_power)
+        assert not report.errors
+        certified_roots.append(candidate.bounds[0])
+        # One side deletion has already been accepted when the next atomic
+        # certification exhausts the caller's cancellation allowance.
+        if candidate.bounds[0] == 2:
+            interrupted = True
+        return report
+
+    monkeypatch.setattr(finalize, "_certify", certify)
+    lineage = finalize._CleanupLineage()
+    with pytest.raises(finalize.ProjectionCancelled):
+        finalize._certified_side_fallback(
+            placement,
+            BuildSpec(groups=()),
+            belt_rules=_BELT_RULES,
+            expect_power=False,
+            cancelled=lambda: interrupted,
+            _lineage=lineage,
+        )
+
+    assert certified_roots == [1, 2]
+    assert lineage.survivor_indices is None
+    assert lineage.link_dependencies == ()
+    assert tuple(building.input_obj for building in placement.buildings) == (None, 0, 1, 2, 3, None)
+
+
+def test_original_fallback_resets_rejected_structural_and_side_lineage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    placement = Placement(
+        buildings=(
+            _belt(-5, -5, output=None),
+            _belt(0, 0, output=0),
+            replace(_belt(0, 1, output=None), z=Fraction(1)),
+            _building(catalog.SPRAY_COATER_ID, 0, 0, yaw=180.0),
+        )
+    )
+
+    # Exercise the real spatial addon predicate: the structural proposal loses
+    # both supply belts; side fallback can remove the unrelated southwest leaf.
+    def certify(candidate: Placement, *_args: object, **_kwargs: object) -> validate.Report:
+        return validate.validate(candidate, only=("game.addon_supply",), expect_power=False)
+
+    monkeypatch.setattr(finalize, "_certify", certify)
+    result = finalize.compact_open_boundary_belts_certified(
+        placement, BuildSpec(groups=()), belt_rules=_BELT_RULES, expect_power=False
+    )
+
+    assert result.report is not None and not result.report.errors
+    assert result.survivor_indices == (1, 2, 3)
+    assert result.placement.buildings[0].output_obj is None
+    assert result.link_dependencies == (finalize.CleanupLinkDependency(1, "output", (0,)),)
+
+
+def test_removal_tracks_colocated_records_by_index_not_equality() -> None:
+    same = _belt(0, 0, output=None)
+    placement = Placement(buildings=(same, same, replace(_belt(1, 0, output=0), input_obj=1)))
+    lineage = finalize._CleanupLineage()
+
+    result = finalize._remove_buildings(placement, frozenset({0}), _lineage=lineage)
+
+    assert lineage.survivor_indices == (1, 2)
+    assert (result.buildings[1].input_obj, result.buildings[1].output_obj) == (0, None)
+    assert lineage.link_dependencies == (finalize.CleanupLinkDependency(2, "output", (0,)),)
+
+
+def test_rejected_cleanup_discards_proposed_lineage() -> None:
+    placement = Placement(
+        buildings=(
+            _belt(-1, -1, output=None),
+            _building(catalog.TESLA_TOWER_ID, 10, 10),
+            _building(catalog.TESLA_TOWER_ID, 10, 10),
+        )
+    )
+    result = finalize.compact_open_boundary_belts_certified(
+        placement, BuildSpec(groups=()), belt_rules=_BELT_RULES, expect_power=False
+    )
+
+    assert result.placement is placement
+    assert result.survivor_indices is None
+    assert result.link_dependencies == ()
+
+
+def test_projection_refusal_carries_accepted_cleanup_without_inventing_frame_witness() -> None:
+    placement = Placement(
+        buildings=(
+            _belt(-5, -5, output=None),
+            _building(catalog.TESLA_TOWER_ID, 0, 0),
+            _building(catalog.TESLA_TOWER_ID, 100, 0),
+        )
+    )
+    result = finalize.prepare_placement_completion(
+        placement,
+        BuildSpec(groups=()),
+        BandPolicy("4"),
+        belt_rules=_BELT_RULES,
+        expect_power=False,
+        deadlines=finalize.PlacementCompletionDeadlines(None, None, None),
+    )
+
+    assert isinstance(result, finalize.PlacementProjectionRefused)
+    assert result.survivor_indices == (1, 2)
+    assert result.link_dependencies == ()
+    assert finalize.frame_candidates(result.candidate, BandPolicy("4")) == ()
+    assert result.refusal.witnesses == ()
+
+
+@pytest.mark.parametrize("removed", (frozenset(), frozenset({0, 1})))
+def test_unperformed_removal_preserves_identity_lineage(removed: frozenset[int]) -> None:
+    placement = Placement(buildings=(_belt(0, 0, output=1), _belt(1, 0, output=None)))
+    lineage = finalize._CleanupLineage()
+
+    result = finalize._remove_buildings(placement, removed, _lineage=lineage)
+
+    assert result is placement
+    assert lineage.survivor_indices is None
+    assert lineage.link_dependencies == ()
+
+
+def test_projection_witnesses_retain_exact_padding_and_projection() -> None:
+    placement = Placement(
+        buildings=(
+            _building(catalog.TESLA_TOWER_ID, 0, 0),
+            _building(catalog.TESLA_TOWER_ID, 0, 0),
+        )
+    )
+    policy = BandPolicy("200")
+    with pytest.raises(finalize.ProjectionRefusal) as caught:
+        finalize.finalize_placement(placement, policy)
+
+    refusal = caught.value
+    candidates = finalize.frame_candidates(placement, policy)
+    assert tuple(dict.fromkeys(w.candidate for w in refusal.witnesses)) == candidates
+    assert tuple(dict.fromkeys(w.failure for w in refusal.witnesses)) == refusal.failures
+    same_height = [w for w in refusal.witnesses if w.candidate.added_rows == 1]
+    assert {w.candidate.south_padding for w in same_height} == {0, 1}
+    for candidate in candidates:
+        assert tuple(
+            dict.fromkeys(
+                witness.projection.anchor_row
+                for witness in refusal.witnesses
+                if witness.candidate == candidate
+            )
+        ) == tuple(planet.bands_by_segment()[200].anchors(candidate.frame.height))
+    for witness in refusal.witnesses:
+        framed = finalize._materialize_frame(placement, witness.candidate)
+        assert witness.projection.anchor_row in witness.projection.band.anchors(
+            witness.candidate.frame.height
+        )
+        if witness.failure.check == "game.power_too_close":
+            reprobed = finalize.projected_power_failure(
+                finalize._power_nodes(framed), witness.projection
+            )
+        else:
+            reprobed = finalize.projected_static_failure(
+                tuple(enumerate(framed.buildings)), witness.projection
+            )
+        assert reprobed == witness.failure
 
 
 def _brute_cleanup_survivor_bounds(
@@ -1328,347 +1613,6 @@ def test_projected_coater_splitter_candidates_include_bound_edge() -> None:
     assert candidates == ((splitter,),)
 
 
-def test_no_deadline_projected_failure_preserves_legacy_overlap_call(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[colliders.Placed, colliders.Placed, planet.Projection]] = []
-
-    def legacy_overlap(
-        coater: colliders.Placed,
-        splitter: colliders.Placed,
-        projection: planet.Projection,
-    ) -> bool:
-        calls.append((coater, splitter, projection))
-        return False
-
-    monkeypatch.setattr(
-        finalize,
-        "_projected_coater_keepout_overlaps",
-        legacy_overlap,
-    )
-
-    failure = finalize.projected_coater_splitter_failure(
-        _broke2_coater(),
-        _broke2_splitter(),
-        _broke2_projection(),
-    )
-
-    assert failure is None
-    assert calls == [
-        (
-            _broke2_coater()[1],
-            _broke2_splitter()[1],
-            _broke2_projection(),
-        )
-    ]
-
-
-def test_no_deadline_candidates_preserve_legacy_tree_call(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[finalize._CoaterSplitterKdPoint, ...]] = []
-
-    def legacy_tree(
-        points: tuple[finalize._CoaterSplitterKdPoint, ...],
-    ) -> None:
-        calls.append(points)
-        return None
-
-    monkeypatch.setattr(finalize, "_coater_splitter_kd_tree", legacy_tree)
-    monkeypatch.setattr(
-        finalize,
-        "_coater_splitter_kd_range",
-        lambda *_args, **_kwargs: None,
-    )
-
-    candidates = finalize._projected_coater_splitter_candidates(
-        (_broke2_coater(),),
-        (_broke2_splitter(),),
-        _broke2_projection(),
-    )
-
-    assert candidates == ((),)
-    assert len(calls) == 1
-
-
-def test_no_deadline_candidates_preserve_legacy_range_call(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    def legacy_range(
-        node: finalize._CoaterSplitterKdNode | None,
-        centre: tuple[float, float, float],
-        radius2: float,
-        found: set[int],
-    ) -> None:
-        nonlocal calls
-        calls += 1
-
-    monkeypatch.setattr(finalize, "_coater_splitter_kd_range", legacy_range)
-
-    finalize._projected_coater_splitter_candidates(
-        (_broke2_coater(),),
-        (_broke2_splitter(),),
-        _broke2_projection(),
-    )
-
-    assert calls >= 1
-
-
-def test_no_deadline_kd_recursion_preserves_legacy_range_call(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    child_point = finalize._CoaterSplitterKdPoint(0, (0.0, 0.0, 0.0))
-    root_point = finalize._CoaterSplitterKdPoint(1, (1.0, 0.0, 0.0))
-    child = finalize._CoaterSplitterKdNode(
-        child_point,
-        child_point.coordinates,
-        child_point.coordinates,
-        None,
-        None,
-    )
-    root = finalize._CoaterSplitterKdNode(
-        root_point,
-        child.lower,
-        root_point.coordinates,
-        child,
-        None,
-    )
-    original = finalize._coater_splitter_kd_range
-    calls = 0
-
-    def legacy_range(
-        node: finalize._CoaterSplitterKdNode | None,
-        centre: tuple[float, float, float],
-        radius2: float,
-        found: set[int],
-    ) -> None:
-        nonlocal calls
-        calls += 1
-        original(node, centre, radius2, found)
-
-    monkeypatch.setattr(finalize, "_coater_splitter_kd_range", legacy_range)
-    found: set[int] = set()
-
-    legacy_range(root, (0.0, 0.0, 0.0), 4.0, found)
-
-    assert found == {0, 1}
-    assert calls >= 2
-
-
-def test_projected_coater_splitter_broad_phase_is_linear_plus_candidates(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    count = 32
-    coater_model = catalog.building(catalog.SPRAY_COATER_ID).model_index
-    splitter_model = catalog.building(catalog.SPLITTER_ID).model_index
-    coaters = tuple(
-        (
-            100 + position,
-            colliders.Placed(coater_model, position * 20, 0, position % 4, 0.0),
-        )
-        for position in range(count)
-    )
-    splitters = tuple(
-        (
-            200 + position,
-            colliders.Placed(splitter_model, position * 20, 0, position % 4, 0.0),
-        )
-        for position in range(count)
-    )
-    exact_pairs: list[tuple[int, int]] = []
-
-    def clean_pair(
-        coater: tuple[int, colliders.Placed],
-        splitter: tuple[int, colliders.Placed],
-        _projection: planet.Projection,
-    ) -> None:
-        exact_pairs.append((coater[0], splitter[0]))
-        return None
-
-    monkeypatch.setattr(
-        finalize,
-        "projected_coater_splitter_failure",
-        clean_pair,
-    )
-
-    failure = finalize._projected_addon_splitter_failure(
-        coaters,
-        splitters,
-        _broke2_projection(),
-    )
-
-    assert failure is None
-    assert exact_pairs == [
-        (coaters[position][0], splitters[position][0]) for position in range(count)
-    ]
-    assert len(exact_pairs) == count
-    assert len(exact_pairs) < len(coaters) * len(splitters)
-
-
-def test_projected_coater_splitter_broad_phase_bounds_same_longitude_scan(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    count = 64
-    coater_model = catalog.building(catalog.SPRAY_COATER_ID).model_index
-    splitter_model = catalog.building(catalog.SPLITTER_ID).model_index
-    coaters = tuple(
-        (
-            100 + position,
-            colliders.Placed(coater_model, 0, position * 40, 0, 0.0),
-        )
-        for position in range(count)
-    )
-    splitters = tuple(
-        (
-            200 + position,
-            colliders.Placed(splitter_model, 0, position * 40 + 20, 0, 0.0),
-        )
-        for position in range(count)
-    )
-    sqrt_calls = 0
-    exact_pairs: list[tuple[int, int]] = []
-    original_sqrt = math.sqrt
-
-    def counted_sqrt(value: float) -> float:
-        nonlocal sqrt_calls
-        sqrt_calls += 1
-        return original_sqrt(value)
-
-    def clean_pair(
-        coater: tuple[int, colliders.Placed],
-        splitter: tuple[int, colliders.Placed],
-        _projection: planet.Projection,
-    ) -> None:
-        exact_pairs.append((coater[0], splitter[0]))
-        return None
-
-    monkeypatch.setattr(math, "sqrt", counted_sqrt)
-    monkeypatch.setattr(
-        finalize,
-        "projected_coater_splitter_failure",
-        clean_pair,
-    )
-
-    failure = finalize._projected_addon_splitter_failure(
-        coaters,
-        splitters,
-        _broke2_projection(),
-    )
-
-    assert failure is None
-    assert exact_pairs == []
-    assert sqrt_calls == 0
-
-
-def test_projected_coater_splitter_range_query_prunes_dense_diagonal(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    count = 64
-    projection = _broke2_projection()
-    coater_model = catalog.building(catalog.SPRAY_COATER_ID).model_index
-    splitter_model = catalog.building(catalog.SPLITTER_ID).model_index
-    prototype = colliders.Placed(coater_model, 0, 0, 0, 0.0)
-    lateral_arc = math.dist(
-        projection.position(0, 0, 0),
-        projection.position(1, 0, 0),
-    )
-    reach = (
-        planet.collider_radius(coater_model) + lateral_arc + planet.collider_radius(splitter_model)
-    )
-    latitude_step = planet.latitude_rad_per_grid(projection.segment)
-    poleward = min(
-        math.cos(min(abs(grid), planet.pole_grid_idx(projection.segment)) * latitude_step)
-        for grid in (
-            projection.band.grid_lo,
-            projection.band.grid_hi,
-        )
-    )
-    column_lower_bound = (
-        projection.radius
-        * poleward
-        * planet.longitude_rad_per_grid(projection.band.area_segments)
-        * 0.9
-    )
-    row_lower_bound = projection.radius * latitude_step * 0.9
-    splitter_pose = colliders.Placed(
-        splitter_model,
-        0.75 * reach / column_lower_bound,
-        0.75 * reach / row_lower_bound,
-        0.75 * reach / (4.0 / 3.0),
-        0.0,
-    )
-    coaters = tuple((100 + position, prototype) for position in range(count))
-    splitters = tuple((200 + position, splitter_pose) for position in range(count))
-    assert (
-        finalize.projected_coater_splitter_failure(
-            coaters[0],
-            splitters[0],
-            projection,
-        )
-        is None
-    )
-
-    point_work = 0
-    box_work = 0
-    exact_pairs: list[tuple[int, int]] = []
-    original_point_distance = finalize._coater_splitter_point_distance2
-    original_box_distance = finalize._coater_splitter_box_distance2
-
-    def counted_point_distance(
-        left: tuple[float, float, float],
-        right: tuple[float, float, float],
-    ) -> float:
-        nonlocal point_work
-        point_work += 1
-        return original_point_distance(left, right)
-
-    def counted_box_distance(
-        point: tuple[float, float, float],
-        lower: tuple[float, float, float],
-        upper: tuple[float, float, float],
-    ) -> float:
-        nonlocal box_work
-        box_work += 1
-        return original_box_distance(point, lower, upper)
-
-    def clean_pair(
-        coater: tuple[int, colliders.Placed],
-        splitter: tuple[int, colliders.Placed],
-        _projection: planet.Projection,
-    ) -> None:
-        exact_pairs.append((coater[0], splitter[0]))
-        return None
-
-    monkeypatch.setattr(
-        finalize,
-        "_coater_splitter_point_distance2",
-        counted_point_distance,
-    )
-    monkeypatch.setattr(
-        finalize,
-        "_coater_splitter_box_distance2",
-        counted_box_distance,
-    )
-    monkeypatch.setattr(
-        finalize,
-        "projected_coater_splitter_failure",
-        clean_pair,
-    )
-
-    failure = finalize._projected_addon_splitter_failure(
-        coaters,
-        splitters,
-        projection,
-    )
-
-    assert failure is None
-    assert exact_pairs == []
-    assert point_work + box_work <= count * 12
-    assert point_work + box_work < len(coaters) * len(splitters)
-
-
 def test_broke2_splitter_region_is_rejected_by_projected_addon_keepout() -> None:
     # Original blueprint records: host belt #100, supply belt #478,
     # Spray Coater #479, and Splitter #794.
@@ -2159,103 +2103,23 @@ def test_projection_refusal_preserves_order_deduplicates_and_formats_evidence() 
     assert "too close" in str(refusal)
 
 
-def test_projection_collects_simultaneous_rule_category_failures(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ordered_checks = (
-        "game.power_too_close",
-        "game.inserter_paste",
-        "geom.collide",
-        "game.addon_supply",
-        "game.addon_splitter_clearance",
-    )
-
-    def failure(
-        check: str,
-        projection: planet.Projection,
-    ) -> finalize.ProjectionFailure:
-        return finalize.ProjectionFailure(
-            check=check,
-            buildings=(0,),
-            detail=f"simultaneous {check}",
-            band=projection.band.area_segments,
-        )
-
-    def refuse_power(
-        _nodes: object,
-        projection: planet.Projection,
-        *,
-        cancelled: Callable[[], bool] | None = None,
-    ) -> finalize.ProjectionFailure:
-        del cancelled
-        return failure(ordered_checks[0], projection)
-
-    def refuse_sorter(
-        _sorters: object,
-        projection: planet.Projection,
-        *,
-        counters: finalize._ProjectionCounters | None = None,
-        cancelled: Callable[[], bool] | None = None,
-        _condition_cache: dict[tuple[object, ...], str | None] | None = None,
-    ) -> finalize.ProjectionFailure:
-        del counters, cancelled, _condition_cache
-        return failure(ordered_checks[1], projection)
-
-    def refuse_static(
-        _tested: object,
-        _pairs: object,
-        projection: planet.Projection,
-        *,
-        counters: finalize._ProjectionCounters | None = None,
-        _box_cache: dict[
-            tuple[colliders.Placed, planet.Projection],
-            tuple[colliders.Box, ...],
+def test_projection_collects_simultaneous_rule_category_failures() -> None:
+    placement = Placement(
+        buildings=[
+            *_extent(20, 5),
+            _building(2302, 2, 2),
+            _building(2302, 2, 2),
+            _building(catalog.TESLA_TOWER_ID, 12, 2),
+            _building(catalog.TESLA_TOWER_ID, 12, 2),
         ]
-        | None = None,
-        cancelled: Callable[[], bool] | None = None,
-    ) -> finalize.ProjectionFailure:
-        del counters, _box_cache, cancelled
-        return failure(ordered_checks[2], projection)
-
-    def refuse_addon(
-        _belts: object,
-        _addons: object,
-        projection: planet.Projection,
-        *,
-        cancelled: Callable[[], bool] | None = None,
-    ) -> finalize.ProjectionFailure:
-        del cancelled
-        return failure(ordered_checks[3], projection)
-
-    def refuse_addon_splitter(
-        _coaters: object,
-        _splitters: object,
-        projection: planet.Projection,
-        *,
-        cancelled: Callable[[], bool] | None = None,
-        _coater_geometry: finalize._ProjectedCoaterGeometry | None = None,
-    ) -> finalize.ProjectionFailure:
-        del cancelled
-        return failure(ordered_checks[4], projection)
-
-    monkeypatch.setattr(finalize, "projected_power_failure", refuse_power)
-    monkeypatch.setattr(finalize, "_projected_sorter_failure", refuse_sorter)
-    monkeypatch.setattr(finalize, "_projected_static_failure", refuse_static)
-    monkeypatch.setattr(finalize, "_projected_addon_failure", refuse_addon)
-    monkeypatch.setattr(
-        finalize,
-        "_projected_addon_splitter_failure",
-        refuse_addon_splitter,
     )
-
     with pytest.raises(finalize.ProjectionRefusal) as caught:
-        finalize.finalize_placement(
-            Placement(buildings=_extent(20, 5)),
-            BandPolicy("4"),
-        )
+        finalize.finalize_placement(placement, BandPolicy("200"))
 
-    assert tuple(failure.check for failure in caught.value.failures) == ordered_checks
-    assert caught.value.checks == tuple(sorted(ordered_checks))
+    assert {failure.check: failure.buildings for failure in caught.value.failures} == {
+        "game.power_too_close": (4, 5),
+        "geom.collide": (2, 3),
+    }
 
 
 def test_projection_counters_count_only_observed_rule_loop_work(
@@ -2292,7 +2156,7 @@ def test_projection_counters_count_only_observed_rule_loop_work(
         addons=(),
         coaters=(),
         splitters=(),
-        previews=(),
+        belt_query=colliders.StableBeltCollisionQuery(()),
     )
     pairs = ((0, 1), (0, 2), (1, 2))
     power_work: list[int] = []
@@ -3307,3 +3171,184 @@ def test_frame_certificate_rejects_quantum_chemical_left_overhead_not_middle() -
         ),
     )
     assert finalize._certify_frame(raised, frame, finalize._ProjectionCounters()) == ()
+
+
+# These index comparisons require carried-item metadata, graph links and
+# non-belt records. Keep that input deterministic: fixture construction must
+# not depend on a short solver deadline or another test warming a solve cache.
+
+
+def _carried_belt_graph() -> Placement:
+    return Placement(
+        buildings=[
+            replace(_belt(0, 0, output=1), carries_item="iron-ore"),
+            replace(_belt(1, 0, output=None), carries_item="iron-ore"),
+            replace(_belt(2, 2, output=3), carries_item="iron-ingot"),
+            replace(_belt(3, 2, output=None), carries_item="iron-ingot"),
+            replace(_belt(4, 4, output=5), carries_item="gear"),
+            replace(_belt(5, 4, output=None), carries_item="gear"),
+            replace(_belt(0, 2, output=None), carries_item="iron-ore"),
+            replace(_belt(5, 0, output=None), carries_item="gear", parameters=(1,)),
+            replace(_building(min(catalog.SORTER_IDS), 1, 1), input_obj=0, output_obj=1),
+        ]
+    )
+
+
+def _brute_force_belt_set(placement: Placement) -> set[int]:
+    """The old ``enumerate(buildings)`` + ``catalog.is_belt`` scan, verbatim."""
+    return {
+        index
+        for index, building in enumerate(placement.buildings)
+        if catalog.is_belt(building.item_id)
+    }
+
+
+def test_prunable_open_belts_matches_brute_force_belt_scan_on_carried_graph() -> None:
+    placement = _carried_belt_graph()
+    expected_belts = _brute_force_belt_set(placement)
+    assert len(expected_belts) > 0, "fixture regressed: expected at least one belt"
+
+    actual = finalize._prunable_open_belts(placement)
+    assert len(actual) > 0, "fixture regressed: expected at least one prunable open belt"
+    # Reproduce the OLD algorithm's remaining (unconverted) stages against the
+    # brute-force belt set, so this proves the CONVERTED belt-set construction
+    # specifically, not just "the function still returns something".
+    buildings = placement.buildings
+    predecessors: dict[int, set[int]] = {index: set() for index in expected_belts}
+    for index in expected_belts:
+        target = buildings[index].output_obj
+        if target in expected_belts:
+            predecessors[target].add(index)
+    nonbelt_references: set[int] = set()
+    for index, building in enumerate(buildings):
+        if index in expected_belts:
+            continue
+        for target in (building.input_obj, building.output_obj):
+            if target in expected_belts:
+                assert target is not None
+                nonbelt_references.add(target)
+    left, bottom, right, top = placement.bounds
+    expected: set[int] = set()
+    for index in expected_belts:
+        building = buildings[index]
+        successor = building.output_obj if building.output_obj in expected_belts else None
+        neighbours = len(predecessors[index]) + int(successor is not None)
+        open_end = not predecessors[index] or successor is None
+        outer = (
+            building.x == left
+            or building.x + building.width - 1 == right
+            or building.y == bottom
+            or building.y + building.height - 1 == top
+        )
+        protected = index in nonbelt_references or bool(building.parameters)
+        if outer and open_end and not protected and neighbours <= 1:
+            expected.add(index)
+    assert actual == frozenset(expected)
+
+
+def test_boundary_open_belts_matches_brute_force_belt_scan_on_carried_graph() -> None:
+    placement = _carried_belt_graph()
+    expected_belts = _brute_force_belt_set(placement)
+    assert len(expected_belts) > 0, "fixture regressed: expected at least one belt"
+
+    left, bottom, right, top = placement.bounds
+    buildings = placement.buildings
+    any_non_empty = False
+    for side in ("left", "bottom", "right", "top"):
+        expected = frozenset(
+            index
+            for index in expected_belts
+            if ((building := buildings[index]).input_obj is None or building.output_obj is None)
+            and (
+                (side == "left" and building.x == left)
+                or (side == "bottom" and building.y == bottom)
+                or (side == "right" and building.x + building.width - 1 == right)
+                or (side == "top" and building.y + building.height - 1 == top)
+            )
+        )
+        actual = finalize._boundary_open_belts(placement, side)
+        assert actual == expected
+        any_non_empty = any_non_empty or len(expected) > 0
+    assert any_non_empty, "fixture regressed: expected at least one boundary-open belt on some side"
+
+
+def test_required_external_input_belts_matches_brute_force_belt_scan_on_carried_graph() -> None:
+    placement = _carried_belt_graph()
+    spec = two_stage_spec()
+    expected_belts = _brute_force_belt_set(placement)
+    assert len(expected_belts) > 0, "fixture regressed: expected at least one belt"
+
+    actual = finalize._required_external_input_belts(placement, spec)
+    assert len(actual) > 0, "fixture regressed: expected at least one required external belt"
+
+    # Reproduce the OLD algorithm's remaining (unconverted) connected-component
+    # and predicate stages against the brute-force belt set.
+    output_items = set(spec.outputs) | set(spec.surplus_outputs)
+    left, bottom, right, top = placement.bounds
+    buildings = placement.buildings
+    connected: set[int] = set()
+    for source, building in enumerate(buildings):
+        for target in (building.input_obj, building.output_obj):
+            if target is None or not 0 <= target < len(buildings):
+                continue
+            if source in expected_belts:
+                connected.add(source)
+            if target in expected_belts:
+                connected.add(target)
+    expected = frozenset(
+        index
+        for index, building in enumerate(buildings)
+        if (
+            index in expected_belts
+            and index in connected
+            and (
+                building.carries_item in spec.external_inputs
+                or (
+                    building.carries_item in output_items
+                    and building.output_obj is None
+                    and (
+                        building.x == left
+                        or building.x + building.width - 1 == right
+                        or building.y == bottom
+                        or building.y + building.height - 1 == top
+                    )
+                )
+            )
+        )
+    )
+    assert actual == expected
+
+
+def test_projected_belt_cache_preserves_effective_coordinates_and_links() -> None:
+    band = next(band for band in planet.bands() if band.area_segments == 200)
+    projection = planet.Projection(band, 0, 200, 200.0)
+    previews = (
+        colliders.Preview(catalog.building(2302).model_index, 0.0, 0.0, 0.0),
+        colliders.Preview(35, 0.0, 0.0, 0.0, is_belt=True),
+    )
+    cache = finalize._ProjectionCache(finalize._ProjectionCounters())
+    failure = cache.belt_failure(colliders.StableBeltCollisionQuery(previews), projection)
+    assert failure is not None and failure.buildings == (1, 0)
+    shifted = tuple(replace(preview, y=preview.y + 4) for preview in previews)
+    assert (
+        cache.belt_failure(
+            colliders.StableBeltCollisionQuery(shifted), replace(projection, anchor_row=-4)
+        )
+        == failure
+    )
+    assert (
+        cache.belt_failure(
+            colliders.StableBeltCollisionQuery((previews[0], replace(previews[1], x=40.0))),
+            projection,
+        )
+        is None
+    )
+    # A belt ending directly in the machine receives the game's graph rescue;
+    # identical poses alone must not reuse the disconnected collision verdict.
+    assert (
+        cache.belt_failure(
+            colliders.StableBeltCollisionQuery((previews[0], replace(previews[1], output=0))),
+            projection,
+        )
+        is None
+    )

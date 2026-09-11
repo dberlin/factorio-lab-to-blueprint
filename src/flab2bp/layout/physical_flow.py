@@ -8,9 +8,12 @@ weak-duality upper bound below the required flow.
 
 from __future__ import annotations
 
+import math
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from fractions import Fraction
-from math import lcm
 from typing import Literal
 
 from ortools.linear_solver import pywraplp
@@ -59,7 +62,44 @@ class _Edge:
     original: int = -1
 
 
+type _SolveKey = tuple[Model, frozenset[ResourceKind], frozenset[str] | None, frozenset[int] | None]
+_certificates: ContextVar[dict[_SolveKey, Result] | None] = ContextVar(
+    "physical_flow_certificates", default=None
+)
+
+
+@contextmanager
+def reuse_certificates() -> Iterator[None]:
+    """Own exact immutable-model proofs for one settlement, then release them."""
+    token = _certificates.set({})
+    try:
+        yield
+    finally:
+        _certificates.reset(token)
+
+
 def solve(
+    model: Model,
+    kinds: frozenset[ResourceKind],
+    *,
+    items: frozenset[str] | None = None,
+    resources: frozenset[int] | None = None,
+) -> Result:
+    """Solve this exact constraint projection, reusing only certified results."""
+    certificates = _certificates.get()
+    if certificates is None:
+        return _solve(model, kinds, items=items, resources=resources)
+    key = model, kinds, items, resources
+    cached = certificates.get(key)
+    if cached is not None:
+        return cached
+    result = _solve(model, kinds, items=items, resources=resources)
+    if result.feasible is not None:
+        certificates[key] = result
+    return result
+
+
+def _solve(
     model: Model,
     kinds: frozenset[ResourceKind],
     *,
@@ -115,11 +155,11 @@ def solve(
             return Result(False, required, required + limit, (), tuple(prices))
         limits[index] = limit
     if required == 0:
-        flows = tuple(
+        fixed_flows = tuple(
             arc.lower if enabled else Fraction(0)
             for arc, enabled in zip(model.arcs, active, strict=True)
         )
-        return Result(True, required, required, flows, tuple(prices))
+        return Result(True, required, required, fixed_flows, tuple(prices))
 
     solver = pywraplp.Solver.CreateSolver("GLOP")
     if solver is None:
@@ -169,12 +209,19 @@ def solve(
         if not lattice:
             denominators = {edge.capacity.denominator for edge in edges}
             denominators.update(limit.denominator for limit in limits.values())
-            lattice = lcm(*denominators)
+            lattice = math.lcm(*denominators)
         lattice_values = {value: Fraction(round(value * lattice), lattice) for value in set(values)}
         recovered = tuple(lattice_values[value] for value in values)
         flows = _certify_primal(model, active, edges, recovered, constrained, required)
         if flows is not None:
             return Result(True, required, required, flows, tuple(prices))
+    # Merged flows must reconstruct on a shared rate lattice. This is only
+    # a proposal: coupled resources can require other denominators, and the
+    # exact certificate below still checks every original constraint.
+    values = _network_values(model.nodes, edges, floats)
+    flows = _certify_primal(model, active, edges, values, constrained, required)
+    if flows is not None:
+        return Result(True, required, required, flows, tuple(prices))
 
     potentials = [Fraction(row.dual_value()).limit_denominator(1_000_000) for row in rows]
     potentials.extend((Fraction(0), Fraction(0)))
@@ -199,6 +246,35 @@ def solve(
         upper_bound += max(Fraction(0), reduced) * edge.capacity
     return Result(
         False if upper_bound < required else None, required, upper_bound, (), tuple(prices)
+    )
+
+
+def _network_values(
+    nodes: int, edges: list[_Edge], floats: tuple[float, ...]
+) -> tuple[Fraction, ...]:
+    """Reconstruct on each independent network's rational rate lattice."""
+    parents = list(range(nodes))
+
+    def root(node: int) -> int:
+        while parents[node] != node:
+            parents[node] = parents[parents[node]]
+            node = parents[node]
+        return node
+
+    for edge in edges:
+        # Artificial source/sink obligations do not couple independent networks.
+        if edge.source < nodes and edge.sink < nodes:
+            parents[root(edge.source)] = root(edge.sink)
+    components = [root(edge.source if edge.source < nodes else edge.sink) for edge in edges]
+    scales: dict[int, int] = {}
+    for component, edge in zip(components, edges, strict=True):
+        scales[component] = math.lcm(scales.get(component, 1), edge.capacity.denominator)
+    reconstructed = {
+        (component, value): Fraction(round(Fraction(value) * scales[component]), scales[component])
+        for component, value in set(zip(components, floats, strict=True))
+    }
+    return tuple(
+        reconstructed[component, value] for component, value in zip(components, floats, strict=True)
     )
 
 

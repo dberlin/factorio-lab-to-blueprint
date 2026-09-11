@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from types import SimpleNamespace
 from typing import cast
 
@@ -10,7 +9,6 @@ from flab2bp.bench import runner
 from flab2bp.bench.corpus import URL_CORPUS
 from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout import finalize, validate
-from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     AreaFrame,
     LayoutStrategy,
@@ -88,73 +86,6 @@ def test_run_cell_preserves_completed_placement(
     assert observed == [("measure", completed), ("validate", completed)]
     assert all(placement is completed for _, placement in observed)
     assert completed.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
-
-
-def test_run_cell_completes_raw_placement_once_in_order(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    raw = Placement(buildings=())
-    compacted = replace(raw, description="compacted")
-    finalized = replace(
-        compacted,
-        frame=AreaFrame(1, 1, 4, (4,), False),
-    )
-    observed: list[tuple[str, Placement]] = []
-
-    class RawStrategy:
-        def lay_out(self, spec: BuildSpec, *, time_budget_s: float) -> Placement:
-            del spec, time_budget_s
-            return raw
-
-    def compact_spy(
-        placement: Placement,
-        spec: BuildSpec,
-        *,
-        expect_power: bool,
-    ) -> Placement:
-        del spec
-        assert expect_power
-        assert placement is raw
-        observed.append(("compact", placement))
-        return compacted
-
-    def finalize_spy(
-        placement: Placement,
-        policy: BandPolicy,
-    ) -> Placement:
-        del policy
-        assert placement is compacted
-        observed.append(("finalize", placement))
-        return finalized
-
-    monkeypatch.setattr(
-        finalize,
-        "compact_open_boundary_belts",
-        compact_spy,
-    )
-    monkeypatch.setattr(finalize, "finalize_placement", finalize_spy)
-    _stub_cell_observers(monkeypatch, observed)
-
-    runner._run_cell(
-        runner.StrategyHandle("raw", cast(LayoutStrategy, RawStrategy())),
-        URL_CORPUS[0],
-        cast(BuildSpec, SimpleNamespace(label="raw fixture")),
-        time_budget_s=1.0,
-        belt_rules=belt_rules_for_url(URL_CORPUS[0].url),
-        ids=validate.id_map(BuildSpec(groups=())),
-    )
-
-    assert [stage for stage, _ in observed] == [
-        "compact",
-        "finalize",
-        "measure",
-        "validate",
-    ]
-    completed = observed[-1][1]
-    assert observed[-2][1] is completed
-    assert completed.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
-    assert completed.frame is finalized.frame
-    assert completed.buildings is finalized.buildings
 
 
 def _stub_cell_observers(

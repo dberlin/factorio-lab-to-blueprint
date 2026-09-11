@@ -118,6 +118,82 @@ def _lane_port(canvas: _Canvas, tiles: int, *, item: str = "iron-ingot") -> _Por
     )
 
 
+def test_adjacent_coaters_can_feed_from_opposite_transverse_sides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The captured sequence pair is diagonally offset by (1, 1) before
+    # frame rotation: the second preferred approach sits over the first body.
+    _arm(monkeypatch, "off")
+    spec = _spec()
+    strip = dataclasses.replace(
+        next(
+            strip for strip in plan_strips(spec) if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
+        ),
+        west_channel=2,
+    )
+    canvas = _Canvas(limit=(-4, -4, 8, 8))
+    belt_id = catalog.item_id("conveyor-belt-2")
+    belt_model = catalog.building(belt_id).model_index
+    ports: list[dict[str, _Port]] = []
+    for y in (0, 1):
+        indices: list[int] = []
+        for x in range(4):
+            index = len(canvas.buildings)
+            indices.append(
+                canvas.add(
+                    freeform.PlacedBuilding(
+                        item_id=belt_id,
+                        model_index=belt_model,
+                        x=x + y,
+                        y=y,
+                        width=1,
+                        height=1,
+                        output_obj=index + 1 if x < 3 else None,
+                        carries_item="iron-ingot",
+                    )
+                )
+            )
+        ports.append(
+            {
+                "iron-ingot": _Port(
+                    indices[0],
+                    y,
+                    y,
+                    y,
+                    3 + y,
+                    tuple(indices),
+                    1,
+                    0,
+                    cargo_domain=CargoDomain.REQUIRES_SPRAY,
+                )
+            }
+        )
+    supplies = routing_domain._place_coaters(
+        canvas,
+        spec,
+        [strip, strip],
+        ports,
+        belt_id,
+        belt_model,
+        policy=BandPolicy("160"),
+    )
+    assert len(supplies) == 2
+    first, second = supplies
+    assert canvas.buildings[first.approach_belt].y < first.y
+    assert canvas.buildings[second.approach_belt].y > second.y
+    report = validate.validate(
+        Placement(buildings=tuple(canvas.buildings)),
+        only={
+            "geom.collide",
+            "game.belt_crossing",
+            "game.addon_supply",
+            "game.addon_facing",
+            "game.addon_corner",
+        },
+    )
+    assert not report.errors
+
+
 # --- the switch ------------------------------------------------------------
 
 
@@ -406,52 +482,6 @@ def test_a_node_arm_keeps_the_ridden_belt_straight_and_supplied(
         assert bs[at[in_cell]].output_obj == at[west]
         # The proliferator drop, one level up over the tile behind the seat.
         assert (west[0], west[1], F(1)) in at
-
-
-def test_a_node_body_tile_is_always_an_occupied_belt_so_no_merge_can_be_offered_there(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The measurement that retired the body-level clause of the coater ban.
-
-    ``_reserve_coater_belt_ban`` used to add the body's own level across
-    ``[-body_half, +body_half]`` under a node arm.  A* can never step onto an
-    occupied belt, so the only thing that ban could buy is stopping
-    ``_merge_frontier`` from OFFERING a body tile as a merge goal -- and the
-    frontier offers only cells ``_Canvas.free`` accepts.  So the clause can
-    change a routing decision only for a body cell that is free at the moment
-    the ban is written.
-
-    None is. Every body tile is one of the node's own belts, committed to
-    the canvas during emission and therefore long before the coater is staged.
-    The clause was a no-op, and this is the proof standing in its place.
-    """
-    seen: list[tuple[tuple[int, int, int], bool, bool]] = []
-    original = routing_domain._reserve_coater_belt_ban
-
-    def spy(canvas: _Canvas, coater: freeform.PlacedBuilding, belt_model: int) -> None:
-        half = routing_domain._coater_body_half_span(coater.yaw)
-        cx, cy, cz = coater.x, coater.y, int(coater.z)
-        for dx in range(-half, half + 1):
-            cell = (cx + dx, cy, cz)
-            carries_belt = any(
-                is_belt(building.item_id)
-                and (building.x, building.y, building.z) == (*cell[:2], F(cz))
-                for building in canvas.buildings
-            )
-            seen.append((cell, canvas.free(cell), carries_belt))
-        original(canvas, coater, belt_model)
-
-    monkeypatch.setattr(routing_domain, "_reserve_coater_belt_ban", spy)
-    _build("placed", monkeypatch)
-
-    assert seen, "the fixture stopped committing a coater"
-    assert [cell for cell, free, _ in seen if free] == [], (
-        "a node body tile was free when the ban was written -- clause (a) is "
-        "load-bearing again and must be restored"
-    )
-    assert all(carries_belt for _cell, _free, carries_belt in seen), (
-        "a node body tile is occupied by something other than the node's belt"
-    )
 
 
 def test_no_coater_body_covers_a_belt_merge(

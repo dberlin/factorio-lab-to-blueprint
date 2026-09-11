@@ -4,12 +4,13 @@ import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from types import MappingProxyType
+from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING
 
 from flab2bp.indexed import StripPositions
 
 if TYPE_CHECKING:
+    from flab2bp.layout.finalize import PlacementCompleted, ProjectionWitness
     from flab2bp.layout.strip_variants import StripFamilyId, StripInstanceId
 
 from .sequence_pair import (
@@ -237,6 +238,56 @@ def combine_last_mile_reports(
 
 
 @dataclass(frozen=True, slots=True)
+class RouteSettlementCompleted:
+    """The exact certified candidate; consumers must not materialize it again."""
+
+    completion: PlacementCompleted
+    power_infill: int = 0
+    power_uncovered: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class RouteInteriorDetour:
+    """Owned raw belt support to avoid in one positive search, not a cell ban."""
+
+    owners: frozenset[NetId]
+    cells: frozenset[Cell]
+
+
+@dataclass(frozen=True, slots=True)
+class RouteSettlementRefused:
+    """A contextual candidate refusal, never an unconditional cell exclusion."""
+
+    reason: str
+    owners: frozenset[NetId] | None
+    witnesses: tuple[ProjectionWitness, ...] = ()
+    power_infill: int = 0
+    power_uncovered: int = 0
+    interior_detours: tuple[RouteInteriorDetour, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RouteSettlementCancelled:
+    phase: str
+
+
+@dataclass(frozen=True, slots=True)
+class RouteSettlementCrashed:
+    """Transport an unexpected settlement error across the composer guard."""
+
+    error: Exception
+    traceback: TracebackType | None
+
+
+type RouteSettlement = (
+    RouteSettlementCompleted
+    | RouteSettlementRefused
+    | RouteSettlementCancelled
+    | RouteSettlementCrashed
+)
+
+
+@dataclass(frozen=True, slots=True)
 class DetailedRouteResult:
     status: DetailedRouteStatus
     routed: tuple[NetId, ...]
@@ -245,6 +296,7 @@ class DetailedRouteResult:
     expansions: int
     exhaustive: bool = False
     last_mile: LastMileReport | None = None
+    settlement: RouteSettlement | None = None
 
     def __post_init__(self) -> None:
         if type(self.exhaustive) is not bool:

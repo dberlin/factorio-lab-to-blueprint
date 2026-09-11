@@ -61,16 +61,15 @@ class BeltOverlap:
     _cache: dict[Hashable, BeltOverlap] = {}
 
     def __init__(self, grid: dict[Cell, list[int]]) -> None:
-        self._grid = grid
+        self._grid = {cell: tuple(dict.fromkeys(indices)) for cell, indices in grid.items()}
 
     @staticmethod
     def of(cells_by_index: Sequence[Iterable[Cell]]) -> BeltOverlap:
         """Index item ``i`` at every cell in ``cells_by_index[i]``.
 
-        An item may repeat within its own cell list (two boxes belonging to
-        the same preview registering the same cell); duplicates are kept in
-        the grid here and removed by :meth:`candidates`, matching
-        ``dict.fromkeys(grid.get(key, ()))`` in the real source exactly.
+        An item may repeat within its own cell list when several of its boxes
+        register the same cell. Finalize each bucket once, preserving the
+        first-registered order for every subsequent probe.
         """
         grid: dict[Cell, list[int]] = {}
         for index, cells in enumerate(cells_by_index):
@@ -108,6 +107,5 @@ class BeltOverlap:
         cls._cache.clear()
 
     def candidates(self, key: Cell) -> tuple[int, ...]:
-        """Item indices registered at this ONE cell, duplicates removed, in
-        first-registered order -- ``dict.fromkeys(grid.get(key, ()))``."""
-        return tuple(dict.fromkeys(self._grid.get(key, ())))
+        """Unique item indices in this cell, in first-registered order."""
+        return self._grid.get(key, ())

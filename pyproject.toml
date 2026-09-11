@@ -113,6 +113,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python_version = "3.14"
 strict = true
 files = ["src", "tests"]
+mypy_path = "$MYPY_CONFIG_FILE_DIR/typings"
 
 [[tool.mypy.overrides]]
 module = ["littletable"]

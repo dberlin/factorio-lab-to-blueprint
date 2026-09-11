@@ -1,4 +1,4 @@
-"""Backend selection for the compiled oriented-box overlap test.
+"""Backend selection for exact compiled box and sphere overlap tests.
 
 ``FLAB2BP_GEOMETRY_KERNEL`` forces one backend: ``python`` or ``cython``.
 Unset, the first available of ``cython`` then ``python`` is used.
@@ -12,8 +12,12 @@ needs it at runtime.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
-from typing import Literal
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from flab2bp.dsp._geometry_kernel import ProjectedBeltProbe, ProjectedBeltScan
+    from flab2bp.dsp.colliders import Box, Vec3
 
 BackendName = Literal["python", "cython"]
 
@@ -42,7 +46,7 @@ _backend: BackendName = _choose()
 _compiled_obb_overlap: Callable[..., object] | None = _candidates.get(_backend)
 
 #: The boxes-against-boxes loop lives in the same extension as the single test
-#: above, so a forced ``python`` backend disables both.
+#: above, so a forced ``python`` backend disables every compiled operation.
 _compiled_any_overlap: Callable[..., object] | None
 try:
     from flab2bp.dsp._geometry_kernel import any_box_overlap as _compiled_any_overlap
@@ -50,6 +54,40 @@ except ImportError:
     _compiled_any_overlap = None
 if _backend == "python":
     _compiled_any_overlap = None
+
+_compiled_sphere_overlap: Callable[[Vec3, float, Box], bool] | None
+try:
+    from flab2bp.dsp._geometry_kernel import sphere_box_overlap as _compiled_sphere_overlap
+except ImportError:
+    _compiled_sphere_overlap = None
+if _backend == "python":
+    _compiled_sphere_overlap = None
+
+_compiled_sphere_candidates: (
+    Callable[[Vec3, float, Sequence[Sequence[Box]], Sequence[int]], list[int]] | None
+)
+try:
+    from flab2bp.dsp._geometry_kernel import sphere_box_candidates as _compiled_sphere_candidates
+except ImportError:
+    _compiled_sphere_candidates = None
+if _backend == "python":
+    _compiled_sphere_candidates = None
+
+_compiled_belt_probe: type[ProjectedBeltProbe] | None
+try:
+    from flab2bp.dsp._geometry_kernel import ProjectedBeltProbe as _compiled_belt_probe
+except ImportError:
+    _compiled_belt_probe = None
+if _backend == "python":
+    _compiled_belt_probe = None
+
+_compiled_projected_belt_scan: type[ProjectedBeltScan] | None
+try:
+    from flab2bp.dsp._geometry_kernel import ProjectedBeltScan as _compiled_projected_belt_scan
+except ImportError:
+    _compiled_projected_belt_scan = None
+if _backend == "python":
+    _compiled_projected_belt_scan = None
 
 
 def compiled_available() -> bool:

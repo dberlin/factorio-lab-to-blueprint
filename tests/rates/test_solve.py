@@ -10,7 +10,7 @@ from fractions import Fraction
 from typing import Protocol, TypeGuard
 
 import pytest
-from ortools.linear_solver import pywraplp  # type: ignore[import-untyped]
+from ortools.linear_solver import pywraplp
 from sympy import Rational  # type: ignore[import-untyped]
 from sympy.solvers.simplex import linprog  # type: ignore[import-untyped]
 

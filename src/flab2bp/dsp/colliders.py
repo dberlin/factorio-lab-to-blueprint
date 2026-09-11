@@ -111,7 +111,7 @@ keeps the exact spherical formula for anything that wants to ask the
 where-can-this-paste question instead.
 
 The finalizer passes each candidate :class:`~flab2bp.dsp.planet.Projection`
-to :func:`stable_belt_collisions` as well: a flat-clear belt beside an
+to :class:`StableBeltCollisionQuery` as well: a flat-clear belt beside an
 asymmetric upper collider can overlap it after longitude compression.
 """
 
@@ -119,7 +119,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from functools import cache, lru_cache
 from pathlib import Path
@@ -143,6 +143,7 @@ __all__ = [
     "belt_chain_excuses",
     "belt_collisions",
     "stable_belt_collisions",
+    "StableBeltCollisionQuery",
     "belt_crossing_height",
     "belt_crossings",
     "belt_keepout_offsets",
@@ -1425,6 +1426,14 @@ def belt_probe(x: float, y: float, z: float) -> Vec3:
 
 
 def sphere_box_overlap(centre: Vec3, radius: float, box: Box) -> bool:
+    """Strict sphere/box overlap using the selected exact geometry backend."""
+    compiled = geometry_kernel._compiled_sphere_overlap
+    if compiled is not None:
+        return compiled(centre, radius, box)
+    return _sphere_box_overlap_python(centre, radius, box)
+
+
+def _sphere_box_overlap_python(centre: Vec3, radius: float, box: Box) -> bool:
     """``Physics.OverlapSphere`` against one oriented box.
 
     Squared closest-point-on-box distance, which is what Unity's sphere-vs-box
@@ -1838,9 +1847,48 @@ def _belt_overlap_candidates(
     *,
     projection: planet.Projection | None = None,
     cancelled: Callable[[], bool] | None = None,
-) -> tuple[tuple[int, tuple[int, ...]], ...]:
+) -> Iterator[tuple[int, tuple[int, ...]]]:
     """Raw belt/collider probe hits after flag excusals, before graph rescue."""
     from flab2bp.dsp.planet import ProjectionCancelled
+
+    compiled_scan = geometry_kernel._compiled_projected_belt_scan
+    compiled_probe = geometry_kernel._compiled_belt_probe
+    if projection is not None and compiled_scan is not None and compiled_probe is not None:
+        # Pack only real targets, once for this anchor. A belt-heavy scene must
+        # not allocate an empty boxes/cells container for every excused preview.
+        projected_boxes: list[list[Box]] = []
+        target_indices: list[int] = []
+        for i, preview in enumerate(previews):
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            if preview.is_belt or preview.is_inserter or preview.is_belt_addon:
+                continue
+            target = target_boxes(
+                preview, *projection.pose(preview.x, preview.y, preview.z, preview.yaw)
+            )
+            if target:
+                target_indices.append(i)
+                projected_boxes.append(target)
+        prepared = compiled_scan(
+            compiled_probe(
+                projection.anchor_row,
+                projection.latitude_step,
+                projection.longitude_step,
+                projection.radius,
+                BELT_PROBE_LIFT,
+                projection.rotated,
+            ),
+            BELT_PROBE_RADIUS,
+            projected_boxes,
+            _belt_cells(projected_boxes, spherical=True),
+            target_indices,
+        )
+        start = 0
+        while start < len(previews):
+            start, candidates = prepared.scan(previews, start, cancelled)
+            if candidates:
+                yield start - 1, candidates
+        return
 
     if projection is None:
         boxes = _belt_boxes(previews)
@@ -1860,10 +1908,24 @@ def _belt_overlap_candidates(
             )
         # A preview-only cache key would reuse flat or another anchor's cells.
         index = BeltOverlap.of(_belt_cells(boxes, spherical=True))
+    # Projected preparation already empties every flag-excused target, including
+    # the belt itself. Batch only the narrow phase; graph rescue stays in Python.
+    compiled_candidates = (
+        geometry_kernel._compiled_sphere_candidates if projection is not None else None
+    )
+    projected_probe = None
+    if projection is not None and geometry_kernel._compiled_belt_probe is not None:
+        projected_probe = geometry_kernel._compiled_belt_probe(
+            projection.anchor_row,
+            projection.latitude_step,
+            projection.longitude_step,
+            projection.radius,
+            BELT_PROBE_LIFT,
+            projection.rotated,
+        )
     cell = 8.0
     latitude_factors: dict[float, tuple[float, float]] = {}
     longitude_factors: dict[float, tuple[float, float]] = {}
-    candidates: list[tuple[int, tuple[int, ...]]] = []
     for i, belt in enumerate(previews):
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
@@ -1871,6 +1933,8 @@ def _belt_overlap_candidates(
             continue
         if projection is None:
             probe = belt_probe(belt.x, belt.y, belt.z)
+        elif projected_probe is not None:
+            probe = projected_probe(belt.x, belt.y, belt.z)
         else:
             radius = projection.shell_radius(belt.z)
             # Projection.direction is separable in longitude and latitude.
@@ -1896,18 +1960,20 @@ def _belt_overlap_candidates(
             if projection is None
             else (int(probe[0] // cell), int(probe[1] // cell), int(probe[2] // cell))
         )
-        hits: list[int] = []
-        for j in index.candidates(key):
-            if j == i:
-                continue
-            other = previews[j]
-            if other.is_inserter or other.is_belt_addon:
-                continue
-            if any(sphere_box_overlap(probe, BELT_PROBE_RADIUS, box) for box in boxes[j]):
-                hits.append(j)
+        if compiled_candidates is not None:
+            hits = compiled_candidates(probe, BELT_PROBE_RADIUS, boxes, index.candidates(key))
+        else:
+            hits = []
+            for j in index.candidates(key):
+                if j == i:
+                    continue
+                other = previews[j]
+                if other.is_inserter or other.is_belt_addon:
+                    continue
+                if any(sphere_box_overlap(probe, BELT_PROBE_RADIUS, box) for box in boxes[j]):
+                    hits.append(j)
         if hits:
-            candidates.append((i, tuple(sorted(hits))))
-    return tuple(candidates)
+            yield i, tuple(sorted(hits))
 
 
 def belt_collisions(previews: Sequence[Preview]) -> list[tuple[int, int]]:
@@ -2008,20 +2074,6 @@ def _belt_run_stably_ends_in_a_building(
     )
 
 
-def _stable_belt_links(
-    previews: Sequence[Preview],
-) -> tuple[tuple[tuple[int | None, ...], ...], tuple[int | None, ...]]:
-    return (
-        _reverse_input_choices(previews),
-        tuple(_resolve(previews, preview.input) for preview in previews),
-    )
-
-
-# Preview tuples are immutable values shared by every latitude certification.
-# Keep only the most recent graph; mutable sequences must always be rebuilt.
-_cached_stable_belt_links = lru_cache(maxsize=1)(_stable_belt_links)
-
-
 def stable_belt_collisions(
     previews: Sequence[Preview],
     *,
@@ -2044,42 +2096,73 @@ def stable_belt_collisions(
     clearance alone cannot certify an asymmetric machine's elevated flank:
     longitude compression can push a belt into its upper build collider.
     """
-    choices, recorded_links = (
-        _cached_stable_belt_links(previews)
-        if isinstance(previews, tuple)
-        else _stable_belt_links(previews)
+    return list(
+        StableBeltCollisionQuery(tuple(previews)).collisions(
+            projection=projection, cancelled=cancelled
+        )
     )
-    hits: list[StableBeltCollision] = []
-    candidates_by_belt = (
-        _belt_overlap_candidates(previews)
-        if projection is None and cancelled is None
-        else _belt_overlap_candidates(previews, projection=projection, cancelled=cancelled)
-    )
-    for belt, candidates in candidates_by_belt:
-        if _belt_run_stably_ends_in_a_building(previews, choices, belt):
-            continue
-        for other in candidates:
-            if _belt_chain_excuses_direction(
-                previews,
-                recorded_links,
-                belt,
-                other,
-                downstream=True,
-            ):
+
+
+class StableBeltCollisionQuery:
+    """Reuse immutable link topology, never projected collision verdicts.
+
+    Every reverse feeder can become DSP's reconstructed input. The universal
+    bounded walk and downstream rescue depend only on this preview value, so
+    their results survive a latitude change. Probe geometry and broadphase cells
+    are rebuilt for every projection.
+    """
+
+    __slots__ = ("_previews", "_choices", "_recorded_links", "_findings")
+
+    def __init__(self, previews: tuple[Preview, ...]) -> None:
+        self._previews = previews
+        self._choices = _reverse_input_choices(previews)
+        self._recorded_links = tuple(_resolve(previews, preview.input) for preview in previews)
+        self._findings: dict[tuple[int, int], StableBeltCollision | None] = {}
+
+    @property
+    def previews(self) -> tuple[Preview, ...]:
+        return self._previews
+
+    def first(
+        self,
+        *,
+        projection: planet.Projection | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> StableBeltCollision | None:
+        """Stop at the first unrescued collision when rejecting one frame."""
+        return next(self.collisions(projection=projection, cancelled=cancelled), None)
+
+    def collisions(
+        self,
+        *,
+        projection: planet.Projection | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Iterator[StableBeltCollision]:
+        previews = self._previews
+        candidates_by_belt = (
+            _belt_overlap_candidates(previews)
+            if projection is None and cancelled is None
+            else _belt_overlap_candidates(previews, projection=projection, cancelled=cancelled)
+        )
+        for belt, candidates in candidates_by_belt:
+            if _belt_run_stably_ends_in_a_building(previews, self._choices, belt):
                 continue
-            rescue = _upstream_rescue_for_every_choice(
-                previews,
-                choices,
-                recorded_links,
-                belt,
-                other,
-            )
-            if not rescue.all_paths:
-                hits.append(
-                    StableBeltCollision(
-                        belt,
-                        other,
-                        tuple(sorted(rescue.unstable_merges)),
-                    )
-                )
-    return hits
+            for other in candidates:
+                key = (belt, other)
+                if key not in self._findings:
+                    finding = None
+                    if not _belt_chain_excuses_direction(
+                        previews, self._recorded_links, belt, other, downstream=True
+                    ):
+                        rescue = _upstream_rescue_for_every_choice(
+                            previews, self._choices, self._recorded_links, belt, other
+                        )
+                        if not rescue.all_paths:
+                            finding = StableBeltCollision(
+                                belt, other, tuple(sorted(rescue.unstable_merges))
+                            )
+                    self._findings[key] = finding
+                finding = self._findings[key]
+                if finding is not None:
+                    yield finding

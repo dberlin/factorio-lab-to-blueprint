@@ -32,7 +32,7 @@ just lets ``any_box_overlap`` pay for them once per box instead of once per
 pair.
 """
 
-from libc.math cimport fabs, sqrt
+from libc.math cimport copysign, cos, fabs, sin, sqrt
 from libc.stdlib cimport free, malloc
 
 
@@ -183,3 +183,194 @@ def any_box_overlap(queries, targets) -> bool:
     finally:
         free(unpacked)
     return False
+
+
+cdef struct CSphereBox:
+    double centre[3]
+    double half[3]
+    double rot[4]
+
+
+cdef CSphereBox _unpack_sphere(box) except *:
+    cdef CSphereBox out
+    centre = box.centre
+    half = box.half
+    rot = box.rot
+    cdef Py_ssize_t axis
+    for axis in range(3):
+        out.centre[axis] = centre[axis]
+        out.half[axis] = half[axis]
+    for axis in range(4):
+        out.rot[axis] = rot[axis]
+    return out
+
+
+cdef bint _prepared_sphere_overlap(
+    double cx, double cy, double cz, double radius, CSphereBox* box,
+) noexcept nogil:
+    """Exact ``colliders._sphere_box_overlap_python`` arithmetic, without tuples."""
+    cdef double dx = cx - box.centre[0]
+    cdef double dy = cy - box.centre[1]
+    cdef double dz = cz - box.centre[2]
+    cdef double local[3]
+    _qrot(-box.rot[0], -box.rot[1], -box.rot[2], box.rot[3], dx, dy, dz, local)
+    cdef double squared_distance = 0.0
+    cdef double extent, excess
+    cdef Py_ssize_t axis
+    for axis in range(3):
+        extent = box.half[axis]
+        excess = fabs(local[axis]) - extent
+        if excess > 0.0:
+            squared_distance += excess * excess
+    return squared_distance < radius * radius
+
+
+cdef bint _sphere_overlap(double cx, double cy, double cz, double radius, box) except *:
+    cdef CSphereBox prepared = _unpack_sphere(box)
+    return _prepared_sphere_overlap(cx, cy, cz, radius, &prepared)
+
+
+def sphere_box_overlap(centre, double radius, box) -> bool:
+    """Exact strict sphere/box overlap."""
+    return _sphere_overlap(centre[0], centre[1], centre[2], radius, box)
+
+
+def sphere_box_candidates(centre, double radius, targets, candidates) -> list:
+    """Preserve candidate order, emitting each hit target once across its boxes."""
+    cdef double cx = centre[0]
+    cdef double cy = centre[1]
+    cdef double cz = centre[2]
+    cdef Py_ssize_t index
+    hits = []
+    for index in candidates:
+        for box in targets[index]:
+            if _sphere_overlap(cx, cy, cz, radius, box):
+                hits.append(index)
+                break
+    return hits
+
+
+cdef class ProjectedBeltProbe:
+    """One immutable frame; exact Projection direction and lifted probe arithmetic."""
+    cdef double anchor, latitude_step, longitude_step, radius, lift
+    cdef bint rotated
+
+    def __cinit__(
+        self, double anchor, double latitude_step, double longitude_step,
+        double radius, double lift, bint rotated,
+    ):
+        self.anchor = anchor
+        self.latitude_step = latitude_step
+        self.longitude_step = longitude_step
+        self.radius = radius
+        self.lift = lift
+        self.rotated = rotated
+
+    cdef void _probe(self, double x, double y, double z, double* out) noexcept nogil:
+        cdef double latitude = (self.anchor + (x if self.rotated else y)) * self.latitude_step
+        cdef double longitude = (y if self.rotated else x) * self.longitude_step
+        cdef double limit = 1.5707963267948966
+        if fabs(latitude) > limit:
+            latitude = copysign(limit, latitude)
+        cdef double cos_latitude = cos(latitude)
+        cdef double dx = cos_latitude * sin(longitude)
+        cdef double dy = sin(latitude)
+        cdef double dz = cos_latitude * -cos(longitude)
+        cdef double shell = z * 4.0 / 3.0 + 0.2 + self.radius
+        out[0] = dx * shell + dx * self.lift
+        out[1] = dy * shell + dy * self.lift
+        out[2] = dz * shell + dz * self.lift
+
+    def __call__(self, double x, double y, double z):
+        cdef double out[3]
+        self._probe(x, y, z, out)
+        return (out[0], out[1], out[2])
+
+
+cdef class ProjectedBeltScan:
+    """Frame-owned packed targets; broadphase bounds still come from _belt_cells."""
+    cdef ProjectedBeltProbe probe
+    cdef double radius
+    cdef CSphereBox* boxes
+    cdef Py_ssize_t* offsets
+    cdef tuple target_indices
+    cdef dict grid
+
+    def __cinit__(self, ProjectedBeltProbe probe, double radius, targets, cells, target_indices):
+        cdef Py_ssize_t target_count = len(targets)
+        cdef Py_ssize_t box_count = 0
+        cdef Py_ssize_t index, offset = 0
+        if len(cells) != target_count or len(target_indices) != target_count:
+            raise ValueError("targets, cells and target_indices must have equal lengths")
+        self.probe = probe
+        self.radius = radius
+        self.target_indices = tuple(target_indices)
+        self.grid = {}
+        for target in targets:
+            box_count += len(target)
+        if box_count:
+            self.boxes = <CSphereBox*>malloc(<size_t>box_count * sizeof(CSphereBox))
+            if self.boxes == NULL:
+                raise MemoryError
+        self.offsets = <Py_ssize_t*>malloc((<size_t>target_count + 1) * sizeof(Py_ssize_t))
+        if self.offsets == NULL:
+            raise MemoryError
+        for index in range(target_count):
+            self.offsets[index] = offset
+            for box in targets[index]:
+                self.boxes[offset] = _unpack_sphere(box)
+                offset += 1
+            # Same first-registration dedup as BeltOverlap.of, on compact
+            # target indices. No geometry or cross-frame cache lives here.
+            for cell in dict.fromkeys(cells[index]):
+                self.grid.setdefault(cell, []).append(index)
+        self.offsets[target_count] = offset
+        self.grid = {key: tuple(indices) for key, indices in self.grid.items()}
+
+    def __dealloc__(self):
+        free(self.boxes)
+        free(self.offsets)
+
+    def scan(self, previews, Py_ssize_t start, cancelled=None):
+        """Return (next offset, hits), stopping at the first raw-hit belt.
+
+        At most 256 previews are examined. Cancellation is checked before each
+        preview, including non-belts, exactly like the Python reference. Never
+        look ahead past a hit: Python must apply graph rescue before we resume.
+        """
+        from flab2bp.dsp.planet import ProjectionCancelled
+
+        cdef Py_ssize_t count = len(previews)
+        if start < 0 or start > count:
+            raise ValueError("start must be within the previews sequence")
+        cdef Py_ssize_t stop = start + min(256, count - start)
+        cdef Py_ssize_t index, target, box
+        cdef double centre[3]
+        for index in range(start, stop):
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            preview = previews[index]
+            if not preview.is_belt:
+                continue
+            self.probe._probe(preview.x, preview.y, preview.z, centre)
+            # Keep Python float floor division, including signed/subnormal
+            # boundary behavior; cdivision=True must not rewrite these keys.
+            key = (
+                int((<object>centre[0]) // 8.0),
+                int((<object>centre[1]) // 8.0),
+                int((<object>centre[2]) // 8.0),
+            )
+            candidates = self.grid.get(key)
+            if candidates is None:
+                continue
+            hits = []
+            for target in candidates:
+                for box in range(self.offsets[target], self.offsets[target + 1]):
+                    if _prepared_sphere_overlap(
+                        centre[0], centre[1], centre[2], self.radius, &self.boxes[box]
+                    ):
+                        hits.append(self.target_indices[target])
+                        break
+            if hits:
+                return index + 1, tuple(sorted(hits))
+        return stop, ()

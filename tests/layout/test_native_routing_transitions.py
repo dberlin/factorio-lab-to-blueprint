@@ -23,6 +23,9 @@ def _search(
     gh: int = 1,
     levels: int = 6,
     extra_edges: dict[int, tuple[tuple[int, float], ...]] | None = None,
+    height_targets: tuple[int, ...] = (),
+    height_costs: tuple[float, ...] = (),
+    height_stride: int = 0,
 ) -> Result:
     _require_both_backends()
     from flab2bp.layout._route_kernel import astar_flat
@@ -52,6 +55,9 @@ def _search(
         lambda _deadline: False,
         transitions,
         {} if extra_edges is None else extra_edges,
+        array("q", height_targets),
+        array("d", height_costs),
+        height_stride,
     )
 
 
@@ -69,6 +75,31 @@ def test_native_zero_run_climbs_cross_original_four_plane_ceiling(levels: int) -
 def test_native_uses_supplied_graph_without_implicit_flat_moves() -> None:
     result = _search(((),) * 6, bytearray([1] * 12), 0, 6)
     assert result == (None, 1, 2, array("q", (0,)), 1999)
+
+
+@pytest.mark.parametrize(
+    ("targets", "costs", "stride"),
+    [
+        ((0, 0, 0, 0, 0), (0.0,) * 12, 1),
+        ((0, 0, 0, 0, 12), (0.0,) * 12, 2),
+        ((0, 0, 2, 0, 0), (0.0,) * 12, 2),
+        ((0, 0, 0, 0, 0), (0.0,) * 11, 2),
+    ],
+    ids=["short-distance-domain", "past-end-field", "outside-rectangle", "truncated-field"],
+)
+def test_native_rejects_height_tables_that_could_read_outside_buffers(
+    targets: tuple[int, ...], costs: tuple[float, ...], stride: int
+) -> None:
+    with pytest.raises(ValueError):
+        _search(
+            ((),) * 6,
+            bytearray([1] * 12),
+            0,
+            6,
+            height_targets=targets,
+            height_costs=costs,
+            height_stride=stride,
+        )
 
 
 @pytest.mark.parametrize("blocked_via", [False, True])

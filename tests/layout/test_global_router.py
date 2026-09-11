@@ -10,7 +10,7 @@ import pytest
 
 from flab2bp import spec
 from flab2bp.lab.techs import belt_rules_for_url
-from flab2bp.layout import routing_domain, validate
+from flab2bp.layout import junction, routing_domain, validate
 from flab2bp.layout.base import PlacedBuilding
 from flab2bp.layout.global_router import (
     GlobalRouteResult,
@@ -163,25 +163,34 @@ def test_global_route_terminates_at_elevated_prepared_port() -> None:
 def _detour_problem() -> tuple[_PreparedRoutingProblem, NetId, NetId]:
     short = NetId(None, 1, "iron", NetRole.EXTERNAL, 0)
     long = NetId(2, 3, "iron", NetRole.INTERNAL, 0)
+    # Sparse landing sites prevent Splitter shortcuts from skipping the
+    # contested cell. The west branch remains a longer, legal detour.
     open_cells = {
-        (1, 2),
-        (3, 2),
-        (2, 0),
-        (2, 4),
-        (2, 1),
+        (4, 0),
+        (4, 1),
+        (4, 2),
+        (4, 4),
+        (4, 6),
+        (4, 7),
+        (4, 8),
+        (5, 4),
         (2, 2),
-        (2, 3),
-        (1, 1),
-        (1, 3),
+        (2, 4),
+        (2, 6),
     }
     return (
         _problem(
             (
-                (short, None, (3, 2), ((2, 2, 0),), (), ()),
-                (long, (2, 0), (2, 4), (), (), ()),
+                (short, None, (5, 4), ((4, 4, 0),), (), ()),
+                (long, (4, 0), (4, 8), (), (), ()),
             ),
-            bounds=(0, 0, 4, 4),
-            keep_out={(x, y) for x in range(5) for y in range(5) if (x, y) not in open_cells},
+            bounds=(0, 0, 8, 8),
+            blocked=(
+                (x, y, level)
+                for x, y in open_cells
+                for level in range(1, math.floor(routing_domain._DEFAULT_BELT_RULES.max_z) + 1)
+            ),
+            keep_out={(x, y) for x in range(9) for y in range(9) if (x, y) not in open_cells},
         ),
         short,
         long,
@@ -201,11 +210,32 @@ def _impossible_overflow_problem() -> _PreparedRoutingProblem:
     )
 
 
-def _assert_current_detailed_legal_walk(path: tuple[Cell, ...]) -> None:
+def _assert_relaxed_legal_walk(path: tuple[Cell, ...]) -> None:
+    # Global guidance also admits physical-model Splitter displacements.
+    # These are not emission witnesses: only their landing cells are occupied.
+    rules = routing_domain._DEFAULT_BELT_RULES
+    connector_moves = {
+        (
+            candidate.entry.dock[2],
+            candidate.exit.dock[0] - candidate.entry.dock[0],
+            candidate.exit.dock[1] - candidate.entry.dock[1],
+            candidate.exit.dock[2] - candidate.entry.dock[2],
+        )
+        for level in range(math.floor(rules.max_z) + 1)
+        for yaw in (0.0, 90.0, 180.0, 270.0)
+        for candidate in junction.splitter_route_candidates(
+            0, 0, level, yaw=yaw, altitude_rules=rules, carries_item=""
+        )
+    }
     for index, (before, after) in enumerate(zip(path, path[1:], strict=False)):
         dx = after[0] - before[0]
         dy = after[1] - before[1]
         level_change = after[2] - before[2]
+        if (before[2], dx, dy, level_change) in connector_moves:
+            continue
+        if dx == dy == 0 and rules.vertical_construction:
+            assert abs(level_change) == 1
+            continue
         assert abs(dx) + abs(dy) == 1
         assert abs(level_change) <= 1
         if level_change:
@@ -215,12 +245,14 @@ def _assert_current_detailed_legal_walk(path: tuple[Cell, ...]) -> None:
             assert (before[0] - previous[0], before[1] - previous[1]) == (dx, dy)
 
 
-def test_global_router_uses_current_detailed_moves_deterministically() -> None:
+def test_global_router_crosses_a_wide_wall_deterministically() -> None:
     net_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
     problem = _problem(
         ((net_id, (0, 3), (13, 3), (), (), ()),),
         bounds=(0, 0, 13, 6),
-        blocked=((6, y, 0) for y in range(7)),
+        # Wider than any ground Splitter displacement: a real landing must
+        # rise above this slab, rather than jumping a one-cell wall.
+        blocked=((x, y, 0) for x in (5, 6, 7) for y in range(7)),
     )
 
     first = route_global_once(problem, _feedback(problem), budget=20_000)
@@ -228,7 +260,9 @@ def test_global_router_uses_current_detailed_moves_deterministically() -> None:
 
     path = first.paths[net_id]
     assert max(level for _x, _y, level in path) > 0
-    _assert_current_detailed_legal_walk(path)
+    assert all(0 <= x <= 13 and 0 <= y <= 6 for x, y, _level in path)
+    assert set(path).isdisjoint(cell for cell, _owner in problem.blocked)
+    _assert_relaxed_legal_walk(path)
     assert second.paths == first.paths
     assert second.net_results == first.net_results
     assert second.expansions == first.expansions
@@ -252,21 +286,36 @@ def test_prepared_blocked_cells_and_foreign_reserved_ports_remain_impassable() -
     hard_cells = set(blocked) | {reserved[0]}
     path = result.paths[net_id]
     assert set(path).isdisjoint(hard_cells)
-    _assert_current_detailed_legal_walk(path)
+    _assert_relaxed_legal_walk(path)
 
 
 def test_one_pass_records_one_cell_overflow_instead_of_blocking() -> None:
     horizontal = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
     vertical = NetId(2, 3, "iron", NetRole.INTERNAL, 0)
-    ports = {(0, 2), (4, 2), (2, 0), (2, 4)}
-    open_cells = ports | {(1, 2), (2, 2), (3, 2), (2, 1), (2, 3)}
-    keep_out = {(x, y) for x in range(5) for y in range(5) if (x, y) not in open_cells}
+    ports = {(0, 4), (8, 4), (4, 0), (4, 8)}
+    open_cells = ports | {
+        (1, 4),
+        (2, 4),
+        (4, 4),
+        (6, 4),
+        (7, 4),
+        (4, 1),
+        (4, 2),
+        (4, 6),
+        (4, 7),
+    }
+    keep_out = {(x, y) for x in range(9) for y in range(9) if (x, y) not in open_cells}
     problem = _problem(
         (
-            (horizontal, (0, 2), (4, 2), (), (), ()),
-            (vertical, (2, 0), (2, 4), (), (), ()),
+            (horizontal, (0, 4), (8, 4), (), (), ()),
+            (vertical, (4, 0), (4, 8), (), (), ()),
         ),
-        bounds=(0, 0, 4, 4),
+        bounds=(0, 0, 8, 8),
+        blocked=(
+            (x, y, level)
+            for x, y in open_cells
+            for level in range(1, math.floor(routing_domain._DEFAULT_BELT_RULES.max_z) + 1)
+        ),
         keep_out=keep_out,
     )
 
@@ -275,7 +324,7 @@ def test_one_pass_records_one_cell_overflow_instead_of_blocking() -> None:
     assert result.overflow_cells == 1
     assert result.total_overflow == 1
     assert result.max_overflow == 1
-    assert result.hot_cells == ((2, 2, 0),)
+    assert result.hot_cells == ((4, 4, 0),)
     assert len(result.paths) == 2
     assert sum(net.overflow for net in result.net_results) == 1
 
@@ -367,13 +416,15 @@ def _shared_external_capacity_problem(*, independent_allocations: bool) -> _Prep
         )
     bounds = (0, 0, 20, 2)
     blocked = dict(canvas.blocked)
-    # Every route must cross this ground-level opening, including elevated detours.
+    # A three-column slab forces every relaxed route to LAND at (7, 1, 0);
+    # a one-column wall can be skipped by a two-tile Splitter displacement.
     blocked.update(
         {
-            (7, y, level): -1
+            (x, y, level): -1
+            for x in (6, 7, 8)
             for y in range(3)
             for level in range(canvas.levels)
-            if (y, level) != (1, 0)
+            if (x, y, level) != (7, 1, 0)
         }
     )
     return _PreparedRoutingProblem(
@@ -523,11 +574,17 @@ def test_external_net_routes_inward_from_prepared_boundary_goals() -> None:
 
 def test_feedback_history_prices_legal_cells_without_blocking_them() -> None:
     net_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
-    priced_cell = (2, 1, 0)
+    priced_cell = (3, 1, 0)
     problem = _problem(
-        ((net_id, (0, 1), (4, 1), (), (), ()),),
-        bounds=(0, 0, 4, 2),
-        keep_out={(x, y) for x in range(5) for y in (0, 2)},
+        ((net_id, (0, 1), (6, 1), (), (), ()),),
+        bounds=(0, 0, 6, 2),
+        blocked=(
+            (x, 1, level)
+            for x in range(7)
+            for level in range(math.floor(routing_domain._DEFAULT_BELT_RULES.max_z) + 1)
+            if level > 0 or x in (2, 4)
+        ),
+        keep_out={(x, y) for x in range(7) for y in (0, 2)},
     )
 
     result = route_global_once(
@@ -538,19 +595,21 @@ def test_feedback_history_prices_legal_cells_without_blocking_them() -> None:
 
     path = result.paths[net_id]
     assert priced_cell in path
-    _assert_current_detailed_legal_walk(path)
+    _assert_relaxed_legal_walk(path)
 
 
 def test_expansion_budget_is_exact_and_returns_partial_metrics() -> None:
     problem, net_id = _one_net_problem()
 
-    exhausted = route_global_once(problem, _feedback(problem), budget=2)
-    exact = route_global_once(problem, _feedback(problem), budget=3)
+    complete = route_global_once(problem, _feedback(problem), budget=20_000)
+    needed = complete.expansions
+    exhausted = route_global_once(problem, _feedback(problem), budget=needed - 1)
+    exact = route_global_once(problem, _feedback(problem), budget=needed)
 
-    assert exhausted.expansions == 2
+    assert exhausted.expansions == needed - 1
     assert exhausted.unreachable_ports == 1
     assert net_id not in exhausted.paths
-    assert exact.expansions == 3
+    assert exact.expansions == needed
     assert exact.unreachable_ports == 0
     assert net_id in exact.paths
     assert exhausted.exhausted_budget
@@ -594,12 +653,12 @@ def test_results_are_immutable_metrics_without_acceptance_or_placement_surface()
 def test_negotiation_moves_the_long_net_onto_the_available_detour() -> None:
     problem, short, long = _detour_problem()
 
-    result = route_global(problem, _feedback(problem), budget=100_000)
+    result = route_global(problem, _feedback(problem), budget=100_000, max_rounds=10)
 
     assert result.total_overflow == 0
     assert result.rounds >= 2
-    assert (2, 2, 0) in result.paths[short]
-    assert (2, 2, 0) not in result.paths[long]
+    assert (4, 4, 0) in result.paths[short]
+    assert (4, 4, 0) not in result.paths[long]
 
 
 def test_impossible_overflow_reports_five_rounds_of_metrics() -> None:
@@ -695,8 +754,8 @@ def test_detailed_feedback_history_changes_the_global_route_choice() -> None:
         (2, 2, level) for level in range(math.floor(routing_domain._DEFAULT_BELT_RULES.max_z) + 1)
     )
     problem = _problem(
-        ((net_id, (0, 2), (4, 2), (), (), ()),),
-        bounds=(0, 0, 4, 4),
+        ((net_id, (0, 2), (8, 2), (), (), ()),),
+        bounds=(0, 0, 8, 4),
         blocked=blocked,
     )
 
@@ -711,8 +770,8 @@ def test_detailed_feedback_history_changes_the_global_route_choice() -> None:
     assert any(cell not in changed_path for cell in priced)
     assert set(baseline_path).isdisjoint(blocked)
     assert set(changed_path).isdisjoint(blocked)
-    _assert_current_detailed_legal_walk(baseline_path)
-    _assert_current_detailed_legal_walk(changed_path)
+    _assert_relaxed_legal_walk(baseline_path)
+    _assert_relaxed_legal_walk(changed_path)
 
 
 def test_hot_cells_are_history_ordered_bounded_and_boxed_deterministically() -> None:

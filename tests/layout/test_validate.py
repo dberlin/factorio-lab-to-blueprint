@@ -1547,8 +1547,8 @@ def test_game_addon_supply_fires_when_a_coater_has_no_proliferator_belt() -> Non
     """A Spray Coater is fed from one place and it is not a sorter.
 
     The belt the coater rides is at its own tile; the proliferator belt has to
-    be in addon area 1, a tile and a quarter behind it and one altitude level
-    UP.  A belt beside it at ground level -- which is what both strategies used
+    be in addon area 1, 1.25 world units behind it and one altitude level
+    UP. A belt beside it at ground level -- which is what both strategies used
     to build, with a sorter running from it -- is not in the area and the game
     attaches nothing.
     """
@@ -1581,24 +1581,26 @@ def test_game_addon_supply_uses_rotated_elevated_pose(yaw: float, supply: tuple[
     ]
 
 
-def test_game_addon_supply_rejects_broke4_horizontal_raised_bus() -> None:
-    """The area-to-belt gap is 0.3142 world units, above the strict 0.3 gate."""
-    placement = place(
-        belt(0, 0),  # 0: cargo belt the coater rides
-        belt(1, -1, 1, out=2),  # 1
-        belt(0, -1, 1, out=3),  # 2: nearest area-1 belt, running horizontally
-        belt(-1, -1, 1),  # 3
-        _coater(0, 0, yaw=0.0),  # 4: area 1 is at (0, -1.25, 1)
-    )
+def test_game_addon_supply_checks_horizontal_bus_line_distance() -> None:
+    """The prefab offset is in world units; a quarter-level miss exceeds 0.3."""
+    for supply_z, rejected in ((Fraction(1), False), (Fraction(5, 4), True)):
+        placement = place(
+            belt(0, 0),
+            belt(1, -1, supply_z, out=2),
+            belt(0, -1, supply_z, out=3),
+            belt(-1, -1, supply_z),
+            _coater(0, 0, yaw=0.0),
+        )
 
-    findings = validate(
-        placement,
-        only={"game.addon_supply"},
-    ).by_check("game.addon_supply")
+        findings = validate(
+            placement,
+            only={"game.addon_supply"},
+        ).by_check("game.addon_supply")
 
-    assert len(findings) == 1
-    assert findings[0].buildings == (4, 2)
-    assert findings[0].detail["line_distance"] == "0.3142"
+        assert bool(findings) is rejected
+        if rejected:
+            assert findings[0].buildings == (4, 2)
+            assert findings[0].detail["area"] == 1
 
 
 def test_game_addon_supply_accepts_vertical_terminal_stub() -> None:
@@ -1773,19 +1775,11 @@ def _coater_placement(
     one step upstream of the coater origin (9, 5, 0) -- a tile the 1x3 body
     covers, since the body runs from (9, 5, 0) to (11, 5, 0) at yaw 90.
 
-    ``second_belt_in_supply_area`` adds two UNLINKED belts near addon area 1's
-    centre (8.75, 5, 1) -- one 0.3142 and one 0.9425 world units off it, both
-    inside ``ADDON_AREA_RADIUS``.  Neither has an ``output_obj``, so
-    ``_build_runs`` gives each its own run: this is the two-DISTINCT-RUNS case
-    ``prolif.coater_rides_one_run``'s narrowed second clause (spec section 9
-    R6) convicts -- which one the game would attach is a rotation convention
-    the emitted geometry never decided.
-
-    ``one_run_two_belts_in_supply_area`` is the regression guard for that same
-    narrowing: it chains the identical two belts into ONE run
-    (``output_obj`` from the far one to the near one).  Same positions, same
-    radius membership, but one run carries one item, so there is no rotation
-    ambiguity and the clause must NOT fire.
+    Both supply-area variants put belts at (9, 5, 1/2) and (9, 5, 3/2).
+    Area 1 is near (9.0053, 5, 1) after converting its prefab WORLD offset
+    into grid units. Each candidate is about 0.667 world units away, inside
+    the radius of 1. The disconnected variant gives them distinct runs;
+    the connected variant joins them outside the area before returning.
 
     ``body_spans_two_runs`` is the RUNS-ONLY clause on the BODY tiles, with NO
     merge anywhere: it severs (9, 5, 0)'s link into (10, 5, 0) by dropping its
@@ -1815,12 +1809,21 @@ def _coater_placement(
     if merge_under_body:
         buildings.append(belt(9, 4, out=2))  # tail of a second chain, merges onto index 2
     if second_belt_in_supply_area:
-        buildings.append(belt(9, 5, 1))
-        buildings.append(belt(8, 5, 1))
+        buildings.append(belt(9, 5, Fraction(1, 2)))
+        buildings.append(belt(9, 5, Fraction(3, 2)))
     if one_run_two_belts_in_supply_area:
-        near_index = len(buildings) + 1
-        buildings.append(belt(9, 5, 1, out=near_index))
-        buildings.append(belt(8, 5, 1))
+        supply_path = (
+            (9, 5, Fraction(1, 2)),
+            (8, 5, Fraction(1, 2)),
+            (7, 5, Fraction(1)),
+            (8, 5, Fraction(3, 2)),
+            (9, 5, Fraction(3, 2)),
+        )
+        start = len(buildings)
+        buildings.extend(
+            belt(x, y, z, out=start + i + 1 if i + 1 < len(supply_path) else None)
+            for i, (x, y, z) in enumerate(supply_path)
+        )
     return Placement(buildings=tuple(buildings))
 
 
@@ -1845,41 +1848,18 @@ def test_coater_on_a_single_run_is_clean() -> None:
 
 
 def test_coater_supply_area_with_two_belts_of_two_runs_is_convicted() -> None:
-    """Which belt supplies a coater must not depend on a rotation convention.
-
-    Measured on the reported URL: coater#768's addon area 1 had the proliferator
-    RUN 59 tail at (53,20,1) and a CARGO lane, RUN 27, at (55,20,1), both exactly
-    0.250 from the area centre and both inside ADDON_AREA_RADIUS = 1.0.
-
-    Renamed from ``test_coater_supply_area_with_two_belts_is_convicted`` (spec
-    section 9 R6): the clause is narrowed from "a second belt" to "a second
-    RUN", so the name and this docstring now say what actually convicts. The
-    fixture is unchanged -- its two belts were already unlinked, hence already
-    two distinct runs -- only the assertions below were sharpened to check the
-    run count the narrowed clause actually reports.
-    """
+    """Two distinct runs actually inside the world-space supply radius conflict."""
     placement = _coater_placement(merge_under_body=False, second_belt_in_supply_area=True)
     report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
     findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
     assert findings
-    assert "addon area 1" in findings[0].message
-    assert "distinct belt runs" in findings[0].message
     runs = findings[0].detail["runs"]
     assert isinstance(runs, list)
     assert len(runs) >= 2
 
 
 def test_coater_supply_area_with_two_belts_of_one_run_is_not_convicted() -> None:
-    """The regression this narrowing (spec section 9 R6) exists to prevent.
-
-    Same two positions and the same radius membership as the two-runs case
-    above, but chained into ONE run.  ``freeform._place_coaters`` feeds every
-    coater exactly this way -- a ``supply`` belt and an ``approach`` belt, one
-    run, one item -- and landing the clause without this exemption convicted
-    every coater the tool has ever placed (19 ``tests/layout/test_freeform.py``
-    builds went to ``NoValidLayout``).  One run carries one item, so there is
-    no rotation ambiguity for the game to resolve either way.
-    """
+    """Two candidate belts joined outside the supply area remain one run."""
     placement = _coater_placement(merge_under_body=False, one_run_two_belts_in_supply_area=True)
     report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
     findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
@@ -2066,6 +2046,39 @@ def test_belt_link_adjacent_fires_on_distant_link() -> None:
 def test_belt_link_adjacent_clean_when_orthogonal() -> None:
     r = validate(place(belt(0, 0, out=1), belt(1, 0)))
     assert not fired(r, "belt.link_adjacent")
+
+
+@pytest.mark.parametrize(
+    ("target", "edge_adjacent"),
+    [
+        (machine(10, 10), True),
+        (dataclasses.replace(sorter(10, 10, 13, 10), width=4, height=4), False),
+        (dataclasses.replace(machine(10, 10, item_id=catalog.SPRAY_COATER_ID), width=4), False),
+        (dataclasses.replace(machine(10, 10), item_id=-1), True),
+    ],
+    ids=("machine-footprint", "sorter-anchor", "addon-anchor", "unknown-footprint"),
+)
+def test_belt_link_adjacency_screen_preserves_footprints_and_finding_order(
+    target: PlacedBuilding, edge_adjacent: bool
+) -> None:
+    placement = Placement(
+        buildings=(
+            target,
+            belt(13, 10, z=8, out=0),
+            belt(9, 10, out=0),
+            belt(9, 9, out=0),
+            belt(0, 0, out=-1),
+            belt(0, 1, out=99),
+            belt(0, 2),
+            belt(0, 3, inp=0),
+        )
+    )
+    screen = validate_module.belt_link_adjacency(placement.buildings)
+    full = validate(placement, only=("belt.link_adjacent",))
+    assert screen == full
+    assert tuple(finding.buildings for finding in screen.errors) == (
+        ((3, 0),) if edge_adjacent else ((1, 0), (3, 0))
+    )
 
 
 def test_belt_continuity_fires_on_link_into_nothing() -> None:
@@ -7159,3 +7172,39 @@ def test_self_loop_lane_that_does_not_close_is_an_error() -> None:
     assert "flow.self_loop_primed" in report.checks_run
     findings = [f for f in report.errors if f.check == "flow.self_loop_primed"]
     assert findings
+
+
+def test_flow_conservation_keeps_items_independent_on_shared_topology() -> None:
+    rates = {"intermediate": Fraction(1, 3), "secondary": Fraction(2, 7)}
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="producer",
+                machine_item_id="arc-smelter",
+                count=1,
+                outputs_per_machine=rates,
+            ),
+            MachineGroup(
+                recipe_id="consumer",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine=rates,
+            ),
+        ),
+    )
+    placement = place(
+        machine(0, -4, item_id=SMELTER, recipe_id=10),
+        belt(0, 0, out=2),
+        belt(1, 0),
+        machine(1, 3, recipe_id=20),
+        *(sorter(0, -2, 0, 0, inp=0, out=1, carries=item) for item in rates),
+        *(sorter(1, 0, 1, 2, inp=2, out=3, carries=item) for item in rates),
+    )
+    report = validate(
+        placement,
+        spec,
+        ids=DIRECTIONAL_FLOW_IDS,
+        expect_power=False,
+        only={"flow.conservation"},
+    )
+    assert not report.errors

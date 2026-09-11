@@ -415,9 +415,6 @@ _CATALOG: tuple[Entry, ...] = (
         Kind.RULE,
         depends_on=(_TECH_LAB,),
         resolved_by="catalog.belt_rules_for_technologies",
-        unconsulted_because=(
-            "Save-rule normalization consumes this outside layout/validator roots."
-        ),
         mutation_exempt_because=("R4 measures emitted-layout seams, not request normalization."),
         note="GameHistoryData.Init: labLevel = 3 on a new save.",
     ),
@@ -426,10 +423,6 @@ _CATALOG: tuple[Entry, ...] = (
         Kind.RULE,
         depends_on=(_TECH_LAB,),
         resolved_by="catalog.belt_rules_for_technologies",
-        unconsulted_because=(
-            "BeltAltitudeRules carries the derived storage level, but no emitted-"
-            "paste strategy or validator consumes that field yet."
-        ),
         mutation_exempt_because=(
             "R4 perturbs observable emitted-paste seams; carrying this value in an "
             "otherwise-read dataclass is not an observable seam."
@@ -475,10 +468,6 @@ _CATALOG: tuple[Entry, ...] = (
         "catalog.vertical_construction_allowed",
         Kind.RULE,
         depends_on=("building item id", "blueprint z", _TECH_LAB),
-        unconsulted_because=(
-            "PASTE GAP OutOfVerticalConstructionHeight: migrate splitter/lab "
-            "placement and validation to this tech-aware predicate."
-        ),
     ),
     _e(
         "catalog.DEFAULT_MAX_BELT_Z",
@@ -526,7 +515,6 @@ _CATALOG: tuple[Entry, ...] = (
         Kind.RULE,
         depends_on=("lab level, i.e. researched vertical construction",),
         resolved_by="catalog.belt_rules_for_technologies",
-        unconsulted_because=("Save-rule normalization resolves this before layout strategies run."),
         mutation_exempt_because=("R4 measures emitted-layout seams, not request normalization."),
         note="GameHistoryData.buildMaxHeight, quoted in the function's docstring.",
     ),
@@ -1099,6 +1087,12 @@ class LintException:
 #: The teeth are still there.  These suppress a value AT A SITE, not the value.
 #: A new ``0.8`` anywhere else in ``layout/`` still fails.
 LINT_EXCEPTIONS: tuple[LintException, ...] = (
+    LintException(
+        "flab2bp.layout.transport_routing.composition",
+        "construct",
+        24.0,
+        "inter-bank routing corridor width in grid tiles; not the sorter skew angle in degrees",
+    ),
     LintException(
         "flab2bp.bench.snaporacle",
         "selftest",

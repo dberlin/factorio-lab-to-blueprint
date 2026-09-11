@@ -9,20 +9,35 @@ the composer, come back as ONE placement the validator accepts.
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
+from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from fractions import Fraction
+from typing import NoReturn
 
 import pytest
 
+from flab2bp.dsp import catalog
 from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout import validate
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.base import NoValidLayout, Placement, PlacementCompletion
+from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement, PlacementCompletion
+from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.hierarchy import compose as compose_mod
-from flab2bp.layout.hierarchy import strategy
-from flab2bp.layout.hierarchy.partition import Unit, initial_partition
+from flab2bp.layout.hierarchy import dispatch, strategy
+from flab2bp.layout.hierarchy.contracts import CutAllocation, LaneEnd, LaneFlow, allocate_cuts
+from flab2bp.layout.hierarchy.partition import (
+    Cut,
+    Unit,
+    composed_spec,
+    derive_cuts,
+    initial_partition,
+    split_block,
+)
 from flab2bp.layout.hierarchy.strategy import HierarchicalLayout, ShapeKey, _Entry
+from flab2bp.layout.route_feedback import NetId, RouteSettlement
+from flab2bp.layout.routing_domain import _Canvas
+from flab2bp.layout.sequence_solver import SequencePairLayout
 from flab2bp.spec import BuildSpec, MachineGroup
 
 _BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
@@ -83,12 +98,9 @@ def test_a_fifteen_second_build_funds_one_round(
     at this budget, so any wall spent partitioning tipped the round under the
     floor and the build refused without ever calling `_solve_block`.
 
-    ``workers=16`` here, not the file's usual 8: the chain splits into 2
-    blocks and both arms race each (`best`), so a round is 4 jobs, and 8
-    workers is only a pool 2 wide -- 2 waves at this budget's ~9 s remaining
-    is 4.5 s a wave, UNDER the floor by itself, independent of `_pool_width`'s
-    own fix.  16 workers is a pool 4 wide, one wave, 9 s a job -- what this
-    test exists to exercise.
+    Both backends remain eligible, but a shape's fallback is serial. Even
+    when conservative funding cannot fit both dependency layers above the
+    floor, the seed still runs and its successful primaries can finish early.
     """
     seen: list[float] = []
     real = strategy._solve_block
@@ -270,24 +282,434 @@ def test_a_refused_shape_is_not_re_solved_at_a_budget_the_memo_already_covers(
     assert placement.stats["nogood_skips"] > 0
 
 
-class _InlinePool:
-    """An `Executor.map` that runs the jobs right here, in this process.
+class _InlinePool(Executor):
+    """Run submitted jobs in-process, retaining the real Future/map contract."""
 
-    `_solve_round` only ever asks its pool for `map`, and a test that patches
-    `strategy._solve_block` needs the patch to be in the process that runs it.
-    `ThreadPoolExecutor` would do as much but would also hide the ORDER the
-    round submits its jobs in, which is what the no-good assertions read.
-    """
+    def submit[Result, **Params](
+        self, fn: Callable[Params, Result], /, *args: Params.args, **kwargs: Params.kwargs
+    ) -> Future[Result]:
+        future: Future[Result] = Future()
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except Exception as exc:
+            future.set_exception(exc)
+        return future
 
-    def map(self, fn: object, jobs: object) -> list[object]:
-        assert callable(fn)
-        return [fn(job) for job in jobs]  # type: ignore[union-attr]
 
-    def __enter__(self) -> _InlinePool:
-        return self
+def test_successful_primary_suppresses_unused_alternate_and_shares_shape(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    group = chain_spec.groups[0]
+    entries = [_Entry([Unit(uid, group, 1)]) for uid in (0, 1)]
+    calls: list[str] = []
+    placed = Placement(buildings=())
 
-    def __exit__(self, *args: object) -> None:
-        pass
+    def solve(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        calls.append(args[1])
+        return ({"verdict": "OK", "ok": True}, placed)
+
+    monkeypatch.setattr(strategy, "_solve_block", solve)
+    layout = _layout()
+    nogood = strategy._ShapeNoGood()
+    plan = strategy._plan_round(
+        entries,
+        [0, 1],
+        [layout._arms()] * 2,
+        nogood=nogood,
+        width=2,
+        remaining=40.0,
+        rounds_left=1,
+    )
+    skipped = layout._solve_round(
+        chain_spec,
+        entries,
+        [0, 1],
+        pool=_InlinePool(),
+        plan=plan,
+        deadline=time.monotonic() + 60.0,
+        nogood=nogood,
+    )
+
+    assert calls == ["freeform"]
+    assert all(entry.placement is placed for entry in entries)
+    assert all(entry.arms_tried == {"freeform"} for entry in entries)
+    assert all(entry.verdicts == ("OK",) for entry in entries)
+    assert skipped == 1
+    assert not nogood.refused
+
+
+def test_unresolved_shapes_precede_fallback_without_waiting_for_slow_primary(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slow first shape cannot hold the next primary behind a map barrier."""
+    group = chain_spec.groups[0]
+    entries = [_Entry([Unit(count, group, count)]) for count in (1, 2, 3)]
+    calls: list[tuple[int, str]] = []
+    placed = {count: Placement(buildings=()) for count in (1, 2, 3)}
+
+    class _DeferredFuture[Result](Future[Result]):
+        def result(self, timeout: float | None = None) -> Result:
+            assert self.done(), "the scheduler waited for the slow first primary"
+            return super().result(timeout)
+
+    class _CompletionPool(_InlinePool):
+        def __init__(self) -> None:
+            self.submissions = 0
+            self.finish_slow: Callable[[], None] | None = None
+
+        def submit[Result, **Params](
+            self, fn: Callable[Params, Result], /, *args: Params.args, **kwargs: Params.kwargs
+        ) -> Future[Result]:
+            self.submissions += 1
+            if self.submissions == 1:
+                slow: _DeferredFuture[Result] = _DeferredFuture()
+                result = fn(*args, **kwargs)
+                self.finish_slow = lambda: slow.set_result(result)
+                return slow
+            if self.submissions == 3:
+                assert self.finish_slow is not None
+                self.finish_slow()
+            return super().submit(fn, *args, **kwargs)
+
+    def solve(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        count, arm = args[0].machine_count, args[1]
+        calls.append((count, arm))
+        if (count, arm) == (2, "freeform"):
+            return ({"verdict": "REFUSED: forced", "ok": False, "wall_s": 2.0}, None)
+        return ({"verdict": "OK", "ok": True}, placed[count])
+
+    monkeypatch.setattr(strategy, "_solve_block", solve)
+    layout = _layout()
+    nogood = strategy._ShapeNoGood()
+    plan = strategy._plan_round(
+        entries,
+        [0, 1, 2],
+        [layout._arms()] * 3,
+        nogood=nogood,
+        width=2,
+        remaining=60.0,
+        rounds_left=1,
+    )
+    layout._solve_round(
+        chain_spec,
+        entries,
+        [0, 1, 2],
+        pool=_CompletionPool(),
+        plan=plan,
+        deadline=time.monotonic() + 60.0,
+        nogood=nogood,
+    )
+
+    assert calls == [(1, "freeform"), (2, "freeform"), (3, "freeform"), (2, "sequence-pair")]
+    assert all(entry.placement is placed[count] for count, entry in enumerate(entries, 1))
+    assert nogood.refused == {((("iron-ingot", 2),), "freeform"): 2.0}
+
+
+@pytest.mark.parametrize("failure", ["CRASH: broken placer", "future", "submit"])
+def test_worker_and_pool_errors_never_become_geometric_nogoods(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    entries = [_Entry([Unit(0, chain_spec.groups[0], 2)])]
+
+    def solve(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        if failure == "future":
+            raise BrokenProcessPool("lost worker")
+        return ({"verdict": failure, "ok": False}, None)
+
+    class _FailingPool(_InlinePool):
+        def submit[Result, **Params](
+            self, fn: Callable[Params, Result], /, *args: Params.args, **kwargs: Params.kwargs
+        ) -> Future[Result]:
+            if failure == "submit":
+                raise BrokenProcessPool("cannot submit")
+            return super().submit(fn, *args, **kwargs)
+
+    monkeypatch.setattr(strategy, "_solve_block", solve)
+    layout = _layout()
+    nogood = strategy._ShapeNoGood()
+    plan = strategy._plan_round(
+        entries,
+        [0],
+        [layout._arms()],
+        nogood=nogood,
+        width=2,
+        remaining=40.0,
+        rounds_left=1,
+    )
+    layout._solve_round(
+        chain_spec,
+        entries,
+        [0],
+        pool=_FailingPool(),
+        plan=plan,
+        deadline=time.monotonic() + 60.0,
+        nogood=nogood,
+    )
+    grown, progress = strategy._recut(
+        entries,
+        [0],
+        nogood=nogood,
+        arms=layout._arms(),
+        budget_s=plan.budget_s,
+    )
+
+    assert not nogood.refused
+    assert entries[0].placement is None
+    assert any("CRASH:" in verdict or "POOL FAILED:" in verdict for verdict in entries[0].verdicts)
+    assert grown == entries
+    assert entries[0].attempts == 0
+    assert not progress
+
+
+def test_refused_parent_reaches_conserved_children_before_widening(
+    chain_spec: BuildSpec,
+) -> None:
+    group = chain_spec.groups[0]
+    parent = _Entry(
+        [Unit(0, group, 6)], verdicts=("REFUSED: forced",), arms_tried=frozenset({"freeform"})
+    )
+    sibling = _Entry([Unit(1, chain_spec.groups[1], 1)], placement=Placement(buildings=()))
+    grown, progress = strategy._recut(
+        [parent, sibling],
+        [0],
+        nogood=strategy._ShapeNoGood(),
+        arms=("freeform", "sequence-pair"),
+        budget_s=10.0,
+    )
+
+    assert progress
+    assert [sum(unit.count for unit in entry.units) for entry in grown[:-1]] == [3, 3]
+    assert grown[-1] is sibling
+    assert parent.attempts == 1
+    assert sum(unit.consumes("iron-ore") for entry in grown[:-1] for unit in entry.units) == 6
+    assert sum(unit.produces("iron-ingot") for entry in grown[:-1] for unit in entry.units) == 6
+    order, cuts = derive_cuts([entry.units for entry in grown])
+    assert order == [0, 1, 2]
+    assert sum(cut.rate for cut in cuts if cut.item == "iron-ingot") == 2
+
+
+def test_indivisible_refused_parent_retains_untried_arm_rescue(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = _Entry(
+        [Unit(0, chain_spec.groups[0], 1)],
+        verdicts=("REFUSED: forced",),
+        arms_tried=frozenset({"freeform"}),
+    )
+    layout = _layout()
+    nogood = strategy._ShapeNoGood()
+    nogood.record(strategy.shape_key(parent.units), "freeform", 20.0)
+    entries, progress = strategy._recut(
+        [parent],
+        [0],
+        nogood=nogood,
+        arms=layout._arms(),
+        budget_s=10.0,
+    )
+    assert progress and entries == [parent]
+    offered = layout._arms_for(
+        chain_spec,
+        parent,
+        {(strategy.shape_key(parent.units), 10.0): ("freeform",)},
+        block_budget=10.0,
+    )
+    placed = Placement(buildings=())
+
+    def solve(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        return ({"verdict": "OK", "ok": True}, placed)
+
+    monkeypatch.setattr(strategy, "_solve_block", solve)
+    plan = strategy._plan_round(
+        entries,
+        [0],
+        [offered],
+        nogood=nogood,
+        width=2,
+        remaining=20.0,
+        rounds_left=1,
+    )
+    layout._solve_round(
+        chain_spec,
+        entries,
+        [0],
+        pool=_InlinePool(),
+        plan=plan,
+        deadline=time.monotonic() + 60.0,
+        nogood=nogood,
+    )
+    assert parent.placement is placed
+    assert parent.arms_tried == {"freeform", "sequence-pair"}
+    assert parent.attempts == strategy.MAX_RESPLIT_ATTEMPTS
+
+
+def test_recut_spends_known_children_within_parent_attempt_bound(chain_spec: BuildSpec) -> None:
+    parent = _Entry(
+        [Unit(0, chain_spec.groups[0], 6)],
+        verdicts=("REFUSED: forced",),
+        arms_tried=frozenset({"freeform"}),
+    )
+    arms = ("freeform", "sequence-pair")
+    nogood = strategy._ShapeNoGood()
+    for count in (2, 3):
+        for arm in arms:
+            nogood.record((("iron-ingot", count),), arm, 10.0)
+    grown, progress = strategy._recut(
+        [parent],
+        [0],
+        nogood=nogood,
+        arms=arms,
+        budget_s=10.0,
+    )
+    assert grown == [parent]
+    assert progress  # The untried parent arm remains available.
+    assert parent.attempts == strategy.MAX_RESPLIT_ATTEMPTS
+    strategy._recut(grown, [0], nogood=nogood, arms=arms, budget_s=10.0)
+    assert parent.attempts == strategy.MAX_RESPLIT_ATTEMPTS
+
+
+def test_serial_fallback_is_funded_before_parent_deadline(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _Clock:
+        now = 0.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+    clock = _Clock()
+    entries = [_Entry([Unit(0, chain_spec.groups[0], 1)])]
+    placed = Placement(buildings=())
+
+    def solve(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        assert args[5] is not None
+        if clock.now >= args[5]:
+            return ({"verdict": "REFUSED: deadline exhausted", "ok": False, "wall_s": 0.0}, None)
+        clock.now += args[2]
+        if args[1] == "freeform":
+            return ({"verdict": "REFUSED: forced", "ok": False, "wall_s": args[2]}, None)
+        return ({"verdict": "OK", "ok": True}, placed)
+
+    monkeypatch.setattr(strategy, "time", clock)
+    monkeypatch.setattr(strategy, "_solve_block", solve)
+    layout = _layout()
+    nogood = strategy._ShapeNoGood()
+    plan = strategy._plan_round(
+        entries,
+        [0],
+        [layout._arms()],
+        nogood=nogood,
+        width=2,
+        remaining=20.0,
+        rounds_left=1,
+    )
+    layout._solve_round(
+        chain_spec,
+        entries,
+        [0],
+        pool=_InlinePool(),
+        plan=plan,
+        deadline=20.0,
+        nogood=nogood,
+    )
+    assert entries[0].placement is placed
+    assert clock.now <= 20.0
+
+
+def test_round_deadline_preserves_finished_sibling_without_launching_fallback(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _Clock:
+        now = 0.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+    clock = _Clock()
+    entries = [_Entry([Unit(count, chain_spec.groups[0], count)]) for count in (1, 2)]
+    placed = Placement(buildings=())
+    calls: list[tuple[int, str]] = []
+
+    def solve(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        calls.append((args[0].machine_count, args[1]))
+        if args[0].machine_count == 1:
+            return ({"verdict": "OK", "ok": True}, placed)
+        clock.now = 20.0
+        return ({"verdict": "REFUSED: forced", "ok": False, "wall_s": 1.0}, None)
+
+    monkeypatch.setattr(strategy, "time", clock)
+    monkeypatch.setattr(strategy, "_solve_block", solve)
+    layout = _layout()
+    nogood = strategy._ShapeNoGood()
+    plan = strategy._plan_round(
+        entries,
+        [0, 1],
+        [layout._arms()] * 2,
+        nogood=nogood,
+        width=2,
+        remaining=20.0,
+        rounds_left=1,
+    )
+    layout._solve_round(
+        chain_spec,
+        entries,
+        [0, 1],
+        pool=_InlinePool(),
+        plan=plan,
+        deadline=20.0,
+        nogood=nogood,
+    )
+    assert calls == [(1, "freeform"), (2, "freeform")]
+    assert entries[0].placement is placed
+    assert entries[1].placement is None
+    assert all(entry.arms_tried == {"freeform"} for entry in entries)
+    assert nogood.refused == {((("iron-ingot", 2),), "freeform"): 1.0}
+
+
+@pytest.mark.parametrize("alternate_x", [5, 10])
+def test_shared_fallback_retains_smaller_completed_result_and_offered_order_ties(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch, alternate_x: int
+) -> None:
+    """A fallback needed by another consumer may improve an already solved one."""
+    entries = [_Entry([Unit(uid, chain_spec.groups[0], 1)]) for uid in (0, 1)]
+    primary = Placement(
+        buildings=(
+            PlacedBuilding(2001, 35, 0, 0),
+            PlacedBuilding(2001, 35, 10, 0),
+        )
+    )
+    alternate = Placement(
+        buildings=(
+            PlacedBuilding(2001, 35, 0, 0),
+            PlacedBuilding(2001, 35, alternate_x, 0),
+        )
+    )
+
+    def solve(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        return ({"verdict": "OK", "ok": True}, primary if args[1] == "freeform" else alternate)
+
+    monkeypatch.setattr(strategy, "_solve_block", solve)
+    layout = _layout()
+    nogood = strategy._ShapeNoGood()
+    plan = strategy._plan_round(
+        entries,
+        [0, 1],
+        [layout._arms(), ("sequence-pair",)],
+        nogood=nogood,
+        width=2,
+        remaining=40.0,
+        rounds_left=1,
+    )
+    layout._solve_round(
+        chain_spec,
+        entries,
+        [0, 1],
+        pool=_InlinePool(),
+        plan=plan,
+        deadline=time.monotonic() + 60.0,
+        nogood=nogood,
+    )
+    assert entries[0].placement is (alternate if alternate_x < 10 else primary)
+    assert entries[1].placement is alternate
 
 
 def test_identical_recut_children_do_not_create_unfunded_waves(
@@ -323,7 +745,7 @@ def test_identical_recut_children_do_not_create_unfunded_waves(
         strip_cap=2,
         block_strategy="freeform",
     )
-    layout._executor_factory = lambda _width: _InlinePool()  # type: ignore[assignment,return-value]
+    layout._executor_factory = lambda _width: _InlinePool()
     placement = layout.lay_out(chain_spec, time_budget_s=40.0)
     assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
     assert validate.certify(placement, chain_spec, belt_rules=_BELT_RULES, expect_power=True).ok
@@ -348,7 +770,7 @@ def test_a_ten_second_no_good_is_retried_at_the_funded_fifteen_seconds(
         child
         for block in partition.blocks
         for child in (
-            strategy.split_block(list(block), attempt=0)
+            split_block(list(block), attempt=0)
             if strategy.shape_key(list(block)) == (("iron-ingot", 2),)
             else [list(block)]
         )
@@ -389,7 +811,7 @@ def test_a_ten_second_no_good_is_retried_at_the_funded_fifteen_seconds(
         strip_cap=2,
         block_strategy="freeform",
     )
-    layout._executor_factory = lambda _width: _InlinePool()  # type: ignore[assignment,return-value]
+    layout._executor_factory = lambda _width: _InlinePool()
     placement = layout.lay_out(chain_spec, time_budget_s=100.0)
     assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
     assert validate.certify(placement, chain_spec, belt_rules=_BELT_RULES, expect_power=True).ok
@@ -432,7 +854,7 @@ def test_a_remembered_budget_breakpoint_funds_the_remaining_block(
         chain_spec,
         entries,
         [0, 1],
-        pool=_InlinePool(),  # type: ignore[arg-type]
+        pool=_InlinePool(),
         plan=plan,
         deadline=time.monotonic() + 60.0,
         nogood=nogood,
@@ -510,7 +932,7 @@ def test_a_deadline_clipped_refusal_is_not_remembered_at_the_full_budget(
             spec,
             entries,
             todo,
-            pool=_InlinePool(),  # type: ignore[arg-type]
+            pool=_InlinePool(),
             plan=plan,
             deadline=time.monotonic() + 600.0,
             nogood=nogood,
@@ -662,16 +1084,24 @@ def test_a_player_fed_block_is_declared_to_the_validator_and_certifies(
     """
     spec = _starved_chain_spec()
     seen: dict[str, object] = {}
-    real_allocate = strategy.allocate_cuts
-    real_composed = strategy.composed_spec
 
-    def spy_allocate(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
-        allocation = real_allocate(*args, **kwargs)  # type: ignore[arg-type]
+    def spy_allocate(
+        spec: BuildSpec,
+        cuts: list[Cut],
+        tails: dict[int, list[LaneEnd]],
+        heads: dict[int, list[LaneEnd]],
+    ) -> CutAllocation:
+        allocation = allocate_cuts(spec, cuts, tails, heads)
         seen["player_fed"] = allocation.player_fed
         return allocation
 
-    def spy_composed(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
-        built = real_composed(*args, **kwargs)  # type: ignore[arg-type]
+    def spy_composed(
+        spec: BuildSpec,
+        blocks: list[list[Unit]],
+        *,
+        player_fed: frozenset[tuple[int, str]] = frozenset(),
+    ) -> BuildSpec:
+        built = composed_spec(spec, blocks, player_fed=player_fed)
         seen["built"] = built
         return built
 
@@ -721,7 +1151,7 @@ def test_an_unwired_cut_is_a_refusal_not_a_handback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        strategy.compose_mod,
+        compose_mod,
         "compose",
         lambda *a, **k: compose_mod.ComposeResult(
             Placement(buildings=()), [], 0, ("ingot: block 0 -> block 1: BUDGET",)
@@ -821,23 +1251,19 @@ def test_a_budget_too_small_to_fund_a_round_still_attempts_the_seed_round(
 def test_a_dead_pool_is_a_refusal_not_a_crash(chain_spec: BuildSpec) -> None:
     """A parent-side pool failure must not escape as a raw exception.
 
-    `Executor.map` re-raises a `BrokenProcessPool`, an unpicklable argument and
-    an interpreter that failed to start, all on the parent side.  Losing the
+    `Executor.submit` or `Future.result` re-raises a `BrokenProcessPool`,
+    an unpicklable argument or a failed interpreter on the parent side. Losing the
     build to one is the mistake `_solve_block`'s own CRASH arm exists to avoid,
     one level up.
     """
 
-    class _DeadPool:
+    class _DeadPool(Executor):
         def __init__(self, max_workers: int) -> None:
             self.max_workers = max_workers
 
-        def __enter__(self) -> _DeadPool:
-            return self
-
-        def __exit__(self, *exc_info: object) -> bool:
-            return False
-
-        def map(self, fn: object, jobs: object) -> object:
+        def submit[Result, **Params](
+            self, fn: Callable[Params, Result], /, *args: Params.args, **kwargs: Params.kwargs
+        ) -> Future[Result]:
             raise BrokenProcessPool("a worker process died abruptly")
 
     # One arm, so every re-cut round the dead pool provokes is still funded and
@@ -850,7 +1276,7 @@ def test_a_dead_pool_is_a_refusal_not_a_crash(chain_spec: BuildSpec) -> None:
         strip_cap=2,
         block_strategy="freeform",
     )
-    layout._executor_factory = _DeadPool  # type: ignore[assignment]
+    layout._executor_factory = _DeadPool
     with pytest.raises(NoValidLayout, match="BrokenProcessPool"):
         layout.lay_out(chain_spec, time_budget_s=30.0)
 
@@ -865,10 +1291,10 @@ def test_a_pool_that_cannot_be_constructed_is_a_refusal_not_a_crash(chain_spec: 
     semaphore), which is real work that can fail with `OSError` on a shared,
     permanently loaded box: fd exhaustion (EMFILE) or a full `/dev/shm`
     (ENOSPC).  A different failure point from the dead-pool test above, which
-    only exercises `map` raising on an already-constructed pool.
+    only exercises `submit` raising on an already-constructed pool.
     """
 
-    class _UnbuildablePool:
+    class _UnbuildablePool(Executor):
         def __init__(self, max_workers: int) -> None:
             raise OSError(24, "Too many open files")
 
@@ -879,7 +1305,7 @@ def test_a_pool_that_cannot_be_constructed_is_a_refusal_not_a_crash(chain_spec: 
         strip_cap=2,
         block_strategy="freeform",
     )
-    layout._executor_factory = _UnbuildablePool  # type: ignore[assignment]
+    layout._executor_factory = _UnbuildablePool
     with pytest.raises(NoValidLayout, match="block pool unavailable: OSError"):
         layout.lay_out(chain_spec, time_budget_s=30.0)
 
@@ -900,31 +1326,47 @@ def test_a_composer_crash_is_a_refusal_not_a_traceback(
     def explode(*args: object, **kwargs: object) -> compose_mod.ComposeResult:
         raise AssertionError("lane at 9865 is not one contiguous row")
 
-    monkeypatch.setattr(strategy.compose_mod, "compose", explode)
+    monkeypatch.setattr(compose_mod, "compose", explode)
     with pytest.raises(NoValidLayout, match=r"composition crashed: AssertionError: lane at 9865"):
         _layout().lay_out(chain_spec, time_budget_s=30.0)
 
 
-def test_a_deadline_spent_by_composition_refuses_before_finalization(
+def test_composed_spec_errors_remain_outside_the_composer_crash_guard(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken_spec(*args: object, **kwargs: object) -> BuildSpec:
+        raise ArithmeticError("composed rate invariant")
+
+    monkeypatch.setattr(strategy, "composed_spec", broken_spec)
+    with pytest.raises(ArithmeticError, match="composed rate invariant"):
+        _layout().lay_out(chain_spec, time_budget_s=30.0)
+
+
+def test_unexpected_settlement_error_preserves_its_original_traceback(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken_settlement(
+        self: compose_mod._CompositionSettlement,
+        canvas: _Canvas,
+        owners: tuple[frozenset[NetId] | None, ...],
+    ) -> RouteSettlement:
+        raise ArithmeticError("settlement invariant")
+
+    monkeypatch.setattr(compose_mod._CompositionSettlement, "_settle", broken_settlement)
+    with pytest.raises(ArithmeticError, match="settlement invariant") as caught:
+        _layout().lay_out(chain_spec, time_budget_s=30.0)
+    assert any(entry.name == "broken_settlement" for entry in caught.traceback)
+
+
+def test_completed_composition_is_not_rejected_by_a_later_clock_read(
     chain_spec: BuildSpec,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Settlement is entered only with wall left to enter it with.
-
-    `assign_sorter_slots` takes no `cancelled` and `certify` is atomic, so a
-    composition that ran the clock out must refuse rather than start them.
-    """
+    """Accepted atomic certification remains accepted after the parent deadline."""
     real = compose_mod.compose
 
     class _SkewedClock:
-        """`time`, plus a skew the composition applies on its way out.
-
-        A composition that really ran the clock out would have to SLEEP the
-        whole settlement reserve, which buys nothing the skew does not: what is
-        under test is the guard's reading of the clock, not the sleeping.  The
-        skew is applied only after the block rounds are finished, so nothing but
-        the guard and its neighbours ever see it.
-        """
+        """Advance only after the composer has returned its accepted result."""
 
         skew = 0.0
 
@@ -932,16 +1374,39 @@ def test_a_deadline_spent_by_composition_refuses_before_finalization(
             return time.monotonic() + self.skew
 
     clock = _SkewedClock()
+    portable = BandPolicy("portable")
 
-    def stall(*args: object, **kwargs: object) -> compose_mod.ComposeResult:
-        result = real(*args, **kwargs)  # type: ignore[arg-type]
+    def stall(
+        placements: list[Placement],
+        flows: list[LaneFlow],
+        spec: BuildSpec,
+        *,
+        settlement_spec: BuildSpec,
+        gap: int,
+        belt_rules: catalog.BeltAltitudeRules,
+        deadline: float | None,
+        policy: BandPolicy = portable,
+        _limit_margin: int = 8,
+    ) -> compose_mod.ComposeResult:
+        result = real(
+            placements,
+            flows,
+            spec,
+            settlement_spec=settlement_spec,
+            gap=gap,
+            belt_rules=belt_rules,
+            deadline=deadline,
+            policy=policy,
+            _limit_margin=_limit_margin,
+        )
         clock.skew = 1_000_000.0
         return result
 
     monkeypatch.setattr(strategy, "time", clock)
-    monkeypatch.setattr(strategy.compose_mod, "compose", stall)
-    with pytest.raises(NoValidLayout, match="deadline exhausted before finalization"):
-        _layout().lay_out(chain_spec, time_budget_s=30.0)
+    monkeypatch.setattr(compose_mod, "compose", stall)
+    placement = _layout().lay_out(chain_spec, time_budget_s=30.0)
+    assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
+    assert validate.certify(placement, chain_spec, belt_rules=_BELT_RULES, expect_power=True).ok
 
 
 def test_a_refusal_carries_the_strategy_stats(
@@ -966,53 +1431,49 @@ def test_a_refusal_carries_the_strategy_stats(
     with pytest.raises(NoValidLayout) as caught:
         layout.lay_out(chain_spec, time_budget_s=40.0)
     stats = caught.value.stats
-    assert stats["blocks"] >= 2.0
+    blocks = stats["blocks"]
+    assert isinstance(blocks, float)
+    assert blocks >= 2.0
     assert "blocks_unattempted" in stats
     assert "recut_rounds" in stats
     assert "nogood_skips" in stats
     assert "player_fed" in stats
 
 
-def test_allowed_recut_rounds_is_zero_when_the_wall_holds_one_round():
+def test_allowed_recut_rounds_is_zero_when_the_wall_holds_one_round() -> None:
     # 15 s budget: reserve 6.0, so the round loop has ~9 s -- one round.
     assert strategy.allowed_recut_rounds(8.7) == 0
     assert strategy.allowed_recut_rounds(12.0) == 1
     assert strategy.allowed_recut_rounds(35.1) == strategy.MAX_RECUT_ROUNDS
 
 
-def test_the_seed_round_keeps_the_whole_wall_when_no_recut_is_affordable(chain_spec, monkeypatch):
-    """The web-UI path: a 15 s build must not fund rounds it can never run.
-
-    ``workers=16`` for the same reason as
-    ``test_a_fifteen_second_build_funds_one_round``: the chain is 2 blocks x
-    2 arms (``best``) = 4 jobs, and only a pool 4 wide (``workers=16``) makes
-    that one wave -- at ``workers=8`` (pool 2 wide, 2 waves) the share is
-    already under the floor by the wave split alone, before this rule's own
-    ``rounds_left`` divisor ever enters into it, so the two are not
-    distinguishable there.
-    """
-    seen: list[float] = []
+def test_the_seed_round_keeps_the_whole_wall_when_no_recut_is_affordable(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A one-wave primary needing seven seconds must not lose wall to unfunded recuts."""
     real = strategy._solve_block
 
-    def spy(args):
-        seen.append(args[2])
+    def needs_seven_seconds(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        if args[2] < 7.0:
+            return ({"verdict": "REFUSED: insufficient wall", "ok": False, "wall_s": args[2]}, None)
         return real(args)
 
-    monkeypatch.setattr(strategy, "_solve_block", spy)
+    monkeypatch.setattr(strategy, "_solve_block", needs_seven_seconds)
     layout = HierarchicalLayout(
         belt_rules=_BELT_RULES,
         band_policy=BandPolicy.parse("portable"),
-        workers=16,
+        workers=8,
         strip_cap=2,
+        block_strategy="freeform",
     )
     layout._executor_factory = ThreadPoolExecutor
-    layout.lay_out(chain_spec, time_budget_s=15.0)
-    # reserve 6.0, ~9 s of round, one wave -> the whole wall (~9s), not a
-    # third of it (~3s, which the floor would then clamp up to 5.0).
-    assert seen and min(seen) > 1.5 * strategy.BLOCK_BUDGET_MIN_S
+    placement = layout.lay_out(chain_spec, time_budget_s=15.0)
+    assert validate.certify(placement, chain_spec, belt_rules=_BELT_RULES, expect_power=True).ok
 
 
-def test_a_build_stops_re_cutting_after_the_global_bound(chain_spec, monkeypatch):
+def test_a_build_stops_re_cutting_after_the_global_bound(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """`MAX_RESPLIT_ATTEMPTS` is per block; this bound is per build.
 
     `chain_spec` is 4 machines total and saturates its OWN splittability
@@ -1026,14 +1487,21 @@ def test_a_build_stops_re_cutting_after_the_global_bound(chain_spec, monkeypatch
     """
     solves: list[str] = []
 
-    def always_refuse(args):
+    def always_refuse(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
         solves.append(args[1])
         return (
             {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
             None,
         )
 
-    def always_progress(entries, still, *, nogood, arms, budget_s):
+    def always_progress(
+        entries: list[_Entry],
+        still: list[int],
+        *,
+        nogood: strategy._ShapeNoGood,
+        arms: tuple[str, ...],
+        budget_s: float,
+    ) -> tuple[list[_Entry], bool]:
         return entries, True
 
     monkeypatch.setattr(strategy, "_solve_block", always_refuse)
@@ -1047,15 +1515,19 @@ def test_a_build_stops_re_cutting_after_the_global_bound(chain_spec, monkeypatch
     layout._executor_factory = ThreadPoolExecutor
     with pytest.raises(NoValidLayout) as caught:
         layout.lay_out(chain_spec, time_budget_s=60.0)
-    assert caught.value.stats["recut_rounds"] <= float(strategy.MAX_RECUT_ROUNDS)
+    recut_rounds = caught.value.stats["recut_rounds"]
+    assert isinstance(recut_rounds, float)
+    assert recut_rounds <= strategy.MAX_RECUT_ROUNDS
     assert "re-cut round" in caught.value.reason
     # The bound has to be what STOPPED the loop, not an unfunded round dressed
     # up as one: the faked placer must actually have been handed jobs.
     assert solves, "no block was ever offered to a placer"
 
 
-def test_a_round_that_cannot_afford_the_floor_names_the_wall_not_the_waves(chain_spec, monkeypatch):
-    def always_refuse(args):
+def test_a_round_that_cannot_afford_the_floor_names_the_wall_not_the_waves(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def always_refuse(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
         return (
             {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
             None,
@@ -1099,100 +1571,19 @@ def test_an_unregistered_arm_raises_rather_than_being_solved_by_sequence_pair() 
     """
     assert isinstance(
         strategy._block_layout("freeform", belt_rules=_BELT_RULES, workers=2),
-        strategy.FreeformLayout,
+        FreeformLayout,
     )
     assert isinstance(
         strategy._block_layout("sequence-pair", belt_rules=_BELT_RULES, workers=2),
-        strategy.SequencePairLayout,
+        SequencePairLayout,
     )
     with pytest.raises(ValueError, match="block-library"):
         strategy._block_layout("block-library", belt_rules=_BELT_RULES, workers=2)
 
 
-def test_a_dispatched_block_is_offered_both_arms_below_the_exact_floor(chain_spec, monkeypatch):
-    """`chain_spec`'s blocks are coater-free, and `lay_out` never hands a
-    block a per-block budget at or above `BLOCK_BUDGET_MAX_S` (20.0s) --
-    itself a whole second under `dispatch.SEQUENCE_PAIR_EXACT_FLOOR_S`
-    (21.0s, Task 6).  So Task 7's abstain fires unconditionally here: BOTH
-    arms are funded for every block, not just the one the v3 cross-tab
-    would have preferred.  See `dispatch.dispatch_arms`'s own docstring for
-    why that is the intended outcome, not a regression -- this test used to
-    assert the opposite (`arm_dispatch_both == 0`) before Task 7.
-    """
-    arms: list[str] = []
-    real = strategy._solve_block
-
-    def spy(args):
-        arms.append(args[1])
-        return real(args)
-
-    monkeypatch.setattr(strategy, "_solve_block", spy)
-    layout = HierarchicalLayout(
-        belt_rules=_BELT_RULES,
-        band_policy=BandPolicy.parse("portable"),
-        workers=8,
-        strip_cap=2,
-    )
-    layout._executor_factory = ThreadPoolExecutor
-    placement = layout.lay_out(chain_spec, time_budget_s=40.0)
-    assert set(arms) == {"freeform", "sequence-pair"}, (
-        f"expected both arms, got {sorted(set(arms))}"
-    )
-    assert placement.stats["arm_dispatch_both"] == placement.stats["blocks"]
-    assert placement.stats["arm_dispatch_freeform"] == 0.0
-    assert placement.stats["arm_dispatch_sequence_pair"] == 0.0
-
-
-def test_a_refused_block_is_offered_the_other_arm_before_it_is_cut(chain_spec, monkeypatch):
-    """Widening the arms is cheaper than growing the block list.
-
-    `chain_spec`'s blocks are coater-free, so left unpatched
-    `dispatch.dispatch_arms` now abstains for them from round 1 (Task 7,
-    see `test_a_dispatched_block_is_offered_both_arms_below_the_exact_floor`)
-    -- both arms would already be offered together, leaving nothing left to
-    widen TO once both refuse.  That is a different, already-covered
-    concern; pinning `dispatch_arms` to v3's old single-arm answer here
-    isolates the widen-before-cut escalation this test exists to check.
-    """
-    monkeypatch.setattr(
-        strategy.dispatch,
-        "dispatch_arms",
-        lambda features, arms, **kwargs: (strategy.dispatch.ARM_SEQUENCE_PAIR,),
-    )
-    cut = []
-    real_next_cut = strategy._next_cut
-
-    def watch(entry, **kw):
-        cut.append(strategy.shape_key(entry.units))
-        return real_next_cut(entry, **kw)
-
-    monkeypatch.setattr(strategy, "_next_cut", watch)
-    seen: list[str] = []
-    real = strategy._solve_block
-
-    def refuse_first_arm(args):
-        seen.append(args[1])
-        if len(seen) <= 2:
-            return (
-                {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
-                None,
-            )
-        return real(args)
-
-    monkeypatch.setattr(strategy, "_solve_block", refuse_first_arm)
-    layout = HierarchicalLayout(
-        belt_rules=_BELT_RULES,
-        band_policy=BandPolicy.parse("portable"),
-        workers=8,
-        strip_cap=2,
-    )
-    layout._executor_factory = ThreadPoolExecutor
-    layout.lay_out(chain_spec, time_budget_s=40.0)
-    assert len(set(seen)) == 2, "the other arm was never tried"
-    assert not cut, "a block was cut before every arm had been offered"
-
-
-def test_a_crashing_feature_computation_falls_back_to_racing_both_arms(chain_spec, monkeypatch):
+def test_a_crashing_feature_computation_falls_back_to_racing_both_arms(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """`_arms_for` runs unguarded in `lay_out`'s round loop (v3 Task 3 fix round 1).
 
     `dispatch.block_features` calls `plan_strips` -- real freeform packer
@@ -1204,10 +1595,10 @@ def test_a_crashing_feature_computation_falls_back_to_racing_both_arms(chain_spe
     and take the whole build with it.
     """
 
-    def boom(sub):
+    def boom(sub: BuildSpec) -> NoReturn:
         raise ValueError("synthetic plan_strips defect")
 
-    monkeypatch.setattr(strategy.dispatch, "block_features", boom)
+    monkeypatch.setattr(dispatch, "block_features", boom)
     layout = _layout()
     entries = [_Entry(list(block)) for block in initial_partition(chain_spec, strip_cap=2).blocks]
     arms = layout._arms_for(chain_spec, entries[0], {}, block_budget=20.0)
@@ -1220,19 +1611,9 @@ def test_a_crashing_feature_computation_falls_back_to_racing_both_arms(chain_spe
     assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
 
 
-def test_the_arm_cache_is_keyed_on_the_budget_as_well_as_the_shape(
-    monkeypatch: pytest.MonkeyPatch, chain_spec: BuildSpec
+def test_cached_dispatch_preserves_capabilities_across_the_exact_floor(
+    chain_spec: BuildSpec,
 ) -> None:
-    # Two rounds of the same build hand the same shape different budgets, and
-    # the answer legitimately differs across the floor. A shape-only key would
-    # serve round 2 with round 1's answer.
-    seen: list[float | None] = []
-
-    def spy(features, arms, *, budget_s=None):
-        seen.append(budget_s)
-        return arms
-
-    monkeypatch.setattr(strategy.dispatch, "dispatch_arms", spy)
     layout = _layout()
     cache: dict[tuple[ShapeKey, float], tuple[str, ...]] = {}
     ingot = MachineGroup(
@@ -1244,9 +1625,13 @@ def test_the_arm_cache_is_keyed_on_the_budget_as_well_as_the_shape(
     )
     entry = _Entry([Unit(0, ingot, 6)])
 
-    layout._arms_for(chain_spec, entry, cache, block_budget=5.0)
-    layout._arms_for(chain_spec, entry, cache, block_budget=5.0)
-    layout._arms_for(chain_spec, entry, cache, block_budget=20.0)
-
-    assert seen == [5.0, 20.0]
-    assert len(cache) == 2
+    floor = dispatch.SEQUENCE_PAIR_EXACT_FLOOR_S
+    assert layout._arms_for(chain_spec, entry, cache, block_budget=floor - 1) == (
+        "freeform",
+        "sequence-pair",
+    )
+    assert layout._arms_for(chain_spec, entry, cache, block_budget=floor) == ("sequence-pair",)
+    assert layout._arms_for(chain_spec, entry, cache, block_budget=floor - 1) == (
+        "freeform",
+        "sequence-pair",
+    )

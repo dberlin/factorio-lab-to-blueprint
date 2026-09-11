@@ -23,6 +23,9 @@ def astar_flat(
     expired: Callable[[float | None], bool],
     transitions: tuple[tuple[tuple[int, int, int, int, float], ...], ...],
     extra_edges: dict[int, tuple[tuple[int, float], ...]],
+    height_targets: array[int],
+    height_costs: array[float],
+    height_stride: int,
 ) -> tuple[array[int] | None, int, int, array[int], int]:
     """(path indices with via cells spliced, oldest first, or None;
     expansions; exit kind 0 found / 1 budget / 2 sealed;

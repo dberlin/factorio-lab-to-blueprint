@@ -6,11 +6,10 @@ wired the cuts with its own corridor Dijkstra, on the reading that
 ``freeform._route_all`` "is not callable standalone".  That reading is wrong:
 ``_route_all`` takes a prepared :class:`~flab2bp.layout.routing_domain._Canvas` and a
 list of :class:`~flab2bp.layout.routing_domain._Net`, and ``tests/layout/
-test_freeform.py`` already calls it that way.  What the prototype had to invent
-to compensate -- a collider halo, a soft moat, an altitude toll to stop a
-ground-level corridor walling in somebody else's entry lane -- is exactly what
-the router's own port-access reservations and crossing bands do properly, so
-none of it survives here.
+test_freeform.py`` already calls it that way. Internal cuts use the router's
+port-access reservations and physical crossing bands, not prototype collider
+halos, soft moats or altitude tolls. Composition also holds complete player-entry
+approaches: a cut's immediate access cells cannot preserve outside connectivity.
 
 The packing does survive, verbatim: ``_normalize``, :func:`pack_blocks` (the
 prototype's ``_shelf`` without its single-row mode), :func:`_skyline` and
@@ -22,24 +21,39 @@ the finalizer's exact requested band envelope, not a second latitude ceiling.
 from __future__ import annotations
 
 import bisect
+import math
 import time
-from collections.abc import Sequence
+from collections import deque
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
+from fractions import Fraction
 from functools import partial
 from typing import NamedTuple
 
 from flab2bp.dsp import catalog
-from flab2bp.layout import junction, slots
+from flab2bp.layout import finalize, junction, physical_flow, slots, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.buildings import Buildings
 from flab2bp.layout.finalize import BandPolicySearchEnvelope, band_policy_search_envelope
 from flab2bp.layout.hierarchy.contracts import LaneFlow
-from flab2bp.layout.route_feedback import Cell, DetailedRouteStatus, NetId, NetRole
+from flab2bp.layout.route_feedback import (
+    Cell,
+    DetailedRouteStatus,
+    NetId,
+    NetRole,
+    RouteInteriorDetour,
+    RouteSettlement,
+    RouteSettlementCancelled,
+    RouteSettlementCompleted,
+    RouteSettlementCrashed,
+    RouteSettlementRefused,
+)
 from flab2bp.layout.routing_domain import (
     PortAccessDemand,
     PortAccessEvidence,
     PortAccessReservation,
+    RoutingFlowLimits,
     _Canvas,
     _CompositionProjection,
     _lane_stacks_for,
@@ -122,8 +136,8 @@ class BlockPlaced:
 
     index: int
     #: The block's own NORMALIZED placement -- shifted to the origin, links
-    #: still block-local. The composed copy with ``base``-rebased links lives
-    #: only in ``ComposeResult.placement``.
+    #: still block-local. ``base`` indexes the raw routing canvas, not a cleaned
+    #: or framed accepted placement.
     placement: Placement
     base: int
     offset: tuple[int, int]
@@ -166,6 +180,12 @@ class ComposeResult:
     #: infill findings above never inflate a number Task 9 compares across
     #: gates: those tiles are already counted in `power_uncovered`.
     unrouted_cuts: int = 0
+    settlement: RouteSettlement | None = None
+    route_expansions: int = 0
+    settlement_attempts: int = 0
+    settlement_refusals: int = 0
+    settlement_reuses: int = 0
+    settlement_wall_s: float = 0.0
 
 
 class _Packing(NamedTuple):
@@ -218,6 +238,9 @@ class PackedCanvas:
     #: from "the oracle answered for most lane heads and named the rest"
     #: (both).  See v3 gate.md §6's open residual.
     partial: int = 0
+    #: Actual same-plane player approaches, held for the lifetime of this canvas.
+    #: Unlike cut corridors these are never retired when an internal net routes.
+    external_access: frozenset[Cell] = frozenset()
 
 
 class _PackingDeadline(Exception):
@@ -231,6 +254,15 @@ class _PackingDeadline(Exception):
     def __init__(self, packing: _Packing) -> None:
         super().__init__("no gap could be judged before the deadline")
         self.packing = packing
+
+
+class _ExternalAccessRefused(RuntimeError):
+    """No outside-connected approach exists in this packed search domain."""
+
+    def __init__(self, packing: _Packing, failures: tuple[str, ...]) -> None:
+        super().__init__("; ".join(failures))
+        self.packing = packing
+        self.failures = failures
 
 
 def _normalize(placement: Placement) -> tuple[Placement, int, int]:
@@ -272,12 +304,13 @@ def pack_blocks(
     real scale, but a caller that finalizes a composition has to expect that
     refusal and cannot read a block's own certification as still holding.
 
-    Prefer the smallest packing the requested exact envelope can project,
-    including rotation and circumference. If none of these finite candidates
-    fits, retain the smallest diagnostic fallback for the existing refusal path.
+    Preserve the blocks' axes when the exact envelope permits it, then minimize
+    span before area: a slightly smaller footprint can require much longer
+    inter-block routes. If none fits, retain the smallest diagnostic fallback.
     """
     gap = max(gap, MIN_GAP)
     best: tuple[int, list[tuple[int, int]], int, int] | None = None
+    best_score: tuple[bool, int, int] | None = None
     fallback: tuple[int, list[tuple[int, int]], int, int] | None = None
     widest = max(w for w, _ in sizes) + gap
     total = sum((w + gap) * (h + gap) for w, h in sizes)
@@ -290,10 +323,13 @@ def pack_blocks(
         candidate = (width * height, offsets, width, height)
         if fallback is None or candidate[0] < fallback[0]:
             fallback = candidate
-        if not envelope.frame_candidates(width, height):
+        frames = envelope.frame_candidates(width, height)
+        if not frames:
             continue
-        if best is None or candidate[0] < best[0]:
+        score = all(frame.frame.rotated for frame in frames), width + height, width * height
+        if best_score is None or score < best_score:
             best = candidate
+            best_score = score
     chosen = best or fallback
     assert chosen is not None
     return chosen[1], chosen[2], chosen[3]
@@ -594,6 +630,165 @@ def _outer_ring(bounds: tuple[int, int, int, int]) -> list[Cell]:
 _NEIGHBOURS = ((1, 0), (-1, 0), (0, 1), (0, -1))
 
 
+def _protect_external_access(
+    packing: _Packing, spec: BuildSpec, *, deadline: float | None
+) -> frozenset[Cell]:
+    """Keep a complete outside approach for each physical player-fed root.
+
+    The validator owns the entry census: labels alone do not make internally
+    sourced runs, junction branches or merge successors into player entries.
+    Pending LaneFlow arrivals are also internal incidence, although their
+    interblock belts have not yet been emitted. No item is inferred as an import.
+
+    Search the actual packed canvas, at the integral planes occupied by each
+    entry run, using both validator occupancy and the router's physical bans.
+    One breadth-first forest per plane shares work between roots. Only selected
+    paths to the rim are held, never a whole block perimeter or all free ground.
+    A missing path refuses this packing; cancellation is not a geometric verdict.
+    """
+    if _spent(deadline):
+        raise _PackingDeadline(packing)
+    if not spec.external_inputs:
+        return frozenset()
+    canvas = packing.canvas
+    placement = Placement(buildings=tuple(canvas.buildings))
+    ctx = validate._context(
+        placement,
+        spec,
+        validate.id_map(spec),
+        256,
+        canvas.belt_rules.max_z,
+        canvas.belt_rules.vertical_construction,
+    )
+    occupancy: Collection[tuple[int, int, Fraction | int]] = ctx.occupancy
+    if _spent(deadline):
+        raise _PackingDeadline(packing)
+    arrivals = {
+        ctx.run_of[net.dst.belt]
+        for net in packing.nets
+        if net.src is not None and net.dst.belt in ctx.run_of
+    }
+    entries = {
+        run: item
+        for item, runs in validate._entry_runs(ctx).items()
+        for run in runs
+        if run not in arrivals
+    }
+    if _spent(deadline):
+        raise _PackingDeadline(packing)
+    if not entries:
+        return frozenset()
+
+    goals: dict[int, dict[Cell, set[int]]] = {}
+    representable: set[int] = set()
+    for run in entries:
+        for index in ctx.runs[run].indices:
+            if _spent(deadline):
+                raise _PackingDeadline(packing)
+            belt = placement.buildings[index]
+            level = int(belt.z)
+            if belt.z != level or not 0 <= level < canvas.levels:
+                continue
+            representable.add(run)
+            for dx, dy in _NEIGHBOURS:
+                cell = (belt.x + dx, belt.y + dy, level)
+                if cell not in occupancy and canvas.free(cell):
+                    goals.setdefault(level, {}).setdefault(cell, set()).add(run)
+
+    bounds = canvas.limit
+    assert bounds is not None
+    pending = set(entries)
+    protected: set[Cell] = set()
+    for level, plane_goals in sorted(goals.items()):
+        wanted = {cell: runs & pending for cell, runs in plane_goals.items() if runs & pending}
+        if not wanted:
+            continue
+        parents: dict[Cell, Cell | None] = {}
+        queue: deque[Cell] = deque()
+        for x, y, _ in _outer_ring(bounds):
+            if _spent(deadline):
+                raise _PackingDeadline(packing)
+            cell = (x, y, level)
+            if cell not in occupancy and canvas.free(cell):
+                parents[cell] = None
+                queue.append(cell)
+        while queue and wanted:
+            if _spent(deadline):
+                raise _PackingDeadline(packing)
+            cell = queue.popleft()
+            reached = wanted.pop(cell, None)
+            if reached:
+                pending.difference_update(reached)
+                cursor: Cell | None = cell
+                while cursor is not None and cursor not in protected:
+                    if _spent(deadline):
+                        raise _PackingDeadline(packing)
+                    protected.add(cursor)
+                    cursor = parents[cursor]
+                # Other doorsteps of a served root need no independent path.
+                wanted = {goal: runs - reached for goal, runs in wanted.items() if runs - reached}
+            x, y, z = cell
+            for dx, dy in _NEIGHBOURS:
+                neighbour = (x + dx, y + dy, z)
+                if (
+                    neighbour not in parents
+                    and neighbour not in occupancy
+                    and canvas.free(neighbour)
+                ):
+                    parents[neighbour] = cell
+                    queue.append(neighbour)
+        if not pending:
+            break
+    if pending:
+        raise _ExternalAccessRefused(
+            packing,
+            tuple(
+                f"flow.external_entry_reachable: external input {entries[run]!r}: "
+                f"block {_block_of(packing.blocks, ctx.runs[run].head)} "
+                f"lane head {ctx.runs[run].head}: "
+                + (
+                    "no legal integral same-plane approach from outside this packed canvas"
+                    if run in representable
+                    else "external approach is unrepresentable: no integral belt tile "
+                    "within the routing technology's altitude range"
+                )
+                for run in sorted(pending)
+            ),
+        )
+
+    # A future Splitter must not put its collider across the player's reserved
+    # belt path. Invert the existing stack keepout, not an invented moat.
+    junction_bans: set[Cell] = set()
+    for level in range(canvas.levels):
+        if _spent(deadline):
+            raise _PackingDeadline(packing)
+        offsets = {
+            offset
+            for member in junction.make_splitter_stack(
+                0, 0, level, first_index=0, carry_direction=(0, 1)
+            )
+            for offset in junction.keepout_cells(
+                0, 0, int(member.z), model_index=member.model_index, yaw=member.yaw
+            )
+        }
+        by_plane: dict[int, list[tuple[int, int]]] = {}
+        for dx, dy, z in offsets:
+            by_plane.setdefault(z, []).append((dx, dy))
+        for x, y, z in protected:
+            if _spent(deadline):
+                raise _PackingDeadline(packing)
+            junction_bans.update((x - dx, y - dy, level) for dx, dy in by_plane.get(z, ()))
+    if _spent(deadline):
+        raise _PackingDeadline(packing)
+    # Publish only a complete proof. belt_ban also prevents a junction-owned
+    # start exception from treating this permanent guard as its own branch dock.
+    canvas.guard.update(protected)
+    for x, y, z in protected:
+        canvas.belt_ban.setdefault((x, y), set()).add(z)
+    canvas.junction_ban.update(junction_bans)
+    return frozenset(protected)
+
+
 def _free_doorstep(canvas: _Canvas, cell: Cell) -> frozenset[Cell]:
     """The free cells a belt can stand on beside ``cell``.
 
@@ -619,7 +814,10 @@ def _free_doorstep(canvas: _Canvas, cell: Cell) -> frozenset[Cell]:
 
 def _trunk_goals(
     packing: _Packing, demands: Sequence[PortAccessDemand]
-) -> dict[PortAccessDemand, frozenset[Cell]]:
+) -> tuple[
+    dict[PortAccessDemand, frozenset[Cell]],
+    dict[PortAccessDemand, frozenset[PortAccessDemand]],
+]:
     """Each cut lane's demand, pointed at the doorstep of its own partners.
 
     ``demands`` is the caller's own `_port_access_inventory(packing.nets)`
@@ -648,11 +846,15 @@ def _trunk_goals(
     it can no longer admit a rung on which a lane head is sealed away from
     every partner it has.  Probing per partner would multiply the A* count by
     the fan-out for a claim the router re-checks anyway.
+
+    Return endpoint ownership alongside geometry. A goal touching another
+    corridor never makes that corridor a partner; only these packing nets do.
     """
     by_cell: dict[Cell, list[PortAccessDemand]] = {}
     for demand in demands:
         by_cell.setdefault(demand.cell, []).append(demand)
     goals: dict[PortAccessDemand, set[Cell]] = {demand: set() for demand in demands}
+    partners: dict[PortAccessDemand, set[PortAccessDemand]] = {demand: set() for demand in demands}
     for net in packing.nets:
         if net.prelinked or net.src is None:
             continue
@@ -662,13 +864,18 @@ def _trunk_goals(
         dst_door = _free_doorstep(packing.canvas, dst_cell)
         for demand in by_cell.get(src_cell, ()):
             goals[demand].update(dst_door)
+            partners[demand].update(by_cell.get(dst_cell, ()))
         for demand in by_cell.get(dst_cell, ()):
             goals[demand].update(src_door)
+            partners[demand].update(by_cell.get(src_cell, ()))
     # A demand whose every partner is walled in raises no goal rather than an
     # EMPTY one: an empty goal set is a search that can never settle, which
     # would convict the demand for its PARTNER's pocket.  The router names
     # that lane itself, with the class that actually stopped it.
-    return {demand: frozenset(cells) for demand, cells in goals.items() if cells}
+    return (
+        {demand: frozenset(cells) for demand, cells in goals.items() if cells},
+        {demand: frozenset(owners) for demand, owners in partners.items() if owners},
+    )
 
 
 def _pack_at(
@@ -895,8 +1102,16 @@ def pack_with_access(
     margin: int,
     envelope: BandPolicySearchEnvelope,
     gap: int = MIN_GAP,
+    external_spec: BuildSpec | None = None,
 ) -> PackedCanvas:
     """Pack at widening gaps until every port has a corridor, and commit that one.
+
+    ``external_spec`` supplies settled machine incidence and declared player
+    inputs when those differ from the packing spec. First reserve the actual
+    internal port corridors, then find complete external paths to the canvas rim
+    without taking those corridors. External protection never degrades to a
+    local doorstep check.
+    If every attempted packing lacks such a path, raise _ExternalAccessRefused.
 
     THE GAP IS A SEARCHED QUANTITY, not a constant.  Every rung of
     :data:`GAP_LADDER` at or above ``gap`` is packed, and the reservation is
@@ -954,6 +1169,7 @@ def pack_with_access(
         None if deadline is None else entered + (deadline - entered) * LADDER_WALL_SHARE
     )
     best: PackedCanvas | None = None
+    external_refusal: _ExternalAccessRefused | None = None
     degraded = 0
     partial_rungs = 0
     for position, rung in enumerate(rungs):
@@ -977,32 +1193,13 @@ def pack_with_access(
         bounds = packing.canvas.limit
         assert bounds is not None  # canvas_for always sets it
         demands = _port_access_inventory(packing.nets).demands
-        # THE BOUNDARY IS STILL PASSED ONLY WHEN SOME DEMAND'S KIND COULD USE
-        # IT.  Every demand `_port_access_inventory` builds from `_Packing.nets`
-        # is an `INTERNAL_DEPARTURE` or an `INTERNAL_ARRIVAL` (compose has no
-        # boundary ports of its own), and both answer `reaches_boundary` False
-        # -- so `_goal_for` would never hand the rim to one of them and no
-        # demand could ever be moved into `missing` by it.  Handing
-        # `_reserve_port_access` a boundary anyway is pure cost on a clock the
-        # gate shows binding (BUDGET-class refusals on titanium-glass and
-        # zurl2): the ONLY cost it would still add is its own cells in the
-        # shared `_Grid`'s span, for probes that never run.  The
-        # `assignment_boundary_cut` callback is no longer part of that cost --
-        # the goals below already set `probed`, so it runs on every candidate
-        # assignment either way, and it PROBES a goal-bearing demand rather
-        # than continuing past it, because an explicit goal beats the boundary
-        # in `_goal_for`.  The `any` is kept rather than the argument deleted
-        # so that the day compose's demands become boundary-aware -- the v2
-        # gate's §6 lever 1, "give the composer real boundary ports" -- the rim
-        # lights up again on its own.
-        #
-        # `goals` now carries the question that DOES apply to a cut lane: each
-        # demand's own trunk partners, probed whatever the demand's kind says.
-        # That is what the probe and its shared grid now run FOR -- and what
-        # makes the ladder able to reject a rung for the reason the router
-        # refuses on it.  See `_trunk_goals`.
+        # The cut inventory still describes internal departures/arrivals.
+        # Composition ALSO owes player-facing entries, protected after this
+        # matching by complete paths that avoid its reserved internal corridors.
+        # Internal demands keep their partner goals rather than being redirected
+        # to the outer rim. A future boundary-aware demand still receives it.
         boundary = _outer_ring(bounds) if any(d.kind.reaches_boundary for d in demands) else None
-        goals = _trunk_goals(packing, demands)
+        goals, partners = _trunk_goals(packing, demands)
         # Rung 0's reservation is funded out of `RESERVE_WALL_SHARE` and
         # DEGRADES rather than refusing: see the constant's docstring.
         reserve_deadline = (
@@ -1026,6 +1223,7 @@ def pack_with_access(
                 cancelled=partial(_spent, reserve_deadline),
                 deadline=reserve_deadline,
                 goals=goals,
+                partners=partners,
             )
         except _PreparationDeadline:
             if not first:
@@ -1115,12 +1313,30 @@ def pack_with_access(
                 if best is None:
                     raise _PackingDeadline(packing) from None
                 break
+        # The actual internal matcher owns scarce departure/arrival cells.
+        # _Canvas.free makes their selected corridors hard obstacles to the
+        # external forest; an external root must take a longer escape rather
+        # than consume the only approach an internal port can use.
+        try:
+            external_access = _protect_external_access(
+                packing,
+                spec if external_spec is None else external_spec,
+                deadline=rung_deadline,
+            )
+        except _ExternalAccessRefused as refusal:
+            external_refusal = refusal
+            continue
+        except _PackingDeadline:
+            if best is None:
+                raise
+            break
         candidate = PackedCanvas(
             *packing,
             reservation=reservation,
             gap=rung,
             degraded=degraded,
             partial=partial_rungs,
+            external_access=external_access,
         )
         # A TOPPED-UP PARTIAL REACHES HERE COMPLETE, so a rung that committed
         # one ENDS THE LADDER.  That is the pre-Task-1 shape: the wholesale
@@ -1135,7 +1351,9 @@ def pack_with_access(
         # wider packing that serves no more ports only spends physical extent.
         if best is None or len(reservation.missing) < len(best.reservation.missing):
             best = candidate
-    assert best is not None  # `rungs` is never empty, so the first rung ran
+    if best is None:
+        assert external_refusal is not None
+        raise external_refusal
     # `best` may be an EARLIER rung than the last one the ladder judged, and
     # `degraded` is the ladder's total rather than that rung's own -- so it is
     # stamped on here rather than read off the candidate.
@@ -1167,11 +1385,287 @@ def _budget_refusal(packing: _Packing) -> ComposeResult:
         ),
         packing.blocks,
         0,
-        budget_failures,
+        budget_failures or ("composition preparation: BUDGET",),
         # Power infill never runs on this path -- the ladder expired before
         # `_route_all` did -- so every one of these IS an unrouted cut.
-        unrouted_cuts=len(budget_failures),
+        unrouted_cuts=len(packing.nets),
     )
+
+
+class _CompositionSettlement:
+    """Settle disposable complete candidates under the original hierarchy clocks."""
+
+    def __init__(
+        self,
+        spec: BuildSpec,
+        policy: BandPolicy,
+        belt_rules: catalog.BeltAltitudeRules,
+        deadline: float | None,
+        *,
+        external_access: frozenset[Cell] = frozenset(),
+    ) -> None:
+        self.spec = spec
+        self.policy = policy
+        self.belt_rules = belt_rules
+        self.deadline = deadline
+        self.external_access = external_access
+        self.attempts = 0
+        self.refusals = 0
+        self.reuses = 0
+        self.wall_s = 0.0
+        self._refused: list[
+            tuple[Placement, tuple[frozenset[NetId] | None, ...], RouteSettlementRefused]
+        ] = []
+
+    def __call__(
+        self, canvas: _Canvas, owners: tuple[frozenset[NetId] | None, ...]
+    ) -> RouteSettlement:
+        started = time.monotonic()
+        self.attempts += 1
+        try:
+            with physical_flow.reuse_certificates():
+                return self._settle(canvas, owners)
+        except Exception as error:
+            return RouteSettlementCrashed(error, error.__traceback__)
+        finally:
+            self.wall_s += time.monotonic() - started
+
+    def _settle(
+        self, canvas: _Canvas, owners: tuple[frozenset[NetId] | None, ...]
+    ) -> RouteSettlement:
+        if _spent(self.deadline):
+            return RouteSettlementCancelled("routing admission")
+        # These checks judge the fully emitted topology, before power or cleanup
+        # changes its aligned building identities. Passing is not certification.
+        raw = Placement(buildings=tuple(canvas.buildings))
+        admission = validate.routing_admission(
+            raw,
+            self.spec,
+            belt_rules=self.belt_rules,
+            cancelled=partial(_spent, self.deadline),
+        )
+        if admission is None or _spent(self.deadline):
+            return RouteSettlementCancelled("routing admission")
+        if admission:
+            # Cleanup may remove a sealing wall or change a capacity estimate's
+            # topology. Reuse its exact initial eligibility gate: when no leaf
+            # is prunable, completion returns the raw topology unchanged.
+            # Otherwise defer to accepted cleanup and final certification rather
+            # than assuming every raw finding survives an arbitrary removal.
+            cancelled = partial(_spent, self.deadline)
+            try:
+                protected = finalize._required_external_input_belts(
+                    raw, self.spec, cancelled=cancelled
+                )
+                if finalize._prunable_open_belts(
+                    raw, protected_roots=protected, cancelled=cancelled
+                ):
+                    admission = ()
+            except finalize.ProjectionCancelled:
+                return RouteSettlementCancelled("routing admission")
+            if _spent(self.deadline):
+                return RouteSettlementCancelled("routing admission")
+        if admission:
+            self.refusals += 1
+            return RouteSettlementRefused(
+                "composed placement failed routing admission: "
+                + "; ".join(
+                    f"{failure.finding.check}: {failure.finding.message}" for failure in admission
+                ),
+                _failure_support_owners(tuple(failure.support for failure in admission), owners),
+            )
+        if _spent(self.deadline):
+            return RouteSettlementCancelled("power infill")
+        # A tower's ground footprint cannot consume even an elevated player
+        # approach. Add this only after routing, so ground belts remain free
+        # to pass underneath elevated access while they are being selected.
+        canvas.guard.update((x, y, 0) for x, y, _ in self.external_access)
+        try:
+            infill_sites, unpowered = plan_power_infill(
+                canvas, policy=self.policy, cancelled=partial(_spent, self.deadline)
+            )
+        except _PreparationDeadline:
+            return RouteSettlementCancelled("power infill")
+        except _Unpowerable as error:
+            self.refusals += 1
+            return RouteSettlementRefused(f"composition power infill: {error}", None)
+        if unpowered:
+            self.refusals += 1
+            return RouteSettlementRefused(
+                "power.coverage: no legal linked infill covers composed tiles "
+                + ", ".join(f"({x},{y})" for x, y in unpowered),
+                None,
+                power_uncovered=len(unpowered),
+            )
+        try:
+            _place_power(canvas, infill_sites)
+        except _Unpowerable as error:
+            self.refusals += 1
+            return RouteSettlementRefused(f"composition power infill: {error}", None)
+        # Infill siting depends on global free space/connectivity. Until that
+        # dependency is available explicitly, its cause is unknown, not empty.
+        owners = (*owners, *(None for _ in range(len(canvas.buildings) - len(owners))))
+        if _spent(self.deadline):
+            return RouteSettlementCancelled("global slots")
+        try:
+            placement = Placement(
+                buildings=slots.assign_sorter_slots(tuple(canvas.buildings)),
+                description="hierarchical composition",
+            )
+        except slots.SlotUndetermined as error:
+            self.refusals += 1
+            return RouteSettlementRefused(
+                f"a composed link's slot could not be derived: {error}",
+                None,
+                power_infill=len(infill_sites),
+            )
+        if _spent(self.deadline):
+            return RouteSettlementCancelled("cleanup")
+        for previous, previous_owners, refusal in self._refused:
+            if placement == previous and owners == previous_owners:
+                self.reuses += 1
+                return refusal
+        prepared = finalize.prepare_placement_completion(
+            placement,
+            self.spec,
+            self.policy,
+            belt_rules=self.belt_rules,
+            expect_power=True,
+            deadlines=finalize.PlacementCompletionDeadlines(self.deadline, self.deadline, None),
+        )
+        if isinstance(prepared, finalize.PlacementCompletionCancelled):
+            return RouteSettlementCancelled(prepared.phase)
+        if isinstance(prepared, finalize.PlacementProjectionRefused):
+            witnesses = prepared.refusal.witnesses
+            implicated = _projection_failure_owners(prepared, owners)
+            refused = RouteSettlementRefused(
+                f"composed placement refused finalization: {prepared.refusal}",
+                implicated,
+                witnesses,
+                len(infill_sites),
+                interior_detours=_projection_interior_detours(prepared, placement, owners),
+            )
+        elif isinstance(prepared, finalize.PlacementProjectionReady):
+            completed = finalize.complete_placement(prepared)
+            if isinstance(completed, finalize.PlacementCompleted):
+                return RouteSettlementCompleted(completed, len(infill_sites))
+            if isinstance(completed, finalize.PlacementCertificationExpired):
+                return RouteSettlementCancelled("certification")
+            if not isinstance(completed, finalize.PlacementInvalid):
+                raise AssertionError("unknown placement completion result")
+            # Cleanup can legitimately defer raw admission. The final rejection
+            # still belongs to its physical route context, not an unknown cause.
+            admission = validate.routing_admission(
+                completed.candidate,
+                self.spec,
+                belt_rules=self.belt_rules,
+                cancelled=partial(_spent, self.deadline),
+            )
+            if admission is None:
+                return RouteSettlementCancelled("routing feedback")
+            supported = tuple(failure.finding for failure in admission)
+            implicated = (
+                _failure_support_owners(
+                    tuple(failure.support for failure in admission),
+                    owners,
+                    completed.survivor_indices,
+                    completed.link_dependencies,
+                )
+                if all(failure in supported for failure in completed.report.errors)
+                else None
+            )
+            if _spent(self.deadline):
+                return RouteSettlementCancelled("routing feedback")
+            refused = RouteSettlementRefused(
+                "composed placement failed validation: "
+                + "; ".join(
+                    f"{failure.check}: {failure.message}" for failure in completed.report.errors[:3]
+                ),
+                implicated,
+                power_infill=len(infill_sites),
+            )
+        else:
+            raise AssertionError("unknown placement preparation result")
+        self.refusals += 1
+        self._refused.append((placement, owners, refused))
+        return refused
+
+
+def _projection_interior_detours(
+    prepared: finalize.PlacementProjectionRefused,
+    placement: Placement,
+    owners: tuple[frozenset[NetId] | None, ...],
+) -> tuple[RouteInteriorDetour, ...]:
+    """Recover owned raw belt support, without inverting a projected frame."""
+    indices = {
+        index if prepared.survivor_indices is None else prepared.survivor_indices[index]
+        for witness in prepared.refusal.witnesses
+        for index in witness.failure.buildings
+    }
+    for dependency in prepared.link_dependencies:
+        if dependency.survivor_index in indices:
+            indices.update(dependency.traversed_indices)
+    detours = []
+    for index in sorted(indices):
+        building = placement.buildings[index]
+        contributors = owners[index]
+        if not contributors or not catalog.is_belt(building.item_id):
+            continue
+        # A fractional ramp is between lattice levels. Both are merely useful
+        # positive alternatives; neither is an unconditional collision fact.
+        detours.append(
+            RouteInteriorDetour(
+                contributors,
+                frozenset(
+                    (building.x, building.y, level)
+                    for level in (math.floor(building.z), math.ceil(building.z))
+                ),
+            )
+        )
+    return tuple(detours)
+
+
+def _projection_failure_owners(
+    prepared: finalize.PlacementProjectionRefused,
+    owners: tuple[frozenset[NetId] | None, ...],
+) -> frozenset[NetId] | None:
+    """Translate accepted cleanup survivors and bypass causes, never coordinates."""
+    if not prepared.refusal.witnesses:
+        return None
+    return _failure_support_owners(
+        tuple(
+            frozenset(witness.failure.buildings) if witness.failure.buildings else None
+            for witness in prepared.refusal.witnesses
+        ),
+        owners,
+        prepared.survivor_indices,
+        prepared.link_dependencies,
+    )
+
+
+def _failure_support_owners(
+    supports: tuple[frozenset[int] | None, ...],
+    owners: tuple[frozenset[NetId] | None, ...],
+    survivor_indices: tuple[int, ...] | None = None,
+    link_dependencies: tuple[finalize.CleanupLinkDependency, ...] = (),
+) -> frozenset[NetId] | None:
+    """Translate complete physical support through accepted cleanup lineage."""
+    indices: set[int] = set()
+    for support in supports:
+        if support is None:
+            return None
+        for index in support:
+            indices.add(index if survivor_indices is None else survivor_indices[index])
+    for dependency in link_dependencies:
+        if dependency.survivor_index in indices:
+            indices.update(dependency.traversed_indices)
+    causal: set[NetId] = set()
+    for index in indices:
+        contributors = owners[index]
+        if contributors is None:
+            return None
+        causal.update(contributors)
+    return frozenset(causal)
 
 
 def compose(
@@ -1179,6 +1673,7 @@ def compose(
     flows: list[LaneFlow],
     spec: BuildSpec,
     *,
+    settlement_spec: BuildSpec,
     gap: int,
     belt_rules: catalog.BeltAltitudeRules,
     deadline: float | None,
@@ -1196,6 +1691,20 @@ def compose(
     # These are complete physical block boxes. Optional routing margin is free
     # canvas, not a guaranteed emitted rim; later routed geometry is finalized.
     envelope = band_policy_search_envelope(policy, perimeter=0)
+    # Composed machine counts/rates belong to settlement_spec, but an original
+    # player obligation must not disappear merely because its net deficit is
+    # zero after composition. Cleanup uses this same declaration to retain its
+    # connected external belts via _required_external_input_belts.
+    missing_inputs = spec.external_inputs.keys() - settlement_spec.external_inputs.keys()
+    if missing_inputs:
+        settlement_spec = settlement_spec.model_copy(
+            update={
+                "external_inputs": {
+                    **settlement_spec.external_inputs,
+                    **{item: spec.external_inputs[item] for item in missing_inputs},
+                }
+            }
+        )
     try:
         packed = pack_with_access(
             placements,
@@ -1206,9 +1715,23 @@ def compose(
             margin=_limit_margin,
             gap=gap,
             envelope=envelope,
+            external_spec=settlement_spec,
         )
     except _PackingDeadline as expired:
         return _budget_refusal(expired.packing)
+    except _ExternalAccessRefused as refused:
+        packing = refused.packing
+        return ComposeResult(
+            Placement(
+                buildings=tuple(packing.canvas.buildings),
+                description="hierarchical composition",
+            ),
+            packing.blocks,
+            0,
+            refused.failures,
+            unrouted_cuts=len(packing.nets),
+            settlement=RouteSettlementRefused(str(refused), None),
+        )
 
     canvas = packed.canvas
     blocks = packed.blocks
@@ -1245,6 +1768,13 @@ def compose(
         canvas.junction_projection = projection
     except _PreparationDeadline:
         return _budget_refusal(_Packing(packed.buildings, blocks, canvas, nets))
+    settlement = _CompositionSettlement(
+        settlement_spec,
+        policy,
+        belt_rules,
+        deadline,
+        external_access=packed.external_access,
+    )
     result = _route_all(
         canvas,
         nets,
@@ -1252,6 +1782,10 @@ def compose(
         belt_model,
         bounds,
         deadline=deadline,
+        settle=settlement if not reservation.missing else None,
+        flow_limits=RoutingFlowLimits(
+            tuple(flow.rate for flow in flows), spec.lane_capacity * spec.max_stack
+        ),
     )
 
     failures.extend(
@@ -1276,48 +1810,50 @@ def compose(
     #: tiles are already counted in `power_uncovered`.
     routing_failures = len(failures)
 
-    # THE GROUND THE COMPOSITION OPENED IS NOT POWERED BY ANY BLOCK'S PLAN.
-    # Each block brought towers sized for its own footprint; the Splitters the
-    # router just created at taps between blocks stand on ground none of them
-    # reaches.  v3 gate.md §2.3: 76 of 80 covered, 4 not, and those 4 were the
-    # ONLY thing wrong with the first placement this strategy ever composed.
-    #
-    # `cancelled` is handed the PARENT's wall, the same one `_route_all` just
-    # ran on -- so on a budget-exhausted composition (the common case for a
-    # large cell) `plan_power_infill`'s very first `cancelled()` check raises
-    # `_PreparationDeadline` immediately.  That is caught HERE, not let
-    # propagate: this runs after the router, so `failures` already names every
-    # net the router left unaccounted, and losing that list to an uncaught
-    # exception -- which `strategy.py`'s broad `except Exception` would turn
-    # into a message-less "composition crashed: _PreparationDeadline: " --
-    # would destroy the very refusal this pass exists to improve.
-    try:
-        infill_sites, unpowered = plan_power_infill(
-            canvas, policy=policy, cancelled=partial(_spent, deadline)
-        )
-    except _PreparationDeadline:
-        infill_sites, unpowered = [], ()
-        failures.append(
-            "composition power infill: did not run, the composition's wall was "
-            "already spent before it could start"
-        )
-    else:
+    # An unsettled partial still needs its original physical diagnostic infill.
+    # Complete attempted candidates already ran infill on their owned workspace.
+    outcome = result.settlement
+    if outcome is None:
+        canvas.guard.update((x, y, 0) for x, y, _ in packed.external_access)
         try:
-            _place_power(canvas, infill_sites)
-        except _Unpowerable as exc:
-            # A planned site taken between the plan and the stand is a reservation
-            # bug, and it is REPORTED here rather than raised: this runs after the
-            # router, so there is a composed placement worth naming a cut on.
-            infill_sites = []
-            failures.append(f"composition power infill: {exc}")
-        failures.extend(
-            f"power.coverage: composed tile ({tx},{ty}) is outside every tower's supply "
-            "radius and no free, linked, legal site can cover it"
-            for tx, ty in unpowered
-        )
+            infill_sites, unpowered = plan_power_infill(
+                canvas, policy=policy, cancelled=partial(_spent, deadline)
+            )
+        except _PreparationDeadline:
+            infill_sites, unpowered = [], ()
+            failures.append(
+                "composition power infill: did not run, the composition's wall was "
+                "already spent before it could start"
+            )
+        except _Unpowerable as error:
+            infill_sites, unpowered = [], ()
+            failures.append(f"composition power infill: {error}")
+        else:
+            try:
+                _place_power(canvas, infill_sites)
+            except _Unpowerable as exc:
+                infill_sites = []
+                failures.append(f"composition power infill: {exc}")
+            failures.extend(
+                f"power.coverage: composed tile ({tx},{ty}) is outside every tower's supply "
+                "radius and no free, linked, legal site can cover it"
+                for tx, ty in unpowered
+            )
+        power_infill, power_uncovered = len(infill_sites), len(unpowered)
+    elif isinstance(outcome, (RouteSettlementCompleted, RouteSettlementRefused)):
+        power_infill, power_uncovered = outcome.power_infill, outcome.power_uncovered
+        if isinstance(outcome, RouteSettlementRefused):
+            failures.append(outcome.reason)
+    else:
+        power_infill, power_uncovered = 0, 0
+    placement = (
+        outcome.completion.placement
+        if isinstance(outcome, RouteSettlementCompleted)
+        else Placement(buildings=tuple(canvas.buildings), description="hierarchical composition")
+    )
 
     return ComposeResult(
-        Placement(buildings=tuple(canvas.buildings), description="hierarchical composition"),
+        placement,
         blocks,
         len(result.routed),
         tuple(failures),
@@ -1326,9 +1862,15 @@ def compose(
         reservation_missing=len(reservation.missing),
         reservation_degraded=packed.degraded,
         reservation_partial=packed.partial,
-        power_infill=len(infill_sites),
-        power_uncovered=len(unpowered),
+        power_infill=power_infill,
+        power_uncovered=power_uncovered,
         unrouted_cuts=routing_failures,
+        settlement=outcome,
+        route_expansions=result.expansions,
+        settlement_attempts=settlement.attempts,
+        settlement_refusals=settlement.refusals,
+        settlement_reuses=settlement.reuses,
+        settlement_wall_s=settlement.wall_s,
     )
 
 

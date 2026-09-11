@@ -101,6 +101,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import cache
 
 from flab2bp.dsp import colliders
 
@@ -972,6 +973,7 @@ def power_node_condition(a: PowerNode, b: PowerNode, sqr_world_gap: float) -> Po
     return None
 
 
+@cache
 def power_node_keepout_offsets(
     a: PowerNode, b: PowerNode, *, reach: int = 12, levels: int = 4
 ) -> frozenset[tuple[int, int, int]]:

@@ -37,14 +37,9 @@ BASELINE_CONSULTED_BY_BOTH = 24
 #: matches exactly, so a rule that gains a reader must be struck off here and a
 #: rule that loses its last reader fails the suite.
 EXPECTED_UNCONSULTED = {
-    # Centralized values/predicates not yet consumed by emitted paste.
-    "catalog.DEFAULT_STORAGE_LEVEL",
-    "catalog.DEFAULT_LAB_LEVEL",
-    "catalog.belt_max_z",
     # Paste-applicable rules centralized here but not yet migrated into
     # strategy/validation.  The report prints each registry reason.
     "catalog.blueprint_limit_for_technologies",
-    "catalog.vertical_construction_allowed",
     "planet.SORTER_PARAM_BIAS",
     "planet.sorter_parameter",
     "rules.PASTE_BELT_LINK_MAX_SQR",

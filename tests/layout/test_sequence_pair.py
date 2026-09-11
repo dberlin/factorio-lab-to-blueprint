@@ -76,7 +76,7 @@ from flab2bp.layout.strip_variants import (
 )
 from flab2bp.spec import BuildSpec
 from tests.layout.conftest import one_recipe_spec
-from tests.layout.test_freeform import two_stage_spec
+from tests.layout.test_sequence_solver import _direct_flow_two_stage_spec
 from tests.layout.test_strip_variants import _family, _single_machine_spec
 
 _BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
@@ -422,7 +422,7 @@ def test_sorter_occupied_overlap_is_not_a_direct_insert() -> None:
 
 
 def test_two_stage_alignment_retains_cp_sat_direct_opportunity() -> None:
-    spec = two_stage_spec()
+    spec = _direct_flow_two_stage_spec()
     strips = plan_strips(spec, strip_len=6)
     candidates = _direct_net_candidates(strips, spec)
     height = sum(strip.height + 1 for strip in strips)

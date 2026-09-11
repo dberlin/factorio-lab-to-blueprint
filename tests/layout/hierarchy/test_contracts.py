@@ -3,7 +3,7 @@ from fractions import Fraction
 
 import pytest
 
-from flab2bp.dsp import catalog
+from flab2bp.dsp import catalog, params
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.hierarchy.contracts import (
     ContractError,
@@ -13,7 +13,7 @@ from flab2bp.layout.hierarchy.contracts import (
     boundary_lanes,
 )
 from flab2bp.layout.hierarchy.partition import Cut
-from flab2bp.spec import BuildSpec
+from flab2bp.spec import BuildSpec, MachineGroup
 from tests.layout.hierarchy.test_pressure import _chain, _chain_with_external
 from tests.layout.test_markers import _piler_output_placement
 
@@ -112,7 +112,32 @@ def test_a_block_is_wired_entirely_or_not_at_all():
 
 def _boundary_spec() -> BuildSpec:
     return BuildSpec(
-        groups=(),
+        groups=(
+            MachineGroup(
+                recipe_id="gear",
+                machine_item_id="assembling-machine-1",
+                count=2,
+                outputs_per_machine={"ingredientA": Fraction(3)},
+            ),
+            MachineGroup(
+                recipe_id="circuit-board",
+                machine_item_id="assembling-machine-1",
+                count=1,
+                inputs_per_machine={"ingredientB": Fraction(5)},
+            ),
+            MachineGroup(
+                recipe_id="electric-motor",
+                machine_item_id="assembling-machine-1",
+                count=1,
+                outputs_per_machine={"ingredientC": Fraction(2)},
+            ),
+            MachineGroup(
+                recipe_id="electromagnetic-turbine",
+                machine_item_id="assembling-machine-1",
+                count=1,
+                inputs_per_machine={"ingredientC": Fraction(2)},
+            ),
+        ),
         external_inputs={"ingredientB": Fraction(5)},
         outputs={"ingredientA": Fraction(6)},
         surplus_outputs={},
@@ -136,7 +161,7 @@ def _boundary_placement() -> Placement:
     """
     b = PlacedBuilding
     buildings = (
-        b(item_id=SORTER, model_index=0, x=0, y=0, output_obj=1),  # 0: feeds tail1
+        b(item_id=SORTER, model_index=0, x=0, y=0, input_obj=9, output_obj=1),
         b(
             item_id=BELT,
             model_index=0,
@@ -145,7 +170,7 @@ def _boundary_placement() -> Placement:
             input_obj=0,
             carries_item="ingredientA",
         ),  # 1: tail1
-        b(item_id=SORTER, model_index=0, x=2, y=0, output_obj=3),  # 2: feeds tail2
+        b(item_id=SORTER, model_index=0, x=2, y=0, input_obj=10, output_obj=3),
         b(
             item_id=BELT,
             model_index=0,
@@ -162,8 +187,8 @@ def _boundary_placement() -> Placement:
             output_obj=5,
             carries_item="ingredientB",
         ),  # 4: head
-        b(item_id=SORTER, model_index=0, x=5, y=0, input_obj=4),  # 5: draws head in
-        b(item_id=SORTER, model_index=0, x=6, y=0, output_obj=7),  # 6: feeds internal lane
+        b(item_id=SORTER, model_index=0, x=5, y=0, input_obj=4, output_obj=11),
+        b(item_id=SORTER, model_index=0, x=6, y=0, input_obj=12, output_obj=7),
         b(
             item_id=BELT,
             model_index=0,
@@ -172,7 +197,18 @@ def _boundary_placement() -> Placement:
             input_obj=6,
             carries_item="ingredientC",
         ),  # 7: internal, excluded from both sides
-        b(item_id=SORTER, model_index=0, x=8, y=0, input_obj=7),  # 8: draws internal lane in
+        b(item_id=SORTER, model_index=0, x=8, y=0, input_obj=7, output_obj=13),
+        b(item_id=2303, model_index=65, x=9, y=0, recipe_id=catalog.recipe_id("gear")),
+        b(item_id=2303, model_index=65, x=10, y=0, recipe_id=catalog.recipe_id("gear")),
+        b(item_id=2303, model_index=65, x=11, y=0, recipe_id=catalog.recipe_id("circuit-board")),
+        b(item_id=2303, model_index=65, x=12, y=0, recipe_id=catalog.recipe_id("electric-motor")),
+        b(
+            item_id=2303,
+            model_index=65,
+            x=13,
+            y=0,
+            recipe_id=catalog.recipe_id("electromagnetic-turbine"),
+        ),
     )
     return Placement(buildings=buildings)
 
@@ -181,7 +217,7 @@ def test_boundary_lanes_rates_tails_and_heads_and_excludes_the_internal_lane():
     placement = _boundary_placement()
     sub = _boundary_spec()
     tails, heads = boundary_lanes(placement, sub, block=0)
-    # Both tails lack an owner_strip, so the block's output splits evenly.
+    # Each output lane has one producer; the internal C transfer stays local.
     assert tails == [
         LaneEnd(block=0, building=1, item="ingredientA", rate=Fraction(3)),
         LaneEnd(block=0, building=3, item="ingredientA", rate=Fraction(3)),
@@ -190,16 +226,37 @@ def test_boundary_lanes_rates_tails_and_heads_and_excludes_the_internal_lane():
     assert all(end.item != "ingredientC" for end in (*tails, *heads))
 
 
-def test_piler_transit_preserves_rated_producer_boundary():
+def _rated_piler_placement() -> Placement:
     placement = _piler_output_placement()
-    spec = BuildSpec(groups=(), outputs={"gear": Fraction(1)})
+    return replace(
+        placement,
+        buildings=(
+            replace(placement.buildings[0], recipe_id=catalog.recipe_id("gear")),
+            *placement.buildings[1:],
+        ),
+    )
+
+
+def test_piler_transit_preserves_rated_producer_boundary():
+    placement = _rated_piler_placement()
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="gear",
+                machine_item_id="assembling-machine-1",
+                count=1,
+                outputs_per_machine={"gear": Fraction(1)},
+            ),
+        ),
+        outputs={"gear": Fraction(1)},
+    )
     tails, heads = boundary_lanes(placement, spec, 0)
     assert [(lane.building, lane.rate) for lane in tails] == [(4, Fraction(1))]
     assert all(lane.building != 4 for lane in heads)
 
 
 def test_shared_piled_tail_is_counted_once_and_keeps_exact_machine_weight():
-    buildings = list(_piler_output_placement().buildings)
+    buildings = list(_rated_piler_placement().buildings)
     buildings.extend(
         (
             replace(buildings[0], x=5),
@@ -210,7 +267,17 @@ def test_shared_piled_tail_is_counted_once_and_keeps_exact_machine_weight():
             replace(buildings[2], x=10, output_obj=None),
         )
     )
-    spec = BuildSpec(groups=(), outputs={"gear": Fraction(1)})
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="gear",
+                machine_item_id="assembling-machine-1",
+                count=3,
+                outputs_per_machine={"gear": Fraction(1, 3)},
+            ),
+        ),
+        outputs={"gear": Fraction(1)},
+    )
     tails, heads = boundary_lanes(Placement(buildings=tuple(buildings)), spec, 0)
     assert [(lane.building, lane.rate) for lane in tails] == [
         (4, Fraction(2, 3)),
@@ -221,7 +288,14 @@ def test_shared_piled_tail_is_counted_once_and_keeps_exact_machine_weight():
 
 def _spec_with_output(item: str, rate: Fraction) -> BuildSpec:
     return BuildSpec(
-        groups=(),
+        groups=(
+            MachineGroup(
+                recipe_id="gear",
+                machine_item_id="assembling-machine-1",
+                count=3,
+                outputs_per_machine={item: rate / 3},
+            ),
+        ),
         external_inputs={},
         outputs={item: rate},
         surplus_outputs={},
@@ -237,88 +311,41 @@ def _spec_with_output(item: str, rate: Fraction) -> BuildSpec:
     )
 
 
-def _two_tail_placement(*, strip_b: int | None) -> Placement:
-    """Two output tails for ``ingredientA``: tail A's strip (0) always has two
-    machines behind it, tail B's strip is ``strip_b`` (``1`` with one machine
-    behind it, or ``None`` to simulate lost strip provenance).
-    """
-    b = PlacedBuilding
-    buildings = [
-        b(item_id=SORTER, model_index=0, x=0, y=0, output_obj=1),  # 0: feeds tail A
-        b(
-            item_id=BELT,
-            model_index=0,
-            x=1,
-            y=0,
-            input_obj=0,
-            carries_item="ingredientA",
-            owner_strip=0,
-        ),  # 1: tail A
-        b(item_id=9999, model_index=0, x=2, y=0, owner_strip=0, recipe_id=100),  # 2: machine
-        b(item_id=9999, model_index=0, x=3, y=0, owner_strip=0, recipe_id=100),  # 3: machine
-        b(item_id=SORTER, model_index=0, x=4, y=0, output_obj=5),  # 4: feeds tail B
-        b(
-            item_id=BELT,
-            model_index=0,
-            x=5,
-            y=0,
-            input_obj=4,
-            carries_item="ingredientA",
-            owner_strip=strip_b,
-        ),  # 5: tail B
-    ]
-    if strip_b is not None:
-        buildings.append(
-            b(item_id=9999, model_index=0, x=6, y=0, owner_strip=strip_b, recipe_id=100)
-        )  # 6: machine behind tail B's strip
-    return Placement(buildings=tuple(buildings))
-
-
-def test_boundary_lanes_weights_tails_by_machines_behind_when_every_lane_has_a_strip():
-    placement = _two_tail_placement(strip_b=1)  # strip 0: 2 machines, strip 1: 1 machine
-    sub = _spec_with_output("ingredientA", Fraction(9))
-    tails, _heads = boundary_lanes(placement, sub, block=0)
-    assert tails == [
-        LaneEnd(block=0, building=1, item="ingredientA", rate=Fraction(6)),
-        LaneEnd(block=0, building=5, item="ingredientA", rate=Fraction(3)),
-    ]
-    assert sum(t.rate for t in tails) == Fraction(9)
-
-
-def test_boundary_lanes_falls_back_to_even_split_when_any_tail_lacks_a_strip():
-    # Tail A's strip still carries two machines behind it -- a weighted split
-    # would favour it 2:1 over tail B -- but tail B lost its strip provenance,
-    # and no sorter in this fixture names a machine, so there is nothing left
-    # to weight by and the WHOLE side falls back to an even split.
-    placement = _two_tail_placement(strip_b=None)
-    sub = _spec_with_output("ingredientA", Fraction(8))
-    tails, _heads = boundary_lanes(placement, sub, block=0)
-    assert tails == [
-        LaneEnd(block=0, building=1, item="ingredientA", rate=Fraction(4)),
-        LaneEnd(block=0, building=5, item="ingredientA", rate=Fraction(4)),
-    ]
-    assert sum(t.rate for t in tails) == Fraction(8)
-
-
 def test_boundary_allocation_uses_surplus_beyond_splitter_not_consumer_tail():
     b = PlacedBuilding
     belt = dict(item_id=BELT, model_index=0, carries_item="ingredientA")
     placement = Placement(
         buildings=(
-            b(item_id=9999, model_index=0, recipe_id=100, x=0, y=0),
+            b(item_id=2303, model_index=65, recipe_id=catalog.recipe_id("gear"), x=0, y=0),
             b(item_id=SORTER, model_index=0, x=0, y=1, input_obj=0, output_obj=2),
             b(**belt, x=0, y=2, output_obj=3),
             b(item_id=catalog.SPLITTER_ID, model_index=38, x=1, y=2),
             b(**belt, x=2, y=2, input_obj=3, output_obj=5),
             b(**belt, x=3, y=2),
             b(item_id=SORTER, model_index=0, x=3, y=3, input_obj=5, output_obj=7),
-            b(item_id=9999, model_index=0, recipe_id=101, x=3, y=4),
+            b(item_id=2303, model_index=65, recipe_id=catalog.recipe_id("circuit-board"), x=3, y=4),
             b(**belt, x=1, y=3, input_obj=3, output_obj=9),
             b(**belt, x=1, y=4),
             b(**belt, x=5, y=2),
         )
     )
-    spec = _spec_with_output("ingredientA", Fraction(6))
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="gear",
+                machine_item_id="assembling-machine-1",
+                count=1,
+                outputs_per_machine={"ingredientA": Fraction(9)},
+            ),
+            MachineGroup(
+                recipe_id="circuit-board",
+                machine_item_id="assembling-machine-1",
+                count=1,
+                inputs_per_machine={"ingredientA": Fraction(3)},
+            ),
+        ),
+        outputs={"ingredientA": Fraction(6)},
+    )
     tails, _heads = boundary_lanes(placement, spec, block=0)
     demand = LaneEnd(block=1, building=0, item="ingredientA", rate=Fraction(6))
 
@@ -345,7 +372,7 @@ def _stripless_docked_placement() -> Placement:
     """
     b = PlacedBuilding
     belt = dict(item_id=BELT, model_index=0, carries_item="ingredientA")
-    machine = dict(item_id=9999, model_index=0, recipe_id=100)
+    machine = dict(item_id=2303, model_index=65, recipe_id=catalog.recipe_id("gear"))
     return Placement(
         buildings=(
             b(**machine, x=0, y=1),  # 0
@@ -381,7 +408,7 @@ def _stripless_head_placement() -> Placement:
     """Two strip-less entry heads, drawn by two machines and by one."""
     b = PlacedBuilding
     belt = dict(item_id=BELT, model_index=0, carries_item="ingredientB")
-    machine = dict(item_id=9999, model_index=0, recipe_id=100)
+    machine = dict(item_id=2303, model_index=65, recipe_id=catalog.recipe_id("gear"))
     return Placement(
         buildings=(
             b(**machine, x=0, y=1),  # 0
@@ -398,9 +425,16 @@ def _stripless_head_placement() -> Placement:
     )
 
 
-def _spec_with_external(item: str, rate: Fraction) -> BuildSpec:
+def _spec_with_external(item: str, rate: Fraction, *, count: int = 3) -> BuildSpec:
     return BuildSpec(
-        groups=(),
+        groups=(
+            MachineGroup(
+                recipe_id="gear",
+                machine_item_id="assembling-machine-1",
+                count=count,
+                inputs_per_machine={item: rate / count},
+            ),
+        ),
         external_inputs={item: rate},
         outputs={},
         surplus_outputs={},
@@ -434,6 +468,11 @@ def test_port_host_boundary_lane_receives_its_share_of_assigned_supply():
     belt = catalog.building(BELT)
     sorter = catalog.building(SORTER)
     b = PlacedBuilding
+    mode_recipe = next(
+        name
+        for name, entry in catalog.MODE_DRIVEN_MACHINE.items()
+        if entry.machine_item_id == host.item_id
+    )
     placement = Placement(
         buildings=(
             b(
@@ -451,18 +490,42 @@ def test_port_host_boundary_lane_receives_its_share_of_assigned_supply():
                 y=0,
                 width=host.width,
                 height=host.height,
+                parameters=params.parameters_for(mode_recipe),
             ),
             b(item_id=BELT, model_index=belt.model_index, x=10, y=0, input_obj=1),
             b(item_id=SORTER, model_index=sorter.model_index, x=10, y=0, input_obj=2, output_obj=4),
-            b(item_id=2303, model_index=assembler.model_index, x=10, y=2, recipe_id=100),
+            b(
+                item_id=2303,
+                model_index=assembler.model_index,
+                x=10,
+                y=2,
+                recipe_id=catalog.recipe_id("gear"),
+            ),
             b(item_id=BELT, model_index=belt.model_index, x=20, y=0, carries_item="ingredientB"),
             b(item_id=SORTER, model_index=sorter.model_index, x=20, y=0, input_obj=5, output_obj=7),
-            b(item_id=2303, model_index=assembler.model_index, x=20, y=2, recipe_id=100),
+            b(
+                item_id=2303,
+                model_index=assembler.model_index,
+                x=20,
+                y=2,
+                recipe_id=catalog.recipe_id("gear"),
+            ),
         )
     )
-    _tails, heads = boundary_lanes(
-        placement, _spec_with_external("ingredientB", Fraction(6)), block=1
+    spec = _spec_with_external("ingredientB", Fraction(6), count=2)
+    spec = spec.model_copy(
+        update={
+            "groups": (
+                *spec.groups,
+                MachineGroup(
+                    recipe_id=mode_recipe,
+                    machine_item_id="energy-exchanger",
+                    count=1,
+                ),
+            )
+        }
     )
+    _tails, heads = boundary_lanes(placement, spec, block=1)
     assert heads == [
         LaneEnd(block=1, building=0, item="ingredientB", rate=Fraction(3)),
         LaneEnd(block=1, building=5, item="ingredientB", rate=Fraction(3)),

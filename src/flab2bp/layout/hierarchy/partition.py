@@ -288,11 +288,30 @@ def sub_spec(spec: BuildSpec, block: list[Unit], index: int) -> BuildSpec:
             is_external = item not in made
             spray_lanes[item] = spray_lanes.get(item, True) and is_external
     if spray_lanes:
-        # A Spray Coater is fed like any other machine and proliferator is never
-        # made inside a block, so a spraying block must belt it in.  Apportioned
-        # by sprayed-machine share, so the block rates sum to the whole spec's.
-        sprayed_here = sum(u.count for u in block if u.group.is_proliferated)
-        sprayed_all = sum(g.count for g in spec.groups if g.is_proliferated)
+        # rates.adjust charges one spray per input cargo item. The selected
+        # tier's sprays-per-unit divisor is common and cancels in this ratio.
+        # Preserve the parent's exact total without weighting unlike recipes
+        # by their machine counts.
+        sprayed_here = sum(
+            (
+                u.consumes(item)
+                for u in block
+                if u.group.is_proliferated
+                for item in u.group.inputs_per_machine
+                if item in spec.spray_lanes
+            ),
+            Fraction(0),
+        )
+        sprayed_all = sum(
+            (
+                rate * g.count
+                for g in spec.groups
+                if g.is_proliferated
+                for item, rate in g.inputs_per_machine.items()
+                if item in spec.spray_lanes
+            ),
+            Fraction(0),
+        )
         for item, rate in spec.external_inputs.items():
             if item.startswith("proliferator") and sprayed_all:
                 external_inputs[item] = rate * Fraction(sprayed_here, sprayed_all)

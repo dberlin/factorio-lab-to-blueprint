@@ -13,7 +13,7 @@ from flab2bp.dsp import catalog
 from flab2bp.dsp.rules import BELT_PORT_DRAW_TO_SLOT
 from flab2bp.layout import junction
 from flab2bp.layout.base import PlacedBuilding
-from flab2bp.layout.route_feedback import Cell
+from flab2bp.layout.route_feedback import Cell, NetId
 
 if TYPE_CHECKING:
     from flab2bp.layout.routing_domain import _Canvas, _Grid
@@ -61,6 +61,9 @@ def _templates(
     return tuple(candidates.values())
 
 
+type _TemplateHeightGroup = tuple[int, int, dict[int, tuple[int, junction.SplitterRouteCandidate]]]
+
+
 @lru_cache(maxsize=32)
 def _template_levels(rules: catalog.BeltAltitudeRules) -> tuple[int, ...]:
     return tuple(
@@ -81,16 +84,62 @@ def _template_levels(rules: catalog.BeltAltitudeRules) -> tuple[int, ...]:
 @lru_cache(maxsize=32)
 def _template_groups(
     rules: catalog.BeltAltitudeRules,
-) -> tuple[tuple[Cell, int, dict[int, tuple[int, junction.SplitterRouteCandidate]]], ...]:
+) -> tuple[tuple[tuple[int, int], tuple[_TemplateHeightGroup, ...]], ...]:
     groups: dict[Cell, dict[int, tuple[int, junction.SplitterRouteCandidate]]] = {}
     for order, template in enumerate(_templates(rules)):
         height = template.entry.dock[2]
         dx, dy, end_height = template.exit.dock
         groups.setdefault((dx, dy, end_height - height), {})[height] = order, template
-    return tuple(
-        (offset, sum(1 << height for height in templates), templates)
-        for offset, templates in groups.items()
-    )
+    by_offset: dict[tuple[int, int], list[_TemplateHeightGroup]] = {}
+    for (dx, dy, dz), templates in groups.items():
+        by_offset.setdefault((dx, dy), []).append(
+            (dz, sum(1 << height for height in templates), templates)
+        )
+    return tuple((offset, tuple(heights)) for offset, heights in by_offset.items())
+
+
+class RouteOwnership:
+    """Candidate-index ownership plus sparse causal reads during emission."""
+
+    def __init__(self, base_count: int) -> None:
+        self._owners: list[frozenset[NetId]] = [frozenset()] * base_count
+        self._dependents: dict[int, set[int]] = {}
+
+    def attribute(
+        self,
+        count: int,
+        indices: Collection[int],
+        net_id: NetId,
+        *,
+        dependencies: Collection[int] = (),
+    ) -> None:
+        self._owners.extend([frozenset()] * (count - len(self._owners)))
+        route = frozenset((net_id,))
+        for index in indices:
+            previous = self._owners[index]
+            self._owners[index] = previous | route if previous else route
+        for dependency in dependencies:
+            self._dependents.setdefault(dependency, set()).update(indices)
+
+    def snapshot(self) -> tuple[frozenset[NetId], ...]:
+        # Later siblings can mutate a shared attachment after its first reader.
+        # Propagate those causes through recorded reads, not geometric proximity
+        # or entire source groups. Cycles converge because owner sets only grow.
+        owners = self._owners.copy()
+        pending = list(self._dependents)
+        queued = set(pending)
+        while pending:
+            source = pending.pop()
+            queued.remove(source)
+            for target in self._dependents.get(source, ()):
+                merged = owners[target] | owners[source]
+                if merged == owners[target]:
+                    continue
+                owners[target] = merged
+                if target not in queued and target in self._dependents:
+                    pending.append(target)
+                    queued.add(target)
+        return tuple(owners)
 
 
 class RoutePrimitives:
@@ -194,33 +243,36 @@ class RoutePrimitives:
                 if not start_free:
                     continue
                 available: list[tuple[int, junction.SplitterRouteCandidate]] = []
-                for (dx, dy, dz), template_heights, templates in groups:
+                for (dx, dy), height_groups in groups:
                     ex, ey = x + dx, y + dy
                     if not (
                         grid.span[0] <= ex <= grid.span[2] and grid.span[1] <= ey <= grid.span[3]
                     ):
                         continue
                     end_free = free_levels(ex, ey)
-                    end_at_start = end_free >> dz if dz >= 0 else end_free << -dz
-                    heights = template_heights & start_free & end_at_start
-                    if not heights:
+                    if not end_free:
                         continue
+                    horizontal = 0
                     if self.rules.vertical_construction:
-                        # Exactly the former two corner orders at both port
-                        # heights, evaluated for all levels together. Opposite
-                        # ports additionally need their middle cardinal tile;
-                        # parallel ports need no horizontal intermediate tile.
+                        # These endpoint and intermediate masks depend only on
+                        # horizontal displacement, not the template's height delta.
                         horizontal = start_free & end_free
                         if abs(dx) == 2 or abs(dy) == 2:
                             horizontal &= free_levels((x + ex) // 2, (y + ey) // 2)
                         elif dx and dy:
                             horizontal &= free_levels(x, ey) | free_levels(ex, y)
-                        at_end = horizontal >> dz if dz >= 0 else horizontal << -dz
-                        heights &= ~(horizontal | at_end)
-                    while heights:
-                        bit = heights & -heights
-                        available.append(templates[bit.bit_length() - 1])
-                        heights ^= bit
+                    for dz, template_heights, templates in height_groups:
+                        end_at_start = end_free >> dz if dz >= 0 else end_free << -dz
+                        heights = template_heights & start_free & end_at_start
+                        if not heights:
+                            continue
+                        if self.rules.vertical_construction:
+                            at_end = horizontal >> dz if dz >= 0 else horizontal << -dz
+                            heights &= ~(horizontal | at_end)
+                        while heights:
+                            bit = heights & -heights
+                            available.append(templates[bit.bit_length() - 1])
+                            heights ^= bit
                 # Grouping must not change edge tie order or the canonical body.
                 available.sort(key=lambda value: value[0])
                 for _order, template in available:

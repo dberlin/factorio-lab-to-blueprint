@@ -46,6 +46,8 @@ def _capture_searches(spec: BuildSpec, budget_s: float) -> list[Case]:
         blocking_owners: Mapping[Cell, int] | None = None,
         *,
         extra_edges: dict[int, tuple[tuple[int, float], ...]] | None = None,
+        deadline_check_every: int | None = None,
+        reverse: bool = False,
     ) -> _PathSearchResult:
         shot_canvas, shot_grid, shot_hist = _snapshot(canvas, grid, history)
         cases.append(
@@ -62,6 +64,8 @@ def _capture_searches(spec: BuildSpec, budget_s: float) -> list[Case]:
                 "forbidden": tuple(forbidden),
                 "blocking_owners": None if blocking_owners is None else dict(blocking_owners),
                 "extra_edges": None if extra_edges is None else dict(extra_edges),
+                "deadline_check_every": deadline_check_every,
+                "reverse": reverse,
             }
         )
         return original(
@@ -80,6 +84,8 @@ def _capture_searches(spec: BuildSpec, budget_s: float) -> list[Case]:
             forbidden,
             blocking_owners,
             extra_edges=extra_edges,
+            deadline_check_every=deadline_check_every,
+            reverse=reverse,
         )
 
     routing_domain._astar = spy
@@ -116,6 +122,7 @@ def _replay(
     budget: dict[str, int] | None = None,
     *,
     deadline: float | None = None,
+    deadline_check_every: int | None = None,
 ) -> _PathSearchResult:
     return routing_domain._astar(
         case["canvas"],
@@ -133,6 +140,10 @@ def _replay(
         case["forbidden"],
         case["blocking_owners"],
         extra_edges=case["extra_edges"],
+        deadline_check_every=(
+            case["deadline_check_every"] if deadline_check_every is None else deadline_check_every
+        ),
+        reverse=case["reverse"],
     )
 
 
@@ -228,9 +239,8 @@ def test_compiled_astar_deadline_checkpoint_preserves_raw_telemetry_and_budget(
 
         with monkeypatch.context() as forced:
             forced.setattr(route_kernel, "_compiled_astar", backend)
-            forced.setattr(routing_domain, "_DEADLINE_CHECK_EVERY", 1)
             forced.setattr(routing_domain, "_expired", expire_at_checkpoint)
-            return _replay(case, budget, deadline=0.0)
+            return _replay(case, budget, deadline=0.0, deadline_check_every=1)
 
     cython_budget, python_budget = {"left": 3}, {"left": 3}
     from_cython = under(compiled, cython_budget)

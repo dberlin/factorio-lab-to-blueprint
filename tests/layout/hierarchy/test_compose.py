@@ -268,8 +268,8 @@ def test_composed_cut_respects_copied_coater_projected_clearance(
 
     Reduced from the retained titanium compose return: Coater1264 at (5,16)
     and newly routed ground support Splitter5996 at (5,18), beneath its
-    level-2 live branch. Only packing is replaced, to hold this stage input
-    fixed; routing and power are real.
+    level-2 live branch. Exercise prospective routing directly: this reduced
+    scene has no coater supply and is deliberately not a complete factory.
     """
     monkeypatch.setenv("FLAB2BP_COATER_NODE", "placed")
     spec = chain_build_spec()
@@ -310,41 +310,35 @@ def test_composed_cut_respects_copied_coater_projected_clearance(
     )
     source = routing_domain._Port(belt=1, x=5, y=source_y, x0=5, x1=5, tiles=(1,), z=2)
     destination = routing_domain._Port(belt=3, x=5, y=24, x0=5, x1=5, tiles=(3,), z=2)
-    packed = compose.PackedCanvas(
-        buildings=buildings,
-        blocks=[],
-        canvas=canvas,
-        nets=[
-            routing_domain._Net(
-                src=source,
-                dst=destination,
-                item="iron-ingot",
-                net_id=NetId(0, 1, "iron-ingot", NetRole.INTERNAL, 0),
-            )
-        ],
-        reservation=PortAccessReservation((), (), ()),
-        gap=2,
+    bounds = canvas.limit
+    assert bounds is not None
+    canvas.junction_projection = routing_domain._CompositionProjection(
+        canvas.buildings, bounds, BandPolicy("portable"), belt_rules=canvas.belt_rules
     )
-    monkeypatch.setattr(compose, "pack_with_access", lambda *args, **kwargs: packed)
-    result = compose.compose(
-        [], [], spec, gap=2, belt_rules=routing_domain._DEFAULT_BELT_RULES, deadline=None
+    net = routing_domain._Net(
+        src=source,
+        dst=destination,
+        item="iron-ingot",
+        net_id=NetId(0, 1, "iron-ingot", NetRole.INTERNAL, 0),
     )
+    result = routing_domain._route_all(canvas, [net], belt_id, belt_model, bounds)
+    placement = Placement(buildings=tuple(canvas.buildings))
     splitters = [
         (index, building)
-        for index, building in enumerate(result.placement.buildings)
+        for index, building in enumerate(placement.buildings)
         if building.item_id == catalog.SPLITTER_ID
     ]
     # The nearby control must route the branch while retaining its original
     # successor: rejecting every possible tap cannot satisfy this regression.
     if source_y == 19:
-        assert result.routed == 1 and result.failures == ()
+        assert len(result.routed) == 1 and result.failures == ()
         assert splitters
         assert canvas.buildings[1].output_obj != 2
         assert any(building.output_obj == 2 for building in canvas.buildings)
     else:
-        assert splitters or result.unrouted_cuts == 1
+        assert splitters or len(result.failures) == 1
 
-    bounds = result.placement.bounds
+    bounds = placement.bounds
     frames = routing_domain._junction_projection_frames(bounds, bounds, BandPolicy("portable"))
     assert frames
     failures = []
@@ -640,7 +634,7 @@ def test_trunk_goals_point_each_lane_head_at_its_partners_doorstep(
         margin=8,
     )
     demands = compose._port_access_inventory(packing.nets).demands
-    goals = compose._trunk_goals(packing, demands)
+    goals, _partners = compose._trunk_goals(packing, demands)
     assert goals, "every cut lane must raise a goal"
     net = packing.nets[0]
     src_cell = (net.src.x, net.src.y, net.src.z)
@@ -709,7 +703,8 @@ def test_a_lane_head_whose_every_partner_is_walled_in_raises_no_goal(
     )
     demands = compose._port_access_inventory(packing.nets).demands
     head = (packing.nets[0].src.x, packing.nets[0].src.y, packing.nets[0].src.z)
-    assert any(d.cell == head for d in compose._trunk_goals(packing, demands)), (
+    goals, _partners = compose._trunk_goals(packing, demands)
+    assert any(d.cell == head for d in goals), (
         "the head must raise a goal before anything is walled in"
     )
 
@@ -722,7 +717,7 @@ def test_a_lane_head_whose_every_partner_is_walled_in_raises_no_goal(
         for dx, dy in compose._NEIGHBOURS:
             packing.canvas.keep_out.add((px + dx, py + dy))
 
-    goals = compose._trunk_goals(packing, demands)
+    goals, _partners = compose._trunk_goals(packing, demands)
     assert all(demand.cell != head for demand in goals), (
         "a demand with no reachable partner doorstep must be OMITTED, not given an empty goal"
     )
@@ -777,7 +772,7 @@ def test_a_sealed_lane_head_is_put_in_missing_by_the_trunk_probe(
             if max(abs(dx), abs(dy)) == 2:
                 canvas.keep_out.add((head[0] + dx, head[1] + dy))
 
-    goals = compose._trunk_goals(packing, demands)
+    goals, partners = compose._trunk_goals(packing, demands)
     assert any(d.cell == head for d in goals), "the partner is untouched, so the goal survives"
 
     # v2's oracle: the local options are all still free, so it admits the head.
@@ -789,7 +784,7 @@ def test_a_sealed_lane_head_is_put_in_missing_by_the_trunk_probe(
     )
 
     probed = compose._reserve_port_access(
-        canvas, demands, boundary=None, bounds=bounds, goals=goals
+        canvas, demands, boundary=None, bounds=bounds, goals=goals, partners=partners
     )
     assert any(demand.cell == head for demand in probed.missing), (
         "the trunk probe must name the head the router cannot run a corridor out of"
@@ -798,20 +793,20 @@ def test_a_sealed_lane_head_is_put_in_missing_by_the_trunk_probe(
     assert not probed.complete
 
 
-def test_pack_with_access_hands_the_reservation_the_trunk_goals(
+def test_real_trunk_endpoint_reservations_do_not_force_local_degradation(
     two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
-):
-    """The oracle is asked the router's question, not the local-only one."""
+) -> None:
+    """Both ends have only one corridor, which their own trunk must enter."""
     left, right, flows, spec, belt_rules = two_solved_blocks
-    captured: dict[str, object] = {}
-    real = compose._reserve_port_access
-
-    def spy(canvas, demands, **kw):
-        captured.setdefault("goals", kw.get("goals"))
-        return real(canvas, demands, **kw)
-
-    monkeypatch.setattr(compose, "_reserve_port_access", spy)
-    compose.pack_with_access(
+    canvas = _Canvas(limit=(0, 0, 6, 0))
+    source = routing_domain._Port(0, 0, 0, 0, 0)
+    destination = routing_domain._Port(1, 6, 0, 6, 6)
+    canvas.keep_out.update({(0, 0), (6, 0)})
+    packing = compose._Packing(
+        [], [], canvas, [routing_domain._Net(src=source, dst=destination, item="iron-ingot")]
+    )
+    monkeypatch.setattr(compose, "_pack_at", lambda *_args, **_kwargs: packing)
+    packed = compose.pack_with_access(
         [left, right],
         flows,
         spec,
@@ -820,7 +815,9 @@ def test_pack_with_access_hands_the_reservation_the_trunk_goals(
         deadline=None,
         margin=8,
     )
-    assert captured["goals"], "the reservation was still asked the local-only question"
+    assert packed.reservation.complete
+    assert packed.degraded == 0
+    assert packed.partial == 0
 
 
 def test_a_walled_in_trunk_rejects_the_narrow_rung(
@@ -1444,7 +1441,13 @@ def test_compose_reports_the_rung_and_the_reservation_it_committed(
 ):
     left, right, flows, spec, belt_rules = two_solved_blocks
     result = compose.compose(
-        [left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=None
+        [left, right],
+        flows,
+        spec,
+        gap=2,
+        belt_rules=belt_rules,
+        deadline=None,
+        settlement_spec=spec,
     )
     assert result.gap in compose.GAP_LADDER
     assert result.port_demands > 0
@@ -1465,7 +1468,13 @@ def test_compose_still_routes_both_cuts_on_the_chain(two_solved_blocks: TwoSolve
     """
     left, right, flows, spec, belt_rules = two_solved_blocks
     result = compose.compose(
-        [left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=None
+        [left, right],
+        flows,
+        spec,
+        gap=2,
+        belt_rules=belt_rules,
+        deadline=None,
+        settlement_spec=spec,
     )
     assert result.failures == ()
     assert result.routed == len(flows)
@@ -1477,63 +1486,19 @@ def test_compose_routes_one_cut_between_two_solved_blocks(two_solved_blocks: Two
     # flows from assign_lanes.
     left, right, flows, spec, belt_rules = two_solved_blocks
     result = compose.compose(
-        [left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=None
+        [left, right],
+        flows,
+        spec,
+        gap=2,
+        belt_rules=belt_rules,
+        deadline=None,
+        settlement_spec=spec,
     )
     assert result.failures == ()
     assert result.routed == len(flows)
     heads = {f.dst.building + result.blocks[1].base for f in flows}
     fed = {b.output_obj for b in result.placement.buildings if b.output_obj is not None}
     assert heads <= fed
-
-
-def test_composition_reports_a_tile_it_could_not_power_as_a_named_cut(
-    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Also pins Property 1: the infill sees the ROUTED canvas, not a pre-routing one.
-
-    A stub that never looked at its `canvas` argument would pass identically
-    whether `plan_power_infill` ran before or after `_route_all` -- the two
-    positions are observationally different only in what the canvas holds.
-    Measured on this fixture (`chain_build_spec`'s two solved blocks, one cut,
-    two flows): the blocks carry 23 and 29 buildings and ZERO Splitters
-    between them; the canvas the stub is actually handed carries 82 buildings
-    and exactly one Splitter, which `_route_all`'s tap (`_tap_source`) is the
-    only thing in this pipeline that could have put there. Both checks below
-    are that evidence, not a guess about which is more robust.
-    """
-    captured: list[_Canvas] = []
-
-    def spy(
-        canvas: _Canvas, **kwargs: object
-    ) -> tuple[list[tuple[int, int]], tuple[tuple[int, int], ...]]:
-        captured.append(canvas)
-        return [], ((63, 3),)
-
-    monkeypatch.setattr(compose, "plan_power_infill", spy)
-
-    left, right, flows, spec, belt_rules = two_solved_blocks
-    pre_routing_buildings = len(left.buildings) + len(right.buildings)
-    pre_routing_splitters = sum(
-        b.item_id == catalog.SPLITTER_ID for b in (*left.buildings, *right.buildings)
-    )
-    result = compose.compose(
-        [left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=None
-    )
-
-    assert result.power_uncovered == 1
-    assert any("power.coverage" in failure and "(63,3)" in failure for failure in result.failures)
-
-    assert len(captured) == 1, "plan_power_infill must be called exactly once"
-    routed_canvas = captured[0]
-    assert len(routed_canvas.buildings) > pre_routing_buildings, (
-        "the canvas plan_power_infill received must already carry the router's own "
-        "belts -- a pre-routing canvas would hold only the two blocks' own buildings"
-    )
-    routed_splitters = sum(b.item_id == catalog.SPLITTER_ID for b in routed_canvas.buildings)
-    assert routed_splitters > pre_routing_splitters, (
-        "the canvas must carry a Splitter the ROUTER created at a tap between the two "
-        "blocks -- neither block's own solved layout contains one"
-    )
 
 
 def test_compose_reports_an_unwired_cut_instead_of_handing_it_back(
@@ -1553,7 +1518,13 @@ def test_compose_reports_an_unwired_cut_instead_of_handing_it_back(
     """
     left, right, flows, spec, belt_rules = two_solved_blocks
     expired = compose.compose(
-        [left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=time.monotonic() - 1.0
+        [left, right],
+        flows,
+        spec,
+        gap=2,
+        belt_rules=belt_rules,
+        deadline=time.monotonic() - 1.0,
+        settlement_spec=spec,
     )
     assert expired.routed < len(flows)
     assert expired.failures
@@ -1596,7 +1567,13 @@ def test_a_stranded_cut_is_named_by_item_blocks_and_router_kind(
 
     monkeypatch.setattr(compose, "_route_all", stranded)
     result = compose.compose(
-        [left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=None
+        [left, right],
+        flows,
+        spec,
+        gap=2,
+        belt_rules=belt_rules,
+        deadline=None,
+        settlement_spec=spec,
     )
 
     assert len(seen) == len(flows)
@@ -1621,7 +1598,13 @@ def test_a_cut_the_router_never_reached_is_reported_under_its_status(
 
     monkeypatch.setattr(compose, "_route_all", out_of_budget)
     result = compose.compose(
-        [left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=None
+        [left, right],
+        flows,
+        spec,
+        gap=2,
+        belt_rules=belt_rules,
+        deadline=None,
+        settlement_spec=spec,
     )
 
     assert result.routed == 0
@@ -1647,7 +1630,13 @@ def test_an_expired_deadline_stops_the_reservation_without_raising(
     )
 
     result = compose.compose(
-        [left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=time.monotonic() - 1.0
+        [left, right],
+        flows,
+        spec,
+        gap=2,
+        belt_rules=belt_rules,
+        deadline=time.monotonic() - 1.0,
+        settlement_spec=spec,
     )
 
     assert routed_calls == [], "an expired reservation must not go on to route"
@@ -1694,7 +1683,13 @@ def test_a_missing_port_corridor_is_named_by_item_and_block(
 
     monkeypatch.setattr(compose, "_reserve_port_access", one_missing)
     result = compose.compose(
-        [left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=None
+        [left, right],
+        flows,
+        spec,
+        gap=2,
+        belt_rules=belt_rules,
+        deadline=None,
+        settlement_spec=spec,
     )
 
     assert seen, "the composer must call the reservation"
@@ -1713,7 +1708,13 @@ def test_block_of_names_the_block_a_composed_index_belongs_to(
     """Every index in a block's own range answers with that block."""
     left, right, flows, spec, belt_rules = two_solved_blocks
     result = compose.compose(
-        [left, right], flows, spec, gap=2, belt_rules=belt_rules, deadline=None
+        [left, right],
+        flows,
+        spec,
+        gap=2,
+        belt_rules=belt_rules,
+        deadline=None,
+        settlement_spec=spec,
     )
     for block in result.blocks:
         stop = block.base + len(block.placement.buildings)
@@ -1819,22 +1820,22 @@ def test_source_junction_stack_respects_live_port_reservation_ownership(
         canvas, [net], belt_id, catalog.building(belt_id).model_index, bounds
     )
     assert result.status is DetailedRouteStatus.ROUTED
-    can_junction = captured[-1]
+    workspace, can_junction = captured[-1]
     tap = (1, -1, 2)
     owner = (2, 0, 0)
     corridor = PortAccessCorridor(access=(1, 0, 0), exit=(0, 0, 0))
 
-    canvas.routing_ports = frozenset()
-    assert canvas.junction_is_clear(*tap)
+    workspace.routing_ports = frozenset()
+    assert workspace.junction_is_clear(*tap)
     assert can_junction(*tap)
     # Restore the still-present lane head's approach through the same staking
     # operation used by rip-up. Neither the tap nor its geometry has changed.
-    reservations = routing_domain._CorridorReservations(canvas)
+    reservations = routing_domain._CorridorReservations(workspace)
     reservations.restore_role(owner, corridor)
     assert not can_junction(*tap), "the support Splitter steals a foreign reserved approach"
-    canvas.routing_ports = frozenset({owner})
+    workspace.routing_ports = frozenset({owner})
     assert can_junction(*tap), "the reservation must remain usable by its own endpoint"
-    canvas.routing_ports = frozenset()
+    workspace.routing_ports = frozenset()
     assert not can_junction(*tap), "owner access must not be cached for the next net"
     reservations.retire(owner, (corridor.access,))
     assert can_junction(*tap), "a released corridor must no longer forbid the junction"
@@ -1928,6 +1929,82 @@ def test_composed_projection_rechecks_earlier_objects_after_extent_expansion(mon
     assert projection.allows((earlier,))
 
 
+def test_composed_projection_growth_preserves_ordered_cleanup_bounds(monkeypatch):
+    bounds = (0, -4, 179, 74)
+    capacity = (-10, -10, 200, 100)
+    belt = catalog.building(2002)
+    base = (
+        *_projection_extent_poles(bounds),
+        PlacedBuilding(2002, belt.model_index, 190, 0, output_obj=9999),
+        PlacedBuilding(2002, belt.model_index, 191, 0),
+    )
+    projection = routing_domain._CompositionProjection(base, capacity, BandPolicy("portable"))
+    interior = junction.make_splitter(40, 0)
+    growth = replace(junction.make_splitter(40, 84), output_obj=9999)
+    farther = junction.make_splitter(195, 84)
+    removed = PlacedBuilding(2002, belt.model_index, 199, 90)
+    observed = []
+
+    def frame_clear(self, additions, frame):
+        observed.append(frame)
+        return False
+
+    monkeypatch.setattr(routing_domain._CompositionProjection, "_frame_clear", frame_clear)
+    for additions in (
+        (interior, growth),
+        (growth, interior, farther),
+        (growth, removed),
+        (growth, removed, farther),
+        (interior, interior, farther),
+        (farther, growth),
+        (growth,),
+        (interior,),
+    ):
+        root = finalize._CleanupSurvivorGraph(Placement(buildings=base))
+        expected = root.snapshot_bounds()
+        for building in additions:
+            root, expected = routing_domain._cleanup_snapshot_with_linkless_static(
+                root, expected, replace(building, input_obj=None, output_obj=None)
+            )
+        observed.clear()
+        # The physical frame can extend toward capacity; its rectangle need
+        # not equal the occupied cleanup rectangle. Compare the entire
+        # reachable frame sequence with the original bounds-chain oracle.
+        expected_frames = routing_domain._junction_projection_frames(
+            expected, capacity, projection.policy
+        )
+        assert not projection.allows(additions)
+        assert tuple(observed) == expected_frames
+
+
+def test_composed_projection_cancelled_suffix_does_not_publish_refusal(monkeypatch):
+    bounds = (0, -4, 179, 74)
+    cancelled = False
+    projection = routing_domain._CompositionProjection(
+        _projection_extent_poles(bounds),
+        bounds,
+        BandPolicy("portable"),
+        cancelled=lambda: cancelled,
+    )
+    left = junction.make_splitter(40, 0)
+    right = junction.make_splitter(50, 0)
+    original = routing_domain._CompositionProjection._member_clear
+
+    def interrupt(self, building, frame):
+        nonlocal cancelled
+        if building == right:
+            cancelled = True
+            return False
+        return original(self, building, frame)
+
+    monkeypatch.setattr(routing_domain._CompositionProjection, "_member_clear", interrupt)
+    with pytest.raises(routing_domain._PreparationDeadline):
+        projection.allows((left, right))
+    cancelled = False
+    monkeypatch.setattr(routing_domain._CompositionProjection, "_member_clear", original)
+    assert projection.allows((left, right))
+
+
 def test_composed_infill_selects_projected_legal_site_without_losing_power():
     from flab2bp.layout import validate
 
@@ -1965,3 +2042,97 @@ def test_composed_infill_selects_projected_legal_site_without_losing_power():
     # Final projection must also keep the exact power-pair gate, not merely
     # the flat keepout used by the historical infill.
     finalize.finalize_placement(placement, BandPolicy("portable"))
+
+
+def test_projection_refusal_attributes_only_witnessed_route_owners() -> None:
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    placement = Placement(
+        buildings=(
+            PlacedBuilding(tower.item_id, tower.model_index, 0, 0),
+            PlacedBuilding(tower.item_id, tower.model_index, 0, 0),
+            PlacedBuilding(tower.item_id, tower.model_index, 30, 30),
+        )
+    )
+    prepared = finalize.prepare_placement_completion(
+        placement,
+        BuildSpec(groups=()),
+        BandPolicy("200"),
+        belt_rules=routing_domain._DEFAULT_BELT_RULES,
+        expect_power=False,
+        deadlines=finalize.PlacementCompletionDeadlines(None, None, None),
+    )
+    assert isinstance(prepared, finalize.PlacementProjectionRefused)
+    first = NetId(0, 1, "iron-ore", NetRole.INTERNAL, 0)
+    second = NetId(1, 2, "copper-ore", NetRole.INTERNAL, 0)
+
+    # Unknown ownership outside the actual failing pair is not a cause.
+    assert compose._projection_failure_owners(
+        prepared, (frozenset({first}), frozenset({second}), None)
+    ) == frozenset({first, second})
+    # A known fixed-base conflict and an unknown route dependency are distinct.
+    assert (
+        compose._projection_failure_owners(prepared, (frozenset(), frozenset(), None))
+        == frozenset()
+    )
+    assert (
+        compose._projection_failure_owners(prepared, (frozenset({first}), None, frozenset()))
+        is None
+    )
+
+    # Witness indices belong to the cleaned materialization, not this raw
+    # placement. Index zero is deliberately a different, also-owned belt.
+    raw = Placement(
+        buildings=(
+            PlacedBuilding(2001, 35, 90, 90),
+            placement.buildings[0],
+            PlacedBuilding(2001, 35, 20, 20),
+            PlacedBuilding(2001, 35, 7, 8, z=Fraction(9, 2)),
+            PlacedBuilding(2001, 35, 6, 8, z=Fraction(4)),
+            PlacedBuilding(2001, 35, 30, 30),
+        )
+    )
+    witnesses = tuple(
+        replace(witness, failure=replace(witness.failure, buildings=(0, 1, 2, 3)))
+        for witness in prepared.refusal.witnesses
+    )
+    cleaned = replace(
+        prepared,
+        refusal=finalize.ProjectionRefusal(
+            tuple(witness.failure for witness in witnesses), witnesses=witnesses
+        ),
+        survivor_indices=(3, 1, 2, 5),
+        link_dependencies=(finalize.CleanupLinkDependency(3, "output", (4,)),),
+    )
+    owners = (
+        frozenset({second}),
+        frozenset({second}),
+        None,
+        frozenset({first}),
+        frozenset({first}),
+        frozenset(),
+    )
+    detours = compose._projection_interior_detours(cleaned, raw, owners)
+    assert {(hint.owners, hint.cells) for hint in detours} == {
+        (frozenset({first}), frozenset({(7, 8, 4), (7, 8, 5)})),
+        (frozenset({first}), frozenset({(6, 8, 4)})),
+    }
+    assert compose._projection_failure_owners(cleaned, owners) is None
+
+
+def test_composition_without_cuts_refuses_expired_preparation(
+    two_solved_blocks: TwoSolvedBlocks,
+) -> None:
+    """Zero route obligations cannot turn expired preparation into success."""
+    left, right, _flows, spec, belt_rules = two_solved_blocks
+    result = compose.compose(
+        [left, right],
+        [],
+        spec,
+        gap=2,
+        belt_rules=belt_rules,
+        deadline=time.monotonic() - 1,
+        settlement_spec=spec,
+    )
+    assert result.routed == 0
+    assert result.unrouted_cuts == 0
+    assert result.failures

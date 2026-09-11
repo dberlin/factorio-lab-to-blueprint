@@ -44,8 +44,11 @@ __all__ = [
     "Finding",
     "IdMap",
     "Report",
+    "RoutingAdmissionFailure",
     "Severity",
+    "belt_link_adjacency",
     "judge_placement",
+    "routing_admission",
     "validate",
 ]
 
@@ -63,6 +66,27 @@ class Finding:
     message: str
     buildings: tuple[int, ...] = ()
     detail: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class RoutingAdmissionFailure:
+    """A narrow refusal and its causal indices in the unmodified placement.
+
+    ``None`` means unknown support, not an empty immutable cause. Passing
+    routing admission is not factory certification.
+    """
+
+    finding: Finding
+    support: frozenset[int] | None
+
+
+class _RoutingAdmissionCancelled(Exception):
+    """Abort a disposable admission without publishing partial evidence."""
+
+
+def _admission_checkpoint(cancelled: Callable[[], bool] | None) -> None:
+    if cancelled is not None and cancelled():
+        raise _RoutingAdmissionCancelled
 
 
 @dataclass(frozen=True, slots=True)
@@ -918,10 +942,10 @@ OPT_IN: set[str] = set()
 NEEDS_GROUPS: set[str] = set()
 
 
-def check(
+def check[F: Check](
     cid: str, *, needs_spec: bool = False, needs_groups: bool = False
-) -> Callable[[Check], Check]:
-    def register(fn: Check) -> Check:
+) -> Callable[[F], F]:
+    def register(fn: F) -> F:
         CHECKS[cid] = fn
         if needs_spec:
             NEEDS_SPEC.add(cid)
@@ -3316,13 +3340,33 @@ def _piler_ports(ctx: Context) -> Iterable[Finding]:
 
 @check("belt.link_adjacent")
 def _link_adjacent(ctx: Context) -> Iterable[Finding]:
-    bs = ctx.placement.buildings
-    for i, b in ctx.of_kind(Kind.BELT):
+    return _link_adjacent_findings(ctx.placement.buildings, ctx.kinds, ctx.of_kind(Kind.BELT))
+
+
+def belt_link_adjacency(buildings: Sequence[PlacedBuilding]) -> Report:
+    """Judge only belt-link adjacency without building unrelated validation indexes.
+
+    This is a rejection screen, not a complete placement certificate.
+    """
+    kinds = tuple(_kind(building) for building in buildings)
+    belts = ((i, building) for i, building in enumerate(buildings) if kinds[i] is Kind.BELT)
+    return Report(
+        tuple(_link_adjacent_findings(buildings, kinds, belts)),
+        checks_run=("belt.link_adjacent",),
+    )
+
+
+def _link_adjacent_findings(
+    bs: Sequence[PlacedBuilding],
+    kinds: Sequence[Kind],
+    belts: Iterable[tuple[int, PlacedBuilding]],
+) -> Iterable[Finding]:
+    for i, b in belts:
         o = b.output_obj
         if o is None or not (0 <= o < len(bs)):
             continue
         target = bs[o]
-        cells = _occupied_tiles(target, ctx.kinds[o]) or [(target.x, target.y, target.z)]
+        cells = _occupied_tiles(target, kinds[o]) or [(target.x, target.y, target.z)]
         if not any(abs(cx - b.x) + abs(cy - b.y) <= 1 for cx, cy, _ in cells):
             yield Finding(
                 "belt.link_adjacent",
@@ -4437,7 +4481,9 @@ def _entry_items(ctx: Context) -> dict[int, set[str]]:
     return out
 
 
-def _reachable_from_outside(ctx: Context, level: Fraction) -> set[tuple[int, int]]:
+def _reachable_from_outside(
+    ctx: Context, level: Fraction, *, cancelled: Callable[[], bool] | None = None
+) -> set[tuple[int, int]]:
     """Cells at altitude ``level`` a NEW belt could occupy, coming from outside.
 
     Flood fill from a ring one tile beyond the bounding box, through cells no
@@ -4454,6 +4500,7 @@ def _reachable_from_outside(ctx: Context, level: Fraction) -> set[tuple[int, int
     seen = {start}
     queue = deque([start])
     while queue:
+        _admission_checkpoint(cancelled)
         x, y = queue.popleft()
         for nxt in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
             if not (lo_x <= nxt[0] <= hi_x and lo_y <= nxt[1] <= hi_y):
@@ -4466,7 +4513,9 @@ def _reachable_from_outside(ctx: Context, level: Fraction) -> set[tuple[int, int
 
 
 @check("flow.external_entry_reachable", needs_spec=True)
-def _external_entry_reachable(ctx: Context) -> Iterable[Finding]:
+def _external_entry_reachable(
+    ctx: Context, *, cancelled: Callable[[], bool] | None = None
+) -> Iterable[Finding]:
     """The player must be able to reach every lane they are asked to fill.
 
     This is the discriminator the bounding-box rule was reaching for and missed.
@@ -4494,13 +4543,15 @@ def _external_entry_reachable(ctx: Context) -> Iterable[Finding]:
     free: dict[Fraction, set[tuple[int, int]]] = {}
     for item, runs in sorted(_entry_runs(ctx).items()):
         for r in runs:
+            _admission_checkpoint(cancelled)
             run = ctx.runs[r]
             walled: list[int] = []
             for i in run.indices:
+                _admission_checkpoint(cancelled)
                 b = bs[i]
                 plane = free.get(b.z)
                 if plane is None:
-                    plane = _reachable_from_outside(ctx, b.z)
+                    plane = _reachable_from_outside(ctx, b.z, cancelled=cancelled)
                     free[b.z] = plane
                 if any(
                     (b.x + dx, b.y + dy) in plane for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
@@ -5780,26 +5831,26 @@ def _physical_flow(ctx: Context) -> _PhysicalFlow:
         consumer_attachments: set[int] = set()
         for sorter_index in selected_sorters:
             sorter = sorters.building(sorter_index)
-            source, sink = sorter.input_obj, sorter.output_obj
+            sorter_source, sorter_sink = sorter.input_obj, sorter.output_obj
             if (
-                source is None
-                or sink is None
-                or not (0 <= source < len(bs) and 0 <= sink < len(bs))
+                sorter_source is None
+                or sorter_sink is None
+                or not (0 <= sorter_source < len(bs) and 0 <= sorter_sink < len(bs))
             ):
                 continue
-            if ctx.kinds[source] is Kind.MACHINE:
-                origin = node(item, 2, source)
-                producer_attachments.add(source)
-            elif source in physical:
-                index = representative[source]
+            if ctx.kinds[sorter_source] is Kind.MACHINE:
+                origin = node(item, 2, sorter_source)
+                producer_attachments.add(sorter_source)
+            elif sorter_source in physical:
+                index = representative[sorter_source]
                 origin = node(item, 1 if ctx.kinds[index] is Kind.BELT else 0, index)
             else:
                 continue
-            if ctx.kinds[sink] is Kind.MACHINE:
-                target = node(item, 3, sink)
-                consumer_attachments.add(sink)
-            elif sink in physical:
-                target = node(item, 0, representative[sink])
+            if ctx.kinds[sorter_sink] is Kind.MACHINE:
+                target = node(item, 3, sorter_sink)
+                consumer_attachments.add(sorter_sink)
+            elif sorter_sink in physical:
+                target = node(item, 0, representative[sorter_sink])
             else:
                 continue
             resource_arcs[("sorter", sorter_index)].append(add(item, origin, target, maximum))
@@ -5841,9 +5892,9 @@ def _physical_flow(ctx: Context) -> _PhysicalFlow:
         if kind == "belt":
             buildings = members[index]
             capacities = [
-                rate * ctx.stack_of(ctx.run_of[b])
+                belt_rate * ctx.stack_of(ctx.run_of[b])
                 for b in buildings
-                if (rate := cat.BELT_RATE.get(bs[b].item_id)) is not None
+                if (belt_rate := cat.BELT_RATE.get(bs[b].item_id)) is not None
             ]
             capacity = min(capacities) if capacities else None
         else:
@@ -6693,6 +6744,173 @@ def belt_run_demands(
     if ctx.unresolved_machines():
         return ctx.runs, {}, stacks
     return ctx.runs, _run_demand(ctx), stacks
+
+
+class _RoutingAdmissionSupport:
+    """Share physical-component witnesses across refusals in one Context."""
+
+    def __init__(self, ctx: Context, cancelled: Callable[[], bool] | None) -> None:
+        self.ctx = ctx
+        self.cancelled = cancelled
+        self.components: dict[int, frozenset[int]] = {}
+        self.sorters_by_peer: dict[int, list[int]] = defaultdict(list)
+        for i, sorter in ctx.of_kind(Kind.SORTER):
+            _admission_checkpoint(cancelled)
+            for peer in (sorter.input_obj, sorter.output_obj):
+                if peer is not None:
+                    self.sorters_by_peer[peer].append(i)
+
+    def component(self, run: int) -> frozenset[int]:
+        """All physical links, including transfer sorters and machine docks."""
+        cached = self.components.get(run)
+        if cached is not None:
+            return cached
+        ctx = self.ctx
+        bs = ctx.placement.buildings
+        pending = [(RUN, run)]
+        seen: set[Node] = set()
+        support: set[int] = set()
+        runs: list[int] = []
+        while pending:
+            _admission_checkpoint(self.cancelled)
+            node = pending.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            kind, index = node
+            if kind == RUN:
+                runs.append(index)
+                support.update(ctx.runs[index].indices)
+            else:
+                support.add(index)
+            pending.extend(ctx.pred.get(node, ()))
+            pending.extend(ctx.succ.get(node, ()))
+        # Sorter transfers are graph edges, not nodes. Preserve their records,
+        # the rate-producing/consuming machines, and explicit belt-port peers.
+        for index in tuple(support):
+            _admission_checkpoint(self.cancelled)
+            support.update(self.sorters_by_peer.get(index, ()))
+            building = bs[index]
+            for peer in (building.input_obj, building.output_obj):
+                if peer is not None and 0 <= peer < len(bs):
+                    support.add(peer)
+        for index in tuple(support):
+            _admission_checkpoint(self.cancelled)
+            if ctx.kinds[index] is Kind.SORTER:
+                sorter = bs[index]
+                for peer in (sorter.input_obj, sorter.output_obj):
+                    if peer is not None and 0 <= peer < len(bs):
+                        support.add(peer)
+        frozen = frozenset(support)
+        for index in runs:
+            self.components[index] = frozen
+        return frozen
+
+    def for_entry(self, run: int) -> frozenset[int]:
+        """Every trapped same-plane pocket and its occupied frontier.
+
+        The exterior flood has already proved all these neighbors inaccessible.
+        Traverse every free pocket adjacent to ANY run tile, using precisely its
+        occupancy and four-neighbor clearance definition. Direct occupied
+        neighbors matter too, including a fully packed pocket.
+        """
+        ctx = self.ctx
+        support = set(self.component(run))
+        pending: list[tuple[int, int, Fraction]] = []
+        seen: set[tuple[int, int, Fraction]] = set()
+        min_x, min_y, max_x, max_y = ctx.placement.bounds
+
+        def visit(x: int, y: int, z: Fraction) -> None:
+            cell = (x, y, z)
+            occupied = ctx.occupancy.get(cell)
+            if occupied is not None:
+                support.update(occupied)
+            elif cell not in seen:
+                # A boundary escape contradicts a complete trapped witness.
+                # Never turn that inconsistency into a partial owner set.
+                if not (min_x <= x <= max_x and min_y <= y <= max_y):
+                    raise _RoutingAdmissionCancelled
+                seen.add(cell)
+                pending.append(cell)
+
+        for index in ctx.runs[run].indices:
+            _admission_checkpoint(self.cancelled)
+            b = ctx.placement.buildings[index]
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                visit(b.x + dx, b.y + dy, b.z)
+        while pending:
+            _admission_checkpoint(self.cancelled)
+            x, y, z = pending.pop()
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                visit(x + dx, y + dy, z)
+        return frozenset(support)
+
+
+def routing_admission(
+    placement: Placement,
+    spec: BuildSpec,
+    *,
+    belt_rules: cat.BeltAltitudeRules,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[RoutingAdmissionFailure, ...] | None:
+    """Early external-entry and shared belt-capacity evidence before settlement.
+
+    Uses one Context on the unmodified emitted candidate. Shared capacity keeps
+    the final validator's exact physical-flow authority; resource diagnostics
+    alone are not a complete causal support set.
+
+    Empty means only these narrow checks passed, not final certification.
+    ``None`` means cancellation or inconclusive flow evidence, never acceptance
+    or a reusable refusal. Full conservation, sorter-only capacity and all
+    remaining checks still belong to final certification.
+    """
+    try:
+        _admission_checkpoint(cancelled)
+        ctx = _context(
+            placement,
+            spec,
+            id_map(spec),
+            256,
+            belt_rules.max_z,
+            belt_rules.vertical_construction,
+        )
+        _admission_checkpoint(cancelled)
+        unresolved = ctx.unresolved_machines()
+        _admission_checkpoint(cancelled)
+        failures: list[RoutingAdmissionFailure] = []
+        if unresolved:
+            for finding in _group_resolved(ctx):
+                _admission_checkpoint(cancelled)
+                failures.append(RoutingAdmissionFailure(finding, None))
+        support: _RoutingAdmissionSupport | None = None
+        admission_checks: tuple[Callable[[], Iterable[Finding]], ...] = (
+            lambda: _external_entry_reachable(ctx, cancelled=cancelled),
+            lambda: _belt_capacity(ctx),
+        )
+        for check_fn in admission_checks:
+            _admission_checkpoint(cancelled)
+            for finding in check_fn():
+                _admission_checkpoint(cancelled)
+                run = finding.detail.get("run")
+                witness = None
+                if (
+                    finding.check == "flow.external_entry_reachable"
+                    and isinstance(run, int)
+                    and 0 <= run < len(ctx.runs)
+                ):
+                    if support is None:
+                        support = _RoutingAdmissionSupport(ctx, cancelled)
+                    witness = support.for_entry(run)
+                # Shared-capacity cuts have no localized ownership proof.
+                # Preserve unknown support instead of fair-share witnesses.
+                _admission_checkpoint(cancelled)
+                failures.append(RoutingAdmissionFailure(finding, witness))
+            _admission_checkpoint(cancelled)
+            if any(result.feasible is None for result in ctx.cache.physical_results.values()):
+                return None
+        return tuple(failures)
+    except _RoutingAdmissionCancelled:
+        return None
 
 
 def judge_placement(

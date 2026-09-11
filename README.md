@@ -106,6 +106,12 @@ Density is the objective. The layout may use direct insertion between adjacent m
 choosing per recipe between *extra products* mode, which compounds savings up the chain, and
 *production speedup* mode, which halves machine count at that step.
 
+The explicit `hierarchical` strategy prioritizes a feasible factory: it tries one eligible
+solver per unresolved block shape and runs an alternate only if that shape remains unresolved. Divisible
+refused blocks are cut before another parent-widening round, within the existing budget.
+This can trade density for lower latency; it does not promise the smallest layout.
+The `best` portfolio's smallest-validator-clean-result selection is unchanged.
+
 ## Latitude portability
 
 `--band portable` is the default for both layout strategies and the web interface. The

@@ -4462,6 +4462,7 @@ class FreeformLayout:
         workers: int | None = None,
         direct_insert: bool = True,
         arrangements: int | None = None,
+        first_feasible: bool = False,
         portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
         publish_incumbent: Callable[[Placement], None] | None = None,
         #: Told what this sweep is doing, for a debugging view.  A SEPARATE
@@ -4487,6 +4488,9 @@ class FreeformLayout:
         #: search as it stood before arrangements existed, and is what the A/B
         #: compares against.
         self.arrangements = _ARRANGEMENTS if arrangements is None else arrangements
+        # Hierarchy needs a certified block before it can solve the interface;
+        # standalone search still spends its remaining wall improving density.
+        self.first_feasible = first_feasible
         #: The best ``(area, belt_tiles)`` another racing strategy has certified,
         #: or ``None``.  A SCHEDULING input only: it never enters ``best_key``,
         #: so it can never select or reject a placement.
@@ -4503,7 +4507,7 @@ class FreeformLayout:
         time_budget_s: float = 15.0,
         absolute_deadline: float | None = None,
     ) -> Placement:
-        """Return the densest ROUTABLE ``Placement``, or raise :class:`NoValidLayout`.
+        """Return a certified placement, minimizing area unless ``first_feasible``.
 
         Routability is a condition for existing, not a ranking key.  It used to
         be the latter -- packs were ordered ``(routable, area, belt_tiles)`` and
@@ -5527,6 +5531,8 @@ class FreeformLayout:
                     # from a later clock.  The maximum absorbed the duplicate;
                     # the median does not, and it is biased upwards.
                     started_at = None
+                if self.first_feasible and best is not None:
+                    break
                 # WHAT THIS TURN COSTS, in the two halves `_room_for_another`
                 # keeps apart: the completion tail, which must fit in full and is
                 # a maximum, and the estimate of the turn's own work in front of

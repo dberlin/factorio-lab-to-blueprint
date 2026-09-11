@@ -1,9 +1,9 @@
 # cython: language_level=3, boundscheck=False, wraparound=False, initializedcheck=False, cdivision=True
 """Flat-grid A* inner loop for ``routing_domain._astar``'s modeled graph.
 
-The heap orders on ``(f, g, index)`` exactly as ``heapq`` orders the Python
-tuples. Supplied transition costs and the expansion checkpoint arithmetic
-preserve the Python loop's cost association and budget write-back rules.
+The heap orders on ``(f, tie_cost, index)`` exactly as Python's heapq.
+Ordinary A* supplies ``-g`` to advance through equal-cost plateaus; the relaxed
+capacity search retains its original tie cost and quota accounting.
 """
 
 from array import array
@@ -11,7 +11,7 @@ from array import array
 from cpython.pyport cimport PY_SSIZE_T_MAX
 
 from libc.math cimport INFINITY, isfinite
-from libc.stdlib cimport free, malloc
+from libc.stdlib cimport calloc, free, malloc
 
 
 cdef struct Entry:
@@ -170,6 +170,35 @@ cdef double _h(
     return far
 
 
+cdef double _height_h(
+    long long index, long long gh, long long levels,
+    const long long[::1] targets, const double[::1] costs, long long stride,
+) noexcept nogil:
+    cdef long long column = index // levels
+    cdef long long level = index - column * levels
+    cdef long long x = column // gh
+    cdef long long y = column - x * gh
+    cdef long long dx, dy, offset
+    cdef double candidate, best = INFINITY
+    cdef Py_ssize_t k
+    for k in range(0, targets.shape[0], 5):
+        dx = targets[k] - x
+        if x - targets[k + 2] > dx:
+            dx = x - targets[k + 2]
+        if dx < 0:
+            dx = 0
+        dy = targets[k + 1] - y
+        if y - targets[k + 3] > dy:
+            dy = y - targets[k + 3]
+        if dy < 0:
+            dy = 0
+        offset = targets[k + 4] + level * stride + dx + dy
+        candidate = costs[offset]
+        if candidate < best:
+            best = candidate
+    return best
+
+
 def astar_flat(
     const unsigned char[::1] flags,
     const double[::1] hist,
@@ -192,6 +221,9 @@ def astar_flat(
     object expired,
     tuple transitions,
     dict extra_edges,
+    const long long[::1] height_targets,
+    const double[::1] height_costs,
+    long long height_stride,
 ):
     """Expand from ``starts`` until a goal, a budget, or an empty heap.
 
@@ -224,6 +256,9 @@ def astar_flat(
     cdef long long columns, width
     cdef bint negotiating = hist.shape[0] > 0
     cdef Py_ssize_t goal_count = goal_columns.shape[0] // 2
+    cdef Py_ssize_t height_count = height_targets.shape[0] // 5
+    cdef Py_ssize_t heuristic_cells
+    cdef long long height_field_size, cache_at, field_offset
     cdef bint single = goal_count == 1
     cdef long long only_x = goal_columns[0] if goal_count else 0
     cdef long long only_y = goal_columns[1] if goal_count else 0
@@ -237,6 +272,8 @@ def astar_flat(
     cdef long long* prev = NULL
     cdef long long* via = NULL
     cdef double* hcache = NULL
+    cdef unsigned char* discovered = NULL
+    cdef unsigned char* heuristic_ready = NULL
     cdef Transition* movement = NULL
     cdef Py_ssize_t* movement_start = NULL
     cdef ExtraEdge* extra = NULL
@@ -269,6 +306,36 @@ def astar_flat(
     if len(goal_box) != 4 or goal_columns.shape[0] % 2 != 0:
         raise ValueError("goal geometry must contain complete coordinates")
     bx0, by0, bx1, by1 = goal_box
+    if height_targets.shape[0] % 5:
+        raise ValueError("height targets must contain complete rectangles and field offsets")
+    if height_count:
+        if height_stride != width + gh - 1:
+            raise ValueError("height field stride must cover the indexed XY distance")
+        if height_stride > PY_SSIZE_T_MAX // levels:
+            raise MemoryError()
+        height_field_size = height_stride * levels
+        if not height_costs.shape[0] or height_costs.shape[0] % height_field_size:
+            raise ValueError("height costs must contain complete altitude fields")
+        if extra_edges:
+            raise ValueError("ordinary height costs cannot guide physical connector edges")
+        for k in range(0, height_targets.shape[0], 5):
+            if not (
+                0 <= height_targets[k] <= height_targets[k + 2] < width
+                and 0 <= height_targets[k + 1] <= height_targets[k + 3] < gh
+            ):
+                raise ValueError("height target rectangle is outside the grid")
+            field_offset = height_targets[k + 4]
+            if (
+                field_offset < 0 or field_offset % height_field_size
+                or field_offset > height_costs.shape[0] - height_field_size
+            ):
+                raise ValueError("height target field offset is outside the cost buffer")
+        for i in range(height_costs.shape[0]):
+            if not isfinite(height_costs[i]) or height_costs[i] < 0.0:
+                raise ValueError("height costs must be finite and nonnegative")
+    elif height_costs.shape[0] or height_stride:
+        raise ValueError("height costs require target rectangles")
+    heuristic_cells = size if height_count else columns
     for k in range(goal_count):
         if not (0 <= goal_columns[2 * k] < width and 0 <= goal_columns[2 * k + 1] < gh):
             raise ValueError("goal column is outside the grid")
@@ -364,8 +431,11 @@ def astar_flat(
         best = <double*> malloc(size * sizeof(double))
         prev = <long long*> malloc(size * sizeof(long long))
         via = <long long*> malloc(size * sizeof(long long))
-        hcache = <double*> malloc(columns * sizeof(double))
-        if best == NULL or prev == NULL or via == NULL or hcache == NULL:
+        hcache = <double*> malloc(heuristic_cells * sizeof(double))
+        discovered = <unsigned char*> calloc(size, sizeof(unsigned char))
+        heuristic_ready = <unsigned char*> calloc(heuristic_cells, sizeof(unsigned char))
+        if (best == NULL or prev == NULL or via == NULL or hcache == NULL
+                or discovered == NULL or heuristic_ready == NULL):
             raise MemoryError()
         if extra_count:
             extra = <ExtraEdge*> malloc(extra_count * sizeof(ExtraEdge))
@@ -393,14 +463,11 @@ def astar_flat(
                 band_hi[bands] = hi
                 bands += 1
 
-        for i in range(size):
-            best[i] = INFINITY
-            prev[i] = -1
-            via[i] = -1
-            if extra_start != NULL:
+        # Only presence bytes need zeroing. Cost, heuristic and parent values
+        # are written before their first read; most large-grid cells stay unused.
+        if extra_start != NULL:
+            for i in range(size):
                 extra_start[i] = -1
-        for i in range(columns):
-            hcache[i] = -1.0
         k = 0
         for source_index, source_group in extra_edges.items():
             group = source_group
@@ -429,10 +496,16 @@ def astar_flat(
         for i in range(starts.shape[0]):
             si = starts[i]
             best[si] = 0.0
+            discovered[si] = 1
             prev[si] = -1
+            via[si] = -1
             col = si // levels
             h0 = _h(col, gh, single, exact_goals, only_x, only_y, goal_columns, goal_count,
                     bx0, by0, bx1, by1, bands, band_index, band_lo, band_hi, alt_flat, columns)
+            if height_count:
+                far = _height_h(si, gh, levels, height_targets, height_costs, height_stride)
+                if far > h0:
+                    h0 = far
             heap.push(h0, 0.0, si)
 
         checkpoint = max_expansions + 1
@@ -443,7 +516,7 @@ def astar_flat(
 
         while heap.size > 0:
             cur = heap.pop()
-            g = cur.g
+            g = -cur.g
             if g > best[cur.index]:
                 continue
             expansions += 1
@@ -497,18 +570,26 @@ def astar_flat(
                 cost = g + move.cost
                 if negotiating:
                     cost += hist[nxt] * pressure
-                if cost < best[nxt]:
+                if cost < (best[nxt] if discovered[nxt] else INFINITY):
                     best[nxt] = cost
+                    discovered[nxt] = 1
                     prev[nxt] = cur.index
                     via[nxt] = run
                     col = q + move.column
-                    far = hcache[col]
-                    if far < 0.0:
+                    cache_at = nxt if height_count else col
+                    if heuristic_ready[cache_at]:
+                        far = hcache[cache_at]
+                    else:
                         far = _h(col, gh, single, exact_goals, only_x, only_y, goal_columns,
                                  goal_count, bx0, by0, bx1, by1, bands, band_index, band_lo,
                                  band_hi, alt_flat, columns)
-                        hcache[col] = far
-                    heap.push(cost + far, cost, nxt)
+                        if height_count:
+                            h0 = _height_h(nxt, gh, levels, height_targets, height_costs, height_stride)
+                            if h0 > far:
+                                far = h0
+                        hcache[cache_at] = far
+                        heuristic_ready[cache_at] = 1
+                    heap.push(cost + far, -cost, nxt)
             k = extra_start[cur.index] if extra_start != NULL else -1
             while k != -1:
                 edge = extra[k]
@@ -519,18 +600,26 @@ def astar_flat(
                 cost = g + edge.cost
                 if negotiating:
                     cost += hist[nxt] * pressure
-                if cost < best[nxt]:
+                if cost < (best[nxt] if discovered[nxt] else INFINITY):
                     best[nxt] = cost
+                    discovered[nxt] = 1
                     prev[nxt] = cur.index
                     via[nxt] = -1
                     col = nxt // levels
-                    far = hcache[col]
-                    if far < 0.0:
+                    cache_at = nxt if height_count else col
+                    if heuristic_ready[cache_at]:
+                        far = hcache[cache_at]
+                    else:
                         far = _h(col, gh, single, exact_goals, only_x, only_y, goal_columns,
                                  goal_count, bx0, by0, bx1, by1, bands, band_index, band_lo,
                                  band_hi, alt_flat, columns)
-                        hcache[col] = far
-                    heap.push(cost + far, cost, nxt)
+                        if height_count:
+                            h0 = _height_h(nxt, gh, levels, height_targets, height_costs, height_stride)
+                            if h0 > far:
+                                far = h0
+                        hcache[cache_at] = far
+                        heuristic_ready[cache_at] = 1
+                    heap.push(cost + far, -cost, nxt)
         else:
             # The heap emptied: sealed.  Same write-back as the Python loop.
             budget_left = start_left - expansions
@@ -561,7 +650,7 @@ def astar_flat(
             path = out
         elif kind == 2:
             for i in range(size):
-                if best[i] != INFINITY:
+                if discovered[i]:
                     settled.append(i)
         return path, expansions, kind, settled, budget_left
     finally:
@@ -569,6 +658,8 @@ def astar_flat(
         free(prev)
         free(via)
         free(hcache)
+        free(discovered)
+        free(heuristic_ready)
         free(band_index)
         free(band_lo)
         free(band_hi)

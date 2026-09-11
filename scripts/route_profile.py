@@ -217,6 +217,8 @@ def install(tally: Tally) -> Callable[[], None]:
         blocking_owners: Mapping[Cell, int] | None = None,
         *,
         extra_edges: dict[int, tuple[tuple[int, float], ...]] | None = None,
+        deadline_check_every: int | None = None,
+        reverse: bool = False,
     ) -> routing_domain._PathSearchResult:
         t0 = time.perf_counter()
         out = orig_astar(
@@ -235,6 +237,8 @@ def install(tally: Tally) -> Callable[[], None]:
             forbidden,
             blocking_owners,
             extra_edges=extra_edges,
+            deadline_check_every=deadline_check_every,
+            reverse=reverse,
         )
         dt = time.perf_counter() - t0
         tally.add("astar", dt)
@@ -258,7 +262,13 @@ def install(tally: Tally) -> Callable[[], None]:
         planned_power_sites: Sequence[tuple[int, int]] | None = None,
         junction_frame_bans: Sequence[frozenset[Cell]] = (),
         *,
-        prioritize_source_families: bool = False,
+        prioritize_source_families: bool = True,
+        settle: Callable[
+            [routing_domain._Canvas, tuple[frozenset[routing_domain.NetId], ...]],
+            routing_domain.RouteSettlement,
+        ]
+        | None = None,
+        flow_limits: routing_domain.RoutingFlowLimits | None = None,
     ) -> DetailedRouteResult:
         t0 = time.perf_counter()
         out = orig_route_all(
@@ -272,6 +282,8 @@ def install(tally: Tally) -> Callable[[], None]:
             planned_power_sites,
             junction_frame_bans,
             prioritize_source_families=prioritize_source_families,
+            settle=settle,
+            flow_limits=flow_limits,
         )
         tally.add("route_all", time.perf_counter() - t0)
         tally.passes += 1
@@ -293,6 +305,7 @@ def install(tally: Tally) -> Callable[[], None]:
         primitives: RoutePrimitives | None = None,
         source_taps: Mapping[int, Cell] | None = None,
         deadline: float | None = None,
+        ownership: routing_domain.RouteOwnership | None = None,
     ) -> tuple[int, ...]:
         t0 = time.perf_counter()
         out = orig_commit(
@@ -309,6 +322,7 @@ def install(tally: Tally) -> Callable[[], None]:
             primitives=primitives,
             source_taps=source_taps,
             deadline=deadline,
+            ownership=ownership,
         )
         tally.add("commit_paths", time.perf_counter() - t0)
         return out
@@ -354,6 +368,12 @@ def install(tally: Tally) -> Callable[[], None]:
         tentative_ok: bool = False,
         owned_guard: Mapping[Cell, Cell] | None = None,
         primitives: RoutePrimitives | None = None,
+        source_choices: dict[Cell, set[Cell]] | None = None,
+        witness: Callable[[Cell, Cell], bool] | None = None,
+        deadline: float | None = None,
+        path_ranges: Mapping[int, tuple[int, int]] | None = None,
+        merged_cells: Collection[Cell] = frozenset(),
+        protected_sinks: Collection[Cell] = frozenset(),
     ) -> set[Cell]:
         t0 = time.perf_counter()
         out = orig_merge(
@@ -366,6 +386,12 @@ def install(tally: Tally) -> Callable[[], None]:
             tentative_ok=tentative_ok,
             owned_guard=owned_guard,
             primitives=primitives,
+            source_choices=source_choices,
+            witness=witness,
+            deadline=deadline,
+            path_ranges=path_ranges,
+            merged_cells=merged_cells,
+            protected_sinks=protected_sinks,
         )
         tally.add("merge_frontier", time.perf_counter() - t0)
         return out

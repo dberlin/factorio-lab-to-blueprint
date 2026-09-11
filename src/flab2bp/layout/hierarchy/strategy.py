@@ -34,15 +34,13 @@ floored to ``BLOCK_BUDGET_MIN_S`` instead and it runs anyway.  The per-job wall
 is combined with the parent's deadline inside :func:`_solve_block`, at job
 start -- see its docstring for why the parent cannot do it.
 
-WIDEN-BEFORE-CUT CANNOT HAPPEN AT THE WEB UI'S 15 s DEFAULT.  A block whose
-dispatched arm refused is re-offered the full arm set by :func:`_recut` before
-an attempt is spent cutting it, but ``_recut`` is only reached after the round
-loop's ``recut_rounds >= allowed_recuts`` check, and
-:func:`allowed_recut_rounds` is 0 for the ~8.7 s round wall a 15 s budget
-leaves -- so on the default budget the seed round IS the build, a refusing
-block is neither widened nor cut, and the one-arm rule ships there without its
-escalation (the v3 gate's §2.1 measures ``arm_dispatch_both = 0`` on both 15 s
-cells, and its §5 lever 3 is the regression that has no mitigation there).
+FEASIBILITY BEFORE OPTIONAL DENSITY WORK. A shape gets one offered arm at a
+time, with unresolved shapes ahead of fallback arms. A valid primary suppresses
+unused alternatives; already completed valid results retain offered-order
+area ties. Refused divisible parents use an existing useful cut before another
+round widening the parent. Indivisible parents retain untried-arm fallback.
+The global funding and recut bounds still apply: the web UI's 15 s budget
+normally funds only the seed round, so it cannot promise a child round.
 
 WHAT THE PARENT PROMISES A CHILD.  A block can finish early but never outlives
 the build.  It does NOT get the parent's band policy: the composer discards each
@@ -127,13 +125,13 @@ import math
 import multiprocessing
 import time
 from bisect import bisect_left
+from collections import deque
 from collections.abc import Callable
-from concurrent.futures import Executor, ProcessPoolExecutor
-from dataclasses import dataclass, field, replace
+from concurrent.futures import FIRST_COMPLETED, Executor, Future, ProcessPoolExecutor, wait
+from dataclasses import dataclass, field
 from typing import Literal, cast
 
 from flab2bp.dsp import catalog
-from flab2bp.layout import finalize
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     NoValidLayout,
@@ -158,8 +156,13 @@ from flab2bp.layout.hierarchy.partition import (
     split_block,
     sub_spec,
 )
+from flab2bp.layout.route_feedback import (
+    RouteSettlementCancelled,
+    RouteSettlementCompleted,
+    RouteSettlementCrashed,
+    RouteSettlementRefused,
+)
 from flab2bp.layout.sequence_solver import SequencePairLayout
-from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
 from flab2bp.spec import BuildSpec
 
 #: Floor and ceiling on one block's own wall. Funding counts unique eligible
@@ -354,6 +357,7 @@ def _block_layout(
             belt_rules=belt_rules,
             band_policy=BandPolicy.parse("portable"),
             workers=workers,
+            first_feasible=True,
         )
     if strategy == "sequence-pair":
         return SequencePairLayout(
@@ -501,10 +505,9 @@ class _Entry:
     #: child created by a re-cut has never been cut itself, and starting it at
     #: its parent's count would deny it the cuts `split_block` offers.
     attempts: int = 0
-    #: Arms this block has already been offered.  A block whose dispatched
-    #: arm refused is re-offered the FULL set before `_recut` spends an
-    #: attempt on it: widening the arms is strictly cheaper than growing the
-    #: block list, and it is design §3.3's escalate-only-if-needed rule.
+    #: Arms actually attempted or answered by a remembered refusal. Unused
+    #: density alternatives do not count; an indivisible refused block can
+    #: still widen to an untried arm.
     arms_tried: frozenset[str] = frozenset()
 
 
@@ -514,14 +517,13 @@ _GroupedWork = tuple[tuple[_WorkKey, tuple[int, ...]], ...]
 
 @dataclass(frozen=True, slots=True)
 class _RoundPlan:
-    """Final funding and stable fanout for exactly the jobs a round submits."""
+    """Conservative funding and stable fanout for eligible primary/fallback jobs."""
 
     budget_s: float
     waves: int
     active: _GroupedWork
     remembered: _GroupedWork
     keys_by_slot: tuple[tuple[_WorkKey, ...], ...]
-    skipped_slots: int
 
 
 def _plan_round(
@@ -537,32 +539,46 @@ def _plan_round(
     """Group once, then maximize funding using final-budget memo eligibility."""
     slots_by_key: dict[_WorkKey, list[int]] = {}
     keys_by_slot: list[tuple[_WorkKey, ...]] = []
-    raw_jobs = 0
     for slot, (index, arms) in enumerate(zip(todo, arms_by_slot, strict=True)):
         shape = shape_key(entries[index].units)
         keys = tuple((shape, arm) for arm in arms)
         keys_by_slot.append(keys)
-        raw_jobs += len(keys)
         for key in keys:
             slots_by_key.setdefault(key, []).append(slot)
 
-    thresholds = sorted(nogood.refused.get(key, -math.inf) for key in slots_by_key)
+    thresholds_by_shape: dict[ShapeKey, list[float]] = {}
+    for key in slots_by_key:
+        thresholds_by_shape.setdefault(key[0], []).append(nogood.refused.get(key, -math.inf))
+    for thresholds in thresholds_by_shape.values():
+        thresholds.sort()
+
+    def funded_waves(budget_s: float) -> int:
+        # Arms of one shape cannot overlap. Funding each dependency layer
+        # conservatively avoids handing a fallback wall its primary already
+        # spent, even when the pool has otherwise unused capacity.
+        counts = [bisect_left(thresholds, budget_s) for thresholds in thresholds_by_shape.values()]
+        return sum(
+            math.ceil(sum(count > level for count in counts) / width)
+            for level in range(max(counts, default=0))
+        )
+
     budget = BLOCK_BUDGET_MAX_S
-    actual_waves = 0
-    if bisect_left(thresholds, BLOCK_BUDGET_MAX_S):
+    actual_waves = funded_waves(budget)
+    if actual_waves:
         candidates = {BLOCK_BUDGET_MIN_S, BLOCK_BUDGET_MAX_S}
         candidates.update(
             threshold
+            for thresholds in thresholds_by_shape.values()
             for threshold in thresholds
             if BLOCK_BUDGET_MIN_S <= threshold <= BLOCK_BUDGET_MAX_S
         )
         round_share = remaining / rounds_left
         candidates.update(
             min(BLOCK_BUDGET_MAX_S, max(BLOCK_BUDGET_MIN_S, round_share / waves))
-            for waves in range(1, math.ceil(len(thresholds) / width) + 1)
+            for waves in range(1, actual_waves + 1)
         )
         for budget in sorted(candidates, reverse=True):
-            actual_waves = math.ceil(bisect_left(thresholds, budget) / width)
+            actual_waves = funded_waves(budget)
             if not actual_waves or budget <= min(
                 BLOCK_BUDGET_MAX_S, max(BLOCK_BUDGET_MIN_S, round_share / actual_waves)
             ):
@@ -581,7 +597,6 @@ def _plan_round(
         tuple(active),
         tuple(remembered),
         tuple(keys_by_slot),
-        raw_jobs - len(active),
     )
 
 
@@ -651,7 +666,7 @@ class HierarchicalLayout:
         # it would pay a spawned process pool's own start-up again for jobs
         # that pool never even needed to be wider for.  Constructing the
         # executor here does not itself spawn a worker -- `ProcessPoolExecutor`
-        # starts processes lazily, on the first `map()` -- so a build that
+        # starts processes lazily, on the first `submit()` -- so a build that
         # refuses before ever funding a round (the check just below) spawns
         # nothing at all.
         width = self._pool_width()
@@ -805,8 +820,8 @@ class HierarchicalLayout:
         # as a refusal line rather than a stack, which is why the message
         # carries the exception type and text verbatim.
         #
-        # The body is kept to exactly those calls, so a defect in the rest of
-        # this module -- the settlement below included -- is still a traceback.
+        # Keep composed-spec construction and unexpected settlement errors
+        # outside these guards, as they were before settlement moved into compose.
         started = time.monotonic()
         try:
             tails: dict[int, list[LaneEnd]] = {}
@@ -817,11 +832,18 @@ class HierarchicalLayout:
             allocation = allocate_cuts(spec, cuts, tails, heads)
             stats.player_fed = float(len(allocation.player_fed))
             stats.cut_lanes = float(len(allocation.flows))
+        except ContractError as exc:
+            raise refuse(f"lane contract: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 - preserve boundary/allocation crash handling
+            raise refuse(f"composition crashed: {type(exc).__name__}: {exc}"[:400]) from exc
+        built = composed_spec(spec, blocks, player_fed=allocation.player_fed)
+        try:
             composition = compose_mod.compose(
                 solved,
                 allocation.flows,
                 spec,
                 gap=DEFAULT_GAP,
+                settlement_spec=built,
                 belt_rules=self.belt_rules,
                 policy=self.band_policy,
                 # The PARENT's wall, not the reserve. The reserve is what the
@@ -834,6 +856,9 @@ class HierarchicalLayout:
         except Exception as exc:  # noqa: BLE001 - a composer CRASH is a refusal
             raise refuse(f"composition crashed: {type(exc).__name__}: {exc}"[:400]) from exc
         compose_wall = time.monotonic() - started
+        settlement = composition.settlement
+        if isinstance(settlement, RouteSettlementCrashed):
+            raise settlement.error.with_traceback(settlement.traceback)
         stats.compose_gap = float(composition.gap)
         stats.port_demands = float(composition.port_demands)
         stats.reservation_degraded = float(composition.reservation_degraded)
@@ -857,55 +882,13 @@ class HierarchicalLayout:
             # joined, human-readable string is capped.
             raise refuse(("unrouted cut(s): " + "; ".join(composition.failures))[:400])
 
-        # The spec the composition is JUDGED against is the one re-derived from
-        # the blocks, not the one that was asked for: splitting rounds machine
-        # counts up per (recipe, block), and that over-production is real.
-        built = composed_spec(spec, blocks, player_fed=allocation.player_fed)
-        # The settlement below is the only stretch with no budget of its own:
-        # `assign_sorter_slots` takes no `cancelled` and `certify` is atomic. It
-        # is entered only with wall left to enter it with; `settlement_reserve_s`
-        # is what the rounds above held back so that is normally true.
-        if time.monotonic() >= deadline:
-            raise refuse("deadline exhausted before finalization")
-        # THE SLOT PASS RUNS ON THE COMPOSED LIST, not on the blocks.
-        # `slots.assign_sorter_slots` is "the ONE post-pass both strategies
-        # already call" on a finished building list, and its belt half assigns
-        # each link a free cell in the RECEIVING belt's pool -- an assignment
-        # that is only correct over the whole list.  The composition adds links
-        # no block ever saw: the router's own belt runs, and the cut lanes that
-        # attach to a block's boundary belt.  Left unassigned those keep the
-        # dataclass default of 0, which is the receiving belt's OWN output cell,
-        # and `game.slot_occupancy` convicts every one of them.
-        try:
-            placement = replace(
-                composition.placement,
-                buildings=assign_sorter_slots(composition.placement.buildings),
-            )
-        except SlotUndetermined as exc:
-            raise refuse(f"a composed link's slot could not be derived: {exc}") from exc
-        projection = finalize.prepare_placement_completion(
-            placement,
-            built,
-            self.band_policy,
-            belt_rules=self.belt_rules,
-            expect_power=True,
-            deadlines=finalize.PlacementCompletionDeadlines(deadline, deadline, None),
-        )
-        if isinstance(projection, finalize.PlacementCompletionCancelled):
-            raise refuse("budget expired finalizing the composed placement")
-        if isinstance(projection, finalize.PlacementProjectionRefused):
-            raise refuse(f"composed placement refused finalization: {projection.refusal}")
-        # The strict projection clock ends inside the finalizer. Certification
-        # has neither a new admission check nor a post-certification deadline.
-        completion = finalize.complete_placement(projection)
-        report = completion.report
-        if not report.ok:
-            raise refuse(
-                "composed placement failed validation: "
-                + "; ".join(f"{f.check}: {f.message}" for f in report.errors[:3])
-            )
-        assert isinstance(completion, finalize.PlacementCompleted)
-        placement = completion.placement
+        if isinstance(settlement, RouteSettlementCancelled):
+            raise refuse(f"budget expired during composed {settlement.phase}")
+        if isinstance(settlement, RouteSettlementRefused):
+            raise refuse(settlement.reason[:400])
+        if not isinstance(settlement, RouteSettlementCompleted):
+            raise refuse("composition returned without complete settled acceptance")
+        placement = settlement.completion.placement
 
         # NO `strips_max` HERE.  It was a diagnostic -- strips in the widest
         # block -- and v2 Task 2 made `partition.strip_count` call
@@ -959,8 +942,8 @@ class HierarchicalLayout:
         `plan_strips` still runs at most once per (shape, budget), which is
         what the cache is for.
 
-        A block that has already been offered its dispatched arm and refused
-        gets the FULL set.
+        A block that has already tried its dispatched arm gets the FULL set
+        if it survives recutting (for example, an indivisible parent).
 
         THIS RUNS IN THE ORCHESTRATOR, NOT A GUARDED WORKER (v3 Task 3 fix
         round 1).  `dispatch.block_features` calls `plan_strips` -- real
@@ -972,8 +955,8 @@ class HierarchicalLayout:
         `Placement`-or-`NoValidLayout` contract this method promises, for a
         reason that has nothing to do with the block itself.  Degrading to
         the FULL arm set on failure is the same escape valve shape as the two
-        `dispatch.UNCOVERED_*` branches: race both arms rather than lose the
-        whole build to a feature-vector defect on one block.
+        `dispatch.UNCOVERED_*` branches: retain alternate feasibility backends
+        rather than lose the whole build to a feature-vector defect.
         """
         arms = self._arms()
         if len(arms) < 2:
@@ -982,12 +965,18 @@ class HierarchicalLayout:
         chosen = cache.get(key)
         if chosen is None:
             try:
-                chosen = dispatch.dispatch_arms(
-                    dispatch.block_features(sub_spec(spec, entry.units, 0)),
-                    arms,
-                    budget_s=block_budget,
-                )
-            except Exception:  # noqa: BLE001 - a crashed feature vector races both arms, not an abort
+                sub = sub_spec(spec, entry.units, 0)
+                # Every coater-free shape below the measured exact floor keeps
+                # both arms eligible. Strip planning cannot narrow this decision.
+                if not sub.spray_lanes and block_budget < dispatch.SEQUENCE_PAIR_EXACT_FLOOR_S:
+                    chosen = arms
+                else:
+                    chosen = dispatch.dispatch_arms(
+                        dispatch.block_features(sub),
+                        arms,
+                        budget_s=block_budget,
+                    )
+            except Exception:  # noqa: BLE001 - a crashed feature vector keeps both arms eligible
                 chosen = arms
             cache[key] = chosen
         if entry.arms_tried >= set(chosen):
@@ -1018,13 +1007,14 @@ class HierarchicalLayout:
         deadline: float,
         nogood: _ShapeNoGood,
     ) -> int:
-        """Solve every block in ``todo`` with every arm; smallest valid wins.
+        """Solve unresolved shapes with bounded primary-then-fallback work.
 
         ``pool`` is the ONE pool `lay_out` built for the whole build, opened
         and closed there -- this method never constructs or shuts one down.
 
-        ``plan`` is the round loop's finalized budget and grouped work.
-        No grouping or no-good eligibility is recomputed here.
+        ``plan`` conservatively funds all eligible arms, but only a failure
+        makes the next arm necessary. No optional density work is submitted
+        to fill capacity. Grouping and no-good eligibility are not recomputed.
 
         A JOB IS KEYED BY ``(shape, arm)``, NOT BY ``(block, arm)``.
         ``_recut``'s "halve" attempt on a single-recipe block routinely hands
@@ -1047,59 +1037,86 @@ class HierarchicalLayout:
         attached to; that is a cosmetic cost this sharing accepts, not a
         correctness one. ``nogood`` additionally skips a
         ``(shape, arm)`` a PRIOR round already saw refused at this budget or
-        higher, without even building its sub-spec. Returns how many
-        ``(block, arm)`` pairs this round did NOT hand to a placer -- a
-        remembered no-good or a same-round duplicate.
+        higher, without even building its sub-spec. Returns remembered
+        ``(block, arm)`` answers and same-round shares actually consumed;
+        suppressed alternatives are neither tried nor geometric no-goods.
         """
         block_budget = plan.budget_s
-        jobs: list[_BlockJob] = []
-        for (_key, arm), slots in plan.active:
-            index = todo[slots[0]]
-            jobs.append(
-                (
-                    sub_spec(spec, entries[index].units, index),
-                    arm,
-                    block_budget,
-                    self.belt_rules,
-                    _BLOCK_WORKERS,
-                    # The PARENT's wall. `_solve_block` combines it with
-                    # `block_budget` at job start, so a job in a later wave is
-                    # not handed a clock the earlier waves already spent.
-                    deadline,
-                )
-            )
-        try:
-            # `_solve_block` is resolved from the module globals at call time,
-            # which is what lets a test substitute the worker.
-            results = list(pool.map(_solve_block, jobs))
-        except Exception as exc:  # noqa: BLE001 - a dead pool is a refusal, not an abort
-            # A worker killed by the OOM killer, an unpicklable spec, an
-            # interpreter that failed to start: `map` re-raises all of it on the
-            # parent side. Losing the whole build to that would be the same
-            # mistake `_solve_block`'s own CRASH arm exists to avoid, one level
-            # up -- so the round becomes a round of refusals naming the failure.
-            # The pool itself is left as `lay_out` made it: a pool that died
-            # here stays dead, and any further round this build starts (a
-            # re-cut) will hit this same guard again rather than crash.
-            results = [
-                (
-                    {
-                        "strategy": job[1],
-                        "verdict": f"POOL FAILED: {type(exc).__name__}: {exc}"[:400],
-                        "ok": False,
-                    },
-                    None,
-                )
-                for job in jobs
-            ]
-
         skip_record: tuple[dict[str, object], Placement | None] = (
             {"verdict": "REFUSED: shape already refused this build (no-good)", "ok": False},
             None,
         )
         outcome_by_key = dict.fromkeys((key for key, _slots in plan.remembered), skip_record)
-        for (job_key, _slots), result in zip(plan.active, results, strict=True):
-            record, _placement = result
+        slots_by_key = dict(plan.active)
+        keys_by_shape: dict[ShapeKey, deque[_WorkKey]] = {}
+        for key, _slots in plan.active:
+            keys_by_shape.setdefault(key[0], deque()).append(key)
+        # One in-flight job per shape; fallback rejoins behind shapes that
+        # have not had a primary yet. Spare capacity never races density arms.
+        ready = deque(keys_by_shape)
+        pending: dict[Future[tuple[dict[str, object], Placement | None]], _WorkKey] = {}
+        solved_slots: set[int] = set()
+        width = self._pool_width()
+
+        def finish(key: _WorkKey, result: tuple[dict[str, object], Placement | None]) -> None:
+            outcome_by_key[key] = result
+            if result[1] is not None:
+                solved_slots.update(slots_by_key[key])
+            ready.append(key[0])
+
+        def pool_failure(arm: str, exc: Exception) -> tuple[dict[str, object], Placement | None]:
+            return (
+                {
+                    "strategy": arm,
+                    "verdict": f"POOL FAILED: {type(exc).__name__}: {exc}"[:400],
+                    "ok": False,
+                },
+                None,
+            )
+
+        while ready or pending:
+            while ready and len(pending) < width and time.monotonic() < deadline:
+                shape = ready.popleft()
+                keys = keys_by_shape[shape]
+                while keys and all(slot in solved_slots for slot in slots_by_key[keys[0]]):
+                    keys.popleft()
+                if not keys:
+                    continue
+                key = keys.popleft()
+                index = todo[slots_by_key[key][0]]
+                job: _BlockJob = (
+                    sub_spec(spec, entries[index].units, index),
+                    key[1],
+                    block_budget,
+                    self.belt_rules,
+                    _BLOCK_WORKERS,
+                    # Each worker clips at job start, not at round start.
+                    deadline,
+                )
+                try:
+                    pending[pool.submit(_solve_block, job)] = key
+                except Exception as exc:  # noqa: BLE001 - retain a failed submission as evidence
+                    finish(key, pool_failure(key[1], exc))
+            if not pending:
+                break
+            # Consume completed work without waiting for earlier submissions.
+            # Stable pending order also keeps simultaneous completions repeatable.
+            completed = [future for future in pending if future.done()]
+            if not completed:
+                wait(pending, return_when=FIRST_COMPLETED)
+                completed = [future for future in pending if future.done()]
+            for future in completed:
+                key = pending.pop(future)
+                try:
+                    result = future.result()
+                except Exception as exc:  # noqa: BLE001 - one dead worker cannot erase solved siblings
+                    result = pool_failure(key[1], exc)
+                finish(key, result)
+
+        for job_key, _slots in plan.active:
+            if job_key not in outcome_by_key:
+                continue
+            record, _placement = outcome_by_key[job_key]
             # Only a genuine placer REFUSAL says anything about the SHAPE.
             # "POOL FAILED" and a placer CRASH are infrastructure failures --
             # remembering either as a no-good would hide a pool or placer bug
@@ -1127,10 +1144,9 @@ class HierarchicalLayout:
                 wall = record.get("wall_s")
                 spent = float(wall) if isinstance(wall, int | float) else block_budget
                 nogood.record(job_key[0], job_key[1], min(block_budget, spent))
-            outcome_by_key[job_key] = result
 
         for slot, index in enumerate(todo):
-            slot_keys = plan.keys_by_slot[slot]
+            slot_keys = [key for key in plan.keys_by_slot[slot] if key in outcome_by_key]
             outcomes = [outcome_by_key[key] for key in slot_keys]
             winners = [placement for _record, placement in outcomes if placement is not None]
             entries[index].verdicts = tuple(
@@ -1141,7 +1157,9 @@ class HierarchicalLayout:
             }
             if winners:
                 entries[index].placement = min(winners, key=lambda p: p.area)
-        return plan.skipped_slots
+        return sum(len(slots) for _key, slots in plan.remembered) + sum(
+            len(slots) - 1 for key, slots in plan.active if key in outcome_by_key
+        )
 
 
 def _recut(
@@ -1167,19 +1185,21 @@ def _recut(
         if index not in refusing:
             grown.append(entry)
             continue
-        if not entry.arms_tried >= set(arms):
-            # An arm this block has never been offered is cheaper than a cut.
-            # Leaving the entry alone is `progress` because `_arms_for` will
-            # widen it next round.
-            grown.append(entry)
+        # Infrastructure failures say nothing about whether a smaller geometry
+        # can place. Only genuine refusal (including a remembered one) earns a cut.
+        children = (
+            _next_cut(entry, nogood=nogood, arms=arms, budget_s=budget_s)
+            if any(verdict.startswith("REFUSED:") for verdict in entry.verdicts)
+            else None
+        )
+        if children is not None:
             progress = True
-            continue
-        children = _next_cut(entry, nogood=nogood, arms=arms, budget_s=budget_s)
-        if children is None:
+            grown.extend(_Entry(list(child)) for child in children)
+        else:
             grown.append(entry)
-            continue
-        progress = True
-        grown.extend(_Entry(list(child)) for child in children)
+            # No useful child: leave the parent eligible for untried-arm rescue.
+            # The existing global round bound still limits this fallback.
+            progress |= not entry.arms_tried >= set(arms)
     return grown, progress
 
 

@@ -19,14 +19,17 @@ simply one edge of the assignment, not a claim that one tail wires one head.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass
 from fractions import Fraction
 
+from flab2bp.dsp import catalog, params
+from flab2bp.indexed.cargo_flow import BoundaryRateFlow, CargoDestination, SprayedCargoFlow
 from flab2bp.layout import markers
 from flab2bp.layout.base import Placement
 from flab2bp.layout.buildings import Buildings
 from flab2bp.layout.hierarchy.partition import Cut
-from flab2bp.spec import BuildSpec
+from flab2bp.spec import BuildSpec, MachineGroup
 
 
 @dataclass(frozen=True)
@@ -53,80 +56,412 @@ class ContractError(ValueError):
     """A consuming block's entry lane cannot be filled from what is offered."""
 
 
-def _machines_behind(buildings: Buildings, strip: int) -> int:
-    """Production machines (not belts, sorters, or splitters) in one strip.
+def _machine_groups(buildings: Buildings, sub: BuildSpec) -> dict[int, MachineGroup]:
+    """Resolve only recipe/building/mode identity, without a validation context."""
+    identities: dict[tuple[int, int, tuple[int, ...]], MachineGroup] = {}
+    ambiguous: set[tuple[int, int, tuple[int, ...]]] = set()
+    mode_items = {entry.machine_item_id for entry in catalog.MODE_DRIVEN_MACHINE.values()}
+    known = catalog.known_recipe_ids()
+    for group in sub.groups:
+        machine = catalog.get_item_id(group.machine_item_id)
+        mode = catalog.MODE_DRIVEN_MACHINE.get(group.recipe_id)
+        if machine is None or (mode is None and group.recipe_id not in known):
+            continue
+        key = (
+            machine,
+            0 if mode is not None else catalog.recipe_id(group.recipe_id),
+            params.parameters_for(group.recipe_id) if mode is not None else (),
+        )
+        previous = identities.get(key)
+        if previous is not None and (
+            previous.inputs_per_machine != group.inputs_per_machine
+            or previous.outputs_per_machine != group.outputs_per_machine
+        ):
+            ambiguous.add(key)
+        identities[key] = group
+    groups: dict[int, MachineGroup] = {}
+    for i, building in enumerate(buildings.all()):
+        is_mode = building.item_id in mode_items
+        if not building.recipe_id and not is_mode:
+            continue
+        key = (
+            building.item_id,
+            0 if is_mode else building.recipe_id,
+            building.parameters if is_mode else (),
+        )
+        if key not in identities or key in ambiguous:
+            raise ContractError(f"machine {i}: boundary rates require an unambiguous spec group")
+        groups[i] = identities[key]
+    return groups
 
-    A machine building is the only kind that carries a real recipe, so
-    ``recipe_id != 0`` picks it out.  Reapply that exact predicate over the
-    indexed owner-strip bucket: the Buildings kind bucket is deliberately
-    coarser and also contains power nodes and belt addons.
-    """
+
+def _lane_belts(buildings: Buildings, index: int, item: str, *, puts_on: bool) -> set[int]:
+    """Follow directed runs and compatible transfer sorters, once per belt."""
     records = buildings.all()
-    return sum(1 for i in buildings.by_owner_strip(strip) if records[i].recipe_id != 0)
+    item_id = catalog.get_item_id(item)
+    pending = [index]
+    seen: set[int] = set()
+    while pending:
+        start = pending.pop()
+        if start in seen:
+            continue
+        run = buildings.belt_run(start, forward=not puts_on, through_any_host=True)
+        for belt in run:
+            if belt in seen:
+                continue
+            seen.add(belt)
+            sorters = buildings.sorters_into(belt) if puts_on else buildings.sorters_out_of(belt)
+            for sorter_index in sorters:
+                sorter = records[sorter_index]
+                if sorter.carries_item not in (None, item) or sorter.filter_id not in (0, item_id):
+                    continue
+                target = sorter.input_obj if puts_on else sorter.output_obj
+                if (
+                    target is not None
+                    and target not in seen
+                    and buildings.by_index(target) is not None
+                    and catalog.is_belt(records[target].item_id)
+                    and records[target].carries_item in (None, item)
+                ):
+                    pending.append(target)
+    return seen
 
 
-def _machines_on_lane(buildings: Buildings, index: int, *, puts_on: bool) -> int:
-    """Machines docked on the run through lane ``index``.
-
-    Drive from the run's belts into their incident sorter buckets rather than
-    scanning every building once per boundary lane.
-    """
-    run = buildings.belt_run(index, forward=not puts_on, through_any_host=True)
+def _machines_on_lane(buildings: Buildings, index: int, item: str, *, puts_on: bool) -> set[int]:
+    """Machine endpoints reached through directed transport and sorter transfers."""
+    run = _lane_belts(buildings, index, item, puts_on=puts_on)
     records = buildings.all()
+    item_id = catalog.get_item_id(item)
     machines: set[int] = set()
     for belt in run:
         sorters = buildings.sorters_into(belt) if puts_on else buildings.sorters_out_of(belt)
         for sorter_index in sorters:
             sorter = records[sorter_index]
+            if sorter.carries_item not in (None, item) or sorter.filter_id not in (0, item_id):
+                continue
             machine = sorter.input_obj if puts_on else sorter.output_obj
-            candidate = buildings.by_index(machine)
-            if machine is not None and candidate is not None and candidate.recipe_id != 0:
+            if machine is not None and buildings.by_index(machine) is not None:
                 machines.add(machine)
-    return len(machines)
+        port = records[belt].input_obj if puts_on else records[belt].output_obj
+        if port is not None and buildings.by_index(port) is not None:
+            machines.add(port)
+    return machines
+
+
+def _net_apportion(
+    total: Fraction,
+    buildings: Buildings,
+    indices: list[int],
+    item: str,
+    groups: dict[int, MachineGroup],
+    lane_machines: list[set[int]],
+    *,
+    puts_on: bool,
+) -> list[Fraction]:
+    """Reserve internal consumers before offering surplus or requesting deficits.
+
+    The bipartite graph is directed reachability, not undirected components.
+    Each producer/consumer owns one rate edge even if several lanes reach it.
+    Exact rational flow chooses a feasible share at overlapping branches rather
+    than charging an internal consumer equally to unrelated output lanes.
+    """
+    supply = {
+        i: g.outputs_per_machine[item] for i, g in groups.items() if item in g.outputs_per_machine
+    }
+    demand = {
+        i: g.inputs_per_machine[item] for i, g in groups.items() if item in g.inputs_per_machine
+    }
+    allocation = BoundaryRateFlow(supply, demand, puts_on=puts_on)
+    for lane, machines in zip(indices, lane_machines, strict=True):
+        if puts_on:
+            allocation.connect_lane(lane, machines & supply.keys())
+        else:
+            allocation.connect_lane(lane, machines & demand.keys())
+    allocation.set_boundary_rate(total)
+    records = buildings.all()
+    item_id = catalog.get_item_id(item)
+    for machine in supply:
+        reached: set[int] = set()
+        starts = {
+            i
+            for i in buildings.by_input_obj(machine)
+            if catalog.is_belt(records[i].item_id) and records[i].carries_item in (None, item)
+        }
+        for sorter_index in buildings.sorters_out_of(machine):
+            sorter = records[sorter_index]
+            if sorter.carries_item not in (None, item) or (
+                sorter.filter_id and sorter.filter_id != item_id
+            ):
+                continue
+            target = sorter.output_obj
+            if target is None or buildings.by_index(target) is None:
+                continue
+            if catalog.is_belt(records[target].item_id):
+                if records[target].carries_item in (None, item):
+                    starts.add(target)
+            else:
+                reached.add(target)
+        for start in starts:
+            reached.update(_machines_on_lane(buildings, start, item, puts_on=False))
+        allocation.connect_internal(machine, reached & demand.keys())
+    required = sum(demand.values(), Fraction(0)) + (total if puts_on else Fraction(0))
+    delivered, rates = allocation.allocate(indices)
+    if delivered != required:
+        raise ContractError(
+            f"{item}: connected machines cannot meet internal demand and boundary rate {total}"
+        )
+    if sum(rates, Fraction(0)) != total:
+        raise ContractError(f"{item}: boundary rate {total} exceeds connected deficit")
+    return rates
 
 
 def _apportion(
     total: Fraction,
     buildings: Buildings,
     indices: list[int],
+    item: str,
+    groups: dict[int, MachineGroup],
     *,
     puts_on: bool = True,
 ) -> list[Fraction]:
-    """Split ``total`` across ``indices``' lanes, sum preserved exactly.
+    """Exact connected rates; count a shared machine only once across its lanes.
 
-    A lane's share is the share of the block's machines standing behind it, and
-    there are two records of that.  ``owner_strip`` is the precise one and is
-    used whenever EVERY lane in the group carries it.  A freeform block's
-    boundary belts are router trunks and carry none, which used to send the
-    whole group to an EVEN split -- a split that is fiction whenever the lanes
-    are not equally backed, and fiction with a consequence: ``assign_lanes``
-    builds the transportation assignment on these rates, ``compose`` realises
-    exactly that bipartite structure in belt, and ``flow.conservation`` then
-    convicts the component whose promised rate exceeds the machines actually
-    wired into it.  So the fallback is the machines DOCKED on each lane's belt
-    run instead, which no router pass erases.
-
-    Only when neither record yields a weight -- no strips and no docked
-    machines -- is the split even.  Giving one lane weight 0 would zero-rate a
-    real lane, and a zero-rated entry head is one the assignment never feeds,
-    which the validator convicts as unfed.  Every branch is exact ``Fraction``
-    arithmetic, so the parts always sum back to ``total``.
+    Strip ownership is placement provenance, not a rate or connectivity proof.
+    For pure boundary items each machine shares its rate across the endpoints
+    that reach it. Mixed internal/boundary items instead reserve internal demand
+    on directed paths before the requested exact boundary total is distributed.
     """
-    n = len(indices)
+    if not total:
+        return [Fraction(0) for _ in indices]
+    lane_machines = [
+        _machines_on_lane(buildings, i, item, puts_on=puts_on) & groups.keys() for i in indices
+    ]
+    if any(
+        item in (g.inputs_per_machine if puts_on else g.outputs_per_machine)
+        for g in groups.values()
+    ):
+        return _net_apportion(
+            total, buildings, indices, item, groups, lane_machines, puts_on=puts_on
+        )
+    memberships: dict[int, int] = defaultdict(int)
+    for machines in lane_machines:
+        for machine in machines:
+            memberships[machine] += 1
+    shares = {
+        machine: (
+            groups[machine].outputs_per_machine if puts_on else groups[machine].inputs_per_machine
+        ).get(item, Fraction(0))
+        / count
+        for machine, count in memberships.items()
+    }
+    weights = [sum((shares[m] for m in machines), Fraction(0)) for machines in lane_machines]
+    available = sum(weights, Fraction(0))
+    if not available or total > available or (not puts_on and total != available):
+        raise ContractError(
+            f"{item}: boundary rate {total} does not match connected machine rate {available}"
+        )
+    return [total * weight / available for weight in weights]
+
+
+def _spray_cargo_weights(
+    cargo: str,
+    buildings: Buildings,
+    sub: BuildSpec,
+    groups: dict[int, MachineGroup],
+    rides: dict[int, int],
+    heads: list[int],
+    tails: list[int],
+) -> dict[int, Fraction]:
+    """Route cargo through its first coater, retaining source-rate constraints.
+
+    Once a path reaches a coater, later coaters do not consume another spray.
+    A fresh branch joining between two coaters still reaches the second as its
+    first. Condensing those paths to source/coater/consumer edges avoids a
+    per-belt flow graph without losing directed reachability or exact rates.
+    """
     records = buildings.all()
-    weights: list[int]
-    if any(records[i].owner_strip is None for i in indices):
-        weights = [_machines_on_lane(buildings, i, puts_on=puts_on) for i in indices]
-    else:
-        weights = []
-        for i in indices:
-            strip = records[i].owner_strip
-            assert strip is not None  # every lane checked above
-            weights.append(_machines_behind(buildings, strip))
-    total_weight = sum(weights)
-    if total_weight == 0:
-        return [total / n for _ in range(n)]
-    return [total * Fraction(w, total_weight) for w in weights]
+    cargo_id = catalog.get_item_id(cargo)
+    coats_by_ride: dict[int, list[int]] = defaultdict(list)
+    for coater, ride in rides.items():
+        if records[ride].carries_item == cargo:
+            coats_by_ride[ride].append(coater)
+    requested = {
+        machine
+        for machine, group in groups.items()
+        if group.is_proliferated and cargo in group.inputs_per_machine
+    }
+    tail_set = set(tails)
+
+    def sorter_targets(index: int) -> list[int]:
+        return [
+            sorter.output_obj
+            for i in buildings.sorters_out_of(index)
+            if (sorter := records[i]).output_obj is not None
+            and sorter.carries_item in (None, cargo)
+            and sorter.filter_id in (0, cargo_id)
+        ]
+
+    def reached(starts: list[int], *, raw: bool) -> set[CargoDestination]:
+        pending = list(starts)
+        seen: set[int] = set()
+        destinations: set[CargoDestination] = set()
+        while pending:
+            index = pending.pop()
+            if index in seen or buildings.by_index(index) is None:
+                continue
+            seen.add(index)
+            if index in groups:
+                if cargo in groups[index].inputs_per_machine:
+                    destinations.add(("consumer", index))
+                continue
+            building = records[index]
+            if catalog.is_belt(building.item_id) and building.carries_item not in (None, cargo):
+                continue
+            if raw and index in coats_by_ride:
+                destinations.update(("coater", i) for i in coats_by_ride[index])
+                continue
+            if index in tail_set:
+                destinations.add(("tail", index))
+            pending.extend(buildings.transport_successors(index))
+            pending.extend(sorter_targets(index))
+            if building.output_obj in groups:
+                assert building.output_obj is not None
+                pending.append(building.output_obj)
+        return destinations
+
+    allocation = SprayedCargoFlow()
+
+    def destinations(starts: list[int], *, raw: bool) -> Iterator[CargoDestination]:
+        for destination in sorted(reached(starts, raw=raw)):
+            if raw and destination[0] == "consumer" and destination[1] in requested:
+                continue
+            yield destination
+
+    required = Fraction(0)
+    for machine, group in groups.items():
+        if cargo in group.inputs_per_machine:
+            rate = group.inputs_per_machine[cargo]
+            allocation.require_consumer(machine, rate)
+            required += rate
+        if cargo in group.outputs_per_machine:
+            starts = sorter_targets(machine)
+            starts.extend(
+                i for i in buildings.by_input_obj(machine) if catalog.is_belt(records[i].item_id)
+            )
+            allocation.offer_producer(
+                machine, group.outputs_per_machine[cargo], destinations(starts, raw=True)
+            )
+    if heads:
+        head_rates = _apportion(
+            sub.external_inputs.get(cargo, Fraction(0)),
+            buildings,
+            heads,
+            cargo,
+            groups,
+            puts_on=False,
+        )
+        for head, rate in zip(heads, head_rates, strict=True):
+            allocation.offer_head(head, rate, destinations([head], raw=True))
+    if tails:
+        tail_rates = _apportion(
+            sub.outputs.get(cargo, Fraction(0)),
+            buildings,
+            tails,
+            cargo,
+            groups,
+        )
+        for tail, rate in zip(tails, tail_rates, strict=True):
+            allocation.require_tail(tail, rate)
+            required += rate
+    for ride, coaters in coats_by_ride.items():
+        for coater in coaters:
+            allocation.connect_coater(coater, destinations([ride], raw=False))
+    delivered, weights = allocation.allocate(
+        (coater for coaters in coats_by_ride.values() for coater in coaters), requested
+    )
+    if delivered != required:
+        raise ContractError(
+            f"{cargo}: connected source rates cannot meet sprayed cargo obligations"
+        )
+    return weights
+
+
+def _spray_apportion(
+    total: Fraction,
+    placement: Placement,
+    sub: BuildSpec,
+    indices: list[int],
+    item: str,
+    groups: dict[int, MachineGroup],
+    heads_by_item: dict[str, list[int]],
+    tails_by_item: dict[str, list[int]],
+) -> list[Fraction]:
+    """Attribute coater supply through actual addon areas and sprayed cargo.
+
+    A coater consumes one spray per cargo item (rates.adjust). Its selected
+    tier's divisor cancels when splitting the exact sub-spec supply total.
+    First-coater flow attributes cargo once; shared supply heads split that cost.
+
+    Only sprayed boundaries pay for the validation context's indexed geometry
+    and transport graph. No validation checks run; the context is used solely
+    for the existing nearest-addon-belt authority, whose query does not read
+    the unrelated width/altitude validation limits supplied below.
+    """
+    if not total:
+        return [Fraction(0) for _ in indices]
+    from flab2bp.layout import validate
+
+    buildings = Buildings.of(placement)
+    records = buildings.all()
+    ctx = validate._context(placement, sub, None, 0, Fraction(0), False)
+    cargo_items = {
+        cargo
+        for group in groups.values()
+        if group.is_proliferated
+        for cargo in group.inputs_per_machine
+        if cargo in sub.spray_lanes
+    }
+    supplies: dict[int, int] = {}
+    rides: dict[int, int] = {}
+    for coater in buildings.by_item(catalog.SPRAY_COATER_ID):
+        supply = validate._belt_in_addon_area(ctx, records[coater], area=1)
+        ride = validate._belt_in_addon_area(ctx, records[coater], area=0)
+        if supply is None or records[supply].carries_item != item or ride is None:
+            continue
+        cargo = records[ride].carries_item
+        if cargo not in sub.spray_lanes:
+            continue
+        assert cargo is not None
+        supplies[coater] = supply
+        rides[coater] = ride
+    weights: dict[int, Fraction] = defaultdict(Fraction)
+    for cargo in sorted(cargo_items):
+        for coater, weight in _spray_cargo_weights(
+            cargo,
+            buildings,
+            sub,
+            groups,
+            rides,
+            heads_by_item.get(cargo, []),
+            tails_by_item.get(cargo, []),
+        ).items():
+            weights[coater] += weight
+    heads_for: dict[int, list[int]] = defaultdict(list)
+    for position, head in enumerate(indices):
+        run = _lane_belts(buildings, head, item, puts_on=False)
+        for coater, supply in supplies.items():
+            if supply in run:
+                heads_for[coater].append(position)
+    cargo_total = sum(weights.values(), Fraction(0))
+    if not cargo_total or any(coater not in heads_for for coater in weights):
+        raise ContractError(f"{item}: coater demand has no connected boundary supply")
+    rates = [Fraction(0) for _ in indices]
+    for coater, weight in weights.items():
+        heads = heads_for[coater]
+        share = total * weight / cargo_total / len(heads)
+        for position in heads:
+            rates[position] += share
+    return rates
 
 
 def boundary_lanes(
@@ -176,6 +511,8 @@ def boundary_lanes(
         if item is not None and i not in sorter_fed:
             head_indices[item].append(i)
 
+    groups = _machine_groups(building_index, sub)
+
     tails = [
         LaneEnd(block=block, building=i, item=item, rate=rate)
         for item, indices in sorted(tail_indices.items())
@@ -185,6 +522,8 @@ def boundary_lanes(
                 sub.outputs.get(item, Fraction(0)),
                 building_index,
                 indices,
+                item,
+                groups,
                 puts_on=True,
             ),
             strict=True,
@@ -195,11 +534,26 @@ def boundary_lanes(
         for item, indices in sorted(head_indices.items())
         for i, rate in zip(
             indices,
-            _apportion(
-                sub.external_inputs.get(item, Fraction(0)),
-                building_index,
-                indices,
-                puts_on=False,
+            (
+                _spray_apportion(
+                    sub.external_inputs.get(item, Fraction(0)),
+                    placement,
+                    sub,
+                    indices,
+                    item,
+                    groups,
+                    head_indices,
+                    tail_indices,
+                )
+                if item.startswith("proliferator") and sub.spray_lanes
+                else _apportion(
+                    sub.external_inputs.get(item, Fraction(0)),
+                    building_index,
+                    indices,
+                    item,
+                    groups,
+                    puts_on=False,
+                )
             ),
             strict=True,
         )

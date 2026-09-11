@@ -31,8 +31,7 @@ from fractions import Fraction
 from types import MappingProxyType
 from typing import cast
 
-# Neither ortools nor sympy ships a py.typed marker, so both read as untyped.
-from ortools.linear_solver import pywraplp  # type: ignore[import-untyped]
+from ortools.linear_solver import pywraplp
 from sympy import Expr, Rational, nsimplify  # type: ignore[import-untyped]
 from sympy.solvers.simplex import (  # type: ignore[import-untyped]
     InfeasibleLPError,

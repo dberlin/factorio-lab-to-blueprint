@@ -14,7 +14,7 @@ from flab2bp.layout import slots
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement, PlacementCompletion
 from flab2bp.layout.buildings import Buildings, Kind, kind_for
-from flab2bp.layout.validate import Report
+from flab2bp.layout.validate import Report, belt_link_adjacency
 from flab2bp.layout.validate import certify as _certify
 from flab2bp.spec import BuildSpec
 
@@ -67,9 +67,14 @@ class ProjectionNoGood:
 class ProjectionRefusal(ValueError):
     """No requested latitude frame accepts the placement's real geometry."""
 
-    def __init__(self, failures: Sequence[ProjectionFailure]) -> None:
+    def __init__(
+        self,
+        failures: Sequence[ProjectionFailure],
+        witnesses: Sequence[ProjectionWitness] = (),
+    ) -> None:
         distinct = tuple(dict.fromkeys(failures))
         self.failures: tuple[ProjectionFailure, ...] = distinct
+        self.witnesses: tuple[ProjectionWitness, ...] = tuple(witnesses)
         self.checks: tuple[str, ...] = tuple(sorted({failure.check for failure in distinct}))
         detail = "; ".join(
             f"band {failure.band} {failure.check} {failure.buildings}: {failure.detail}"
@@ -88,6 +93,71 @@ class FrameCandidate:
     frame: AreaFrame
     south_padding: int
     added_rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectionWitness:
+    """An authoritative failure in its exact materialized frame and anchor."""
+
+    candidate: FrameCandidate
+    projection: planet.Projection
+    failure: ProjectionFailure
+
+
+@dataclass(frozen=True, slots=True)
+class CleanupLinkDependency:
+    """Original indices whose links an accepted survivor bypassed on one side."""
+
+    survivor_index: int
+    side: _Direction
+    traversed_indices: tuple[int, ...]
+
+
+@dataclass(slots=True)
+class _CleanupLineage:
+    """Private transaction state; publish only fully accepted cleanup steps."""
+
+    survivor_indices: tuple[int, ...] | None = None
+    link_dependencies: tuple[CleanupLinkDependency, ...] = ()
+
+    def accept(self, step: _CleanupLineage, *, cancelled: Callable[[], bool] | None = None) -> None:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        if step.survivor_indices is None:
+            return
+        prior = self.survivor_indices
+        if prior is None:
+            self.survivor_indices = step.survivor_indices
+            self.link_dependencies = step.link_dependencies
+            return
+        combined = tuple(prior[index] for index in step.survivor_indices)
+        inherited = {
+            (dependency.survivor_index, dependency.side): dependency.traversed_indices
+            for dependency in self.link_dependencies
+        }
+        survivors = set(combined)
+        dependencies = {key: indices for key, indices in inherited.items() if key[0] in survivors}
+        for dependency in step.link_dependencies:
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            survivor = prior[dependency.survivor_index]
+            key = (survivor, dependency.side)
+            traversed = list(dependencies.get(key, ()))
+            for index in dependency.traversed_indices:
+                if cancelled is not None and cancelled():
+                    raise ProjectionCancelled
+                original = prior[index]
+                traversed.append(original)
+                traversed.extend(inherited.get((original, dependency.side), ()))
+            dependencies[key] = tuple(dict.fromkeys(traversed))
+        records = tuple(
+            CleanupLinkDependency(survivor, side, indices)
+            for (survivor, side), indices in dependencies.items()
+        )
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        self.survivor_indices = combined
+        self.link_dependencies = records
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,7 +298,7 @@ class _ProjectionInvariants:
     ]
     coaters: tuple[tuple[int, colliders.Placed], ...]
     splitters: tuple[tuple[int, colliders.Placed], ...]
-    previews: tuple[colliders.Preview, ...]
+    belt_query: colliders.StableBeltCollisionQuery
 
 
 @dataclass(slots=True)
@@ -262,8 +332,7 @@ type _StaticFailureCache = Callable[
 ]
 
 type _FailureCache = Callable[..., ProjectionFailure | None]
-
-
+type _CoaterBoxCache = dict[tuple[colliders.Placed, planet.Projection], tuple[colliders.Box, ...]]
 type _BeltProjectionContext = tuple[
     tuple[colliders.Preview, ...],
     tuple[tuple[float, float], ...],
@@ -291,6 +360,7 @@ class _ProjectionCache:
         tuple[int, int, int, int, float, bool],
         tuple[tuple[int, PlacedBuilding], ...],
     ] = field(default_factory=dict)
+    coater_boxes: _CoaterBoxCache = field(default_factory=dict)
     belt_failures: dict[
         tuple[tuple[colliders.Preview, ...], planet.Projection],
         ProjectionFailure | None,
@@ -311,12 +381,16 @@ class _ProjectionCache:
     _power_failure: _FailureCache = field(init=False, repr=False)
     _addon_failure: _FailureCache = field(init=False, repr=False)
     _addon_splitter_failure: _FailureCache = field(init=False, repr=False)
+    _coater_indices: dict[tuple[int, planet.Band, int, float, bool], _ProjectedCoaterIndex] = field(
+        init=False, default_factory=dict, repr=False
+    )
 
     def belt_failure(
-        self, previews: tuple[colliders.Preview, ...], projection: planet.Projection
+        self, query: colliders.StableBeltCollisionQuery, projection: planet.Projection
     ) -> ProjectionFailure | None:
         if self.cancelled is not None and self.cancelled():
             raise ProjectionCancelled
+        previews = query.previews
         key = (previews, projection)
         if key in self.belt_failures:
             return self.belt_failures[key]
@@ -346,7 +420,7 @@ class _ProjectionCache:
         if context in self.belt_context_failures:
             failure = self.belt_context_failures[context]
         else:
-            failure = _projected_belt_failure(previews, projection, cancelled=self.cancelled)
+            failure = _projected_belt_failure(query, projection, cancelled=self.cancelled)
             if self.cancelled is not None and self.cancelled():
                 raise ProjectionCancelled
             self.belt_context_failures[context] = failure
@@ -411,6 +485,13 @@ class _ProjectionCache:
             return failure
 
         @cache
+        def addon_context(
+            belts: tuple[tuple[int, PlacedBuilding], ...],
+            addons: tuple[tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]], ...],
+        ) -> _AddonProjectionContext:
+            return _addon_projection_context(belts, addons, cancelled=self.cancelled)
+
+        @cache
         def addon_failure(
             belts: tuple[tuple[int, PlacedBuilding], ...],
             addons: tuple[
@@ -424,9 +505,10 @@ class _ProjectionCache:
             projection: planet.Projection,
         ) -> ProjectionFailure | None:
             self._addon_misses += 1
-            return _projected_addon_failure(
-                belts,
-                addons,
+            if not belts or not addons:
+                return None
+            return _projected_addon_failure_from_context(
+                addon_context(belts, addons),
                 projection,
                 cancelled=self.cancelled,
             )
@@ -453,6 +535,7 @@ class _ProjectionCache:
                 _coater_geometry=(
                     coater_geometry(coaters, projection) if coaters and splitters else None
                 ),
+                _coater_box_cache=self.coater_boxes,
             )
 
         self._sorter_failure = sorter_failure
@@ -546,6 +629,23 @@ class _ProjectionCache:
         projection: planet.Projection,
     ) -> ProjectionFailure | None:
         self._poll_cancellation()
+        if coaters and splitters:
+            # Retain the owner's finite immutable frame domain. Identity lookup
+            # avoids rescanning coaters; each index keeps its tuple alive. Tree
+            # coordinates depend on this metric, not on the projection anchor.
+            key = (
+                id(coaters),
+                projection.band,
+                projection.segment,
+                projection.radius,
+                projection.rotated,
+            )
+            index = self._coater_indices.get(key)
+            if index is None:
+                index = _ProjectedCoaterIndex.build(coaters, projection, cancelled=self.cancelled)
+                # Cancellation never publishes a partial tree.
+                self._coater_indices[key] = index
+            coaters = index.candidates(splitters, projection, cancelled=self.cancelled)
         misses = self._addon_splitter_misses
         failure = self._addon_splitter_failure(coaters, splitters, projection)
         if self._addon_splitter_misses == misses:
@@ -1525,9 +1625,15 @@ def _projected_coater_keepout_overlaps(
     projection: planet.Projection,
     *,
     cancelled: Callable[[], bool] | None = None,
+    _coater_box_cache: _CoaterBoxCache | None = None,
 ) -> bool:
     """Whether one Splitter enters one Coater's exact projected keepout."""
-    coater_boxes = projected_coater_keepout_boxes(coater, projection)
+    key = (coater, projection)
+    coater_boxes = None if _coater_box_cache is None else _coater_box_cache.get(key)
+    if coater_boxes is None:
+        coater_boxes = projected_coater_keepout_boxes(coater, projection)
+        if _coater_box_cache is not None:
+            _coater_box_cache[key] = coater_boxes
     splitter_boxes = colliders.target_boxes(
         splitter,
         *projection.pose(
@@ -1554,20 +1660,14 @@ def projected_coater_splitter_failure(
     projection: planet.Projection,
     *,
     cancelled: Callable[[], bool] | None = None,
+    _coater_box_cache: _CoaterBoxCache | None = None,
 ) -> ProjectionFailure | None:
-    overlaps = (
-        _projected_coater_keepout_overlaps(
-            coater[1],
-            splitter[1],
-            projection,
-        )
-        if cancelled is None
-        else _projected_coater_keepout_overlaps(
-            coater[1],
-            splitter[1],
-            projection,
-            cancelled=cancelled,
-        )
+    overlaps = _projected_coater_keepout_overlaps(
+        coater[1],
+        splitter[1],
+        projection,
+        cancelled=cancelled,
+        _coater_box_cache=_coater_box_cache,
     )
     if not overlaps:
         return None
@@ -1601,7 +1701,14 @@ def _coater_splitter_point_distance2(
     left: _CoaterSplitterCoordinates,
     right: _CoaterSplitterCoordinates,
 ) -> float:
-    return sum((a - b) ** 2 for a, b in zip(left, right, strict=True))
+    # Keep sum's float rounding and axis order without a generator/zip per node.
+    return sum(
+        (
+            (left[0] - right[0]) ** 2,
+            (left[1] - right[1]) ** 2,
+            (left[2] - right[2]) ** 2,
+        )
+    )
 
 
 def _coater_splitter_box_distance2(
@@ -1609,9 +1716,15 @@ def _coater_splitter_box_distance2(
     lower: _CoaterSplitterCoordinates,
     upper: _CoaterSplitterCoordinates,
 ) -> float:
+    x, y, z = point
+    lo_x, lo_y, lo_z = lower
+    hi_x, hi_y, hi_z = upper
     return sum(
-        (lo - value) ** 2 if value < lo else (value - hi) ** 2 if value > hi else 0.0
-        for value, lo, hi in zip(point, lower, upper, strict=True)
+        (
+            (lo_x - x) ** 2 if x < lo_x else (x - hi_x) ** 2 if x > hi_x else 0.0,
+            (lo_y - y) ** 2 if y < lo_y else (y - hi_y) ** 2 if y > hi_y else 0.0,
+            (lo_z - z) ** 2 if z < lo_z else (z - hi_z) ** 2 if z > hi_z else 0.0,
+        )
     )
 
 
@@ -1773,6 +1886,124 @@ class _CoaterSplitterMetric:
             building.z * 4.0 / 3.0,
         )
 
+    def coater_bound(self, coater: colliders.Placed) -> float:
+        lateral_step = (1, 0) if round(coater.yaw) % 180 == 0 else (0, 1)
+        lateral_arc = math.dist(
+            self.projection.position(coater.x, coater.y, coater.z),
+            self.projection.position(
+                coater.x + lateral_step[0],
+                coater.y + lateral_step[1],
+                coater.z,
+            ),
+        )
+        return planet.collider_radius(coater.model_index) + lateral_arc
+
+    def positions(
+        self,
+        tree: _CoaterSplitterKdNode | None,
+        centre: _CoaterSplitterCoordinates,
+        radius: float,
+        found: set[int],
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> None:
+        longitude_period = self.projection.band.columns * self.column_lower_bound
+        radius2 = math.nextafter(radius * radius, math.inf)
+        for longitude in {
+            centre[0] - longitude_period,
+            centre[0],
+            centre[0] + longitude_period,
+        }:
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            if cancelled is None:
+                _coater_splitter_kd_range(tree, (longitude, centre[1], centre[2]), radius2, found)
+            else:
+                _coater_splitter_kd_range(
+                    tree,
+                    (longitude, centre[1], centre[2]),
+                    radius2,
+                    found,
+                    cancelled=cancelled,
+                )
+
+
+@dataclass(frozen=True, slots=True)
+class _ProjectedCoaterIndex:
+    """One immutable frame's coater tree, shared across projection anchors.
+
+    Tree coordinates and seam periods depend only on band, segment, radius and
+    rotated axes. The largest coater bound still uses the full exact Projection,
+    including its anchor and pole behavior. False positives pass through the
+    original per-coater broadphase and authoritative predicate.
+    """
+
+    coaters: tuple[tuple[int, colliders.Placed], ...]
+    metric: _CoaterSplitterMetric
+    tree: _CoaterSplitterKdNode | None
+    bounds: dict[planet.Projection, float] = field(default_factory=dict)
+    candidate_positions: dict[tuple[_CoaterSplitterCoordinates, float], tuple[int, ...]] = field(
+        default_factory=dict
+    )
+
+    @classmethod
+    def build(
+        cls,
+        coaters: tuple[tuple[int, colliders.Placed], ...],
+        projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> _ProjectedCoaterIndex:
+        metric = _CoaterSplitterMetric.of(projection)
+        points: list[_CoaterSplitterKdPoint] = []
+        for position, (_index, coater) in enumerate(coaters):
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            points.append(_CoaterSplitterKdPoint(position, metric.coordinates(coater)))
+        tree = (
+            _coater_splitter_kd_tree(points)
+            if cancelled is None
+            else _coater_splitter_kd_tree(points, cancelled=cancelled)
+        )
+        return cls(coaters, metric, tree)
+
+    def candidates(
+        self,
+        splitters: Sequence[tuple[int, colliders.Placed]],
+        projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> tuple[tuple[int, colliders.Placed], ...]:
+        bound = self.bounds.get(projection)
+        if bound is None:
+            metric = replace(self.metric, projection=projection)
+            bound = 0.0
+            for _index, coater in self.coaters:
+                if cancelled is not None and cancelled():
+                    raise ProjectionCancelled
+                bound = max(bound, metric.coater_bound(coater))
+            # A cancelled bound calculation leaves no partial cached result.
+            self.bounds[projection] = bound
+        found: set[int] = set()
+        for _index, splitter in splitters:
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            centre = self.metric.coordinates(splitter)
+            radius = bound + planet.collider_radius(splitter.model_index)
+            key = (centre, radius)
+            positions = self.candidate_positions.get(key)
+            if positions is None:
+                pending: set[int] = set()
+                self.metric.positions(self.tree, centre, radius, pending, cancelled=cancelled)
+                if cancelled is not None and cancelled():
+                    raise ProjectionCancelled
+                # The immutable tree/metric and exact sphere fix this result,
+                # even across anchors. Never publish a cancelled partial query.
+                positions = tuple(pending)
+                self.candidate_positions[key] = positions
+            found.update(positions)
+        return tuple(self.coaters[position] for position in sorted(found))
+
 
 @dataclass(frozen=True, slots=True)
 class _ProjectedCoaterGeometry:
@@ -1794,21 +2025,7 @@ class _ProjectedCoaterGeometry:
         for _index, coater in coaters:
             if cancelled is not None and cancelled():
                 raise ProjectionCancelled
-            lateral_step = (1, 0) if round(coater.yaw) % 180 == 0 else (0, 1)
-            lateral_arc = math.dist(
-                projection.position(coater.x, coater.y, coater.z),
-                projection.position(
-                    coater.x + lateral_step[0],
-                    coater.y + lateral_step[1],
-                    coater.z,
-                ),
-            )
-            entries.append(
-                (
-                    metric.coordinates(coater),
-                    planet.collider_radius(coater.model_index) + lateral_arc,
-                )
-            )
+            entries.append((metric.coordinates(coater), metric.coater_bound(coater)))
         return cls(metric, tuple(entries))
 
 
@@ -1862,8 +2079,7 @@ def _projected_coater_splitter_candidates(
             planet.collider_radius(splitter.model_index),
         )
 
-    coordinates = geometry.metric.coordinates
-
+    metric = geometry.metric
     points: list[_CoaterSplitterKdPoint] = []
     for position, splitter_entry in enumerate(splitters):
         if cancelled is not None and cancelled():
@@ -1871,7 +2087,7 @@ def _projected_coater_splitter_candidates(
         points.append(
             _CoaterSplitterKdPoint(
                 position=position,
-                coordinates=coordinates(splitter_entry[1]),
+                coordinates=metric.coordinates(splitter_entry[1]),
             )
         )
     tree = (
@@ -1882,36 +2098,18 @@ def _projected_coater_splitter_candidates(
             cancelled=cancelled,
         )
     )
-    longitude_period = projection.band.columns * geometry.metric.column_lower_bound
     candidates: list[tuple[tuple[int, colliders.Placed], ...]] = []
     for centre, coater_bound in geometry.coaters:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        radius = coater_bound + splitter_bound
-        radius2 = math.nextafter(radius * radius, math.inf)
         found: set[int] = set()
-        for longitude in {
-            centre[0] - longitude_period,
-            centre[0],
-            centre[0] + longitude_period,
-        }:
-            if cancelled is not None and cancelled():
-                raise ProjectionCancelled
-            if cancelled is None:
-                _coater_splitter_kd_range(
-                    tree,
-                    (longitude, centre[1], centre[2]),
-                    radius2,
-                    found,
-                )
-            else:
-                _coater_splitter_kd_range(
-                    tree,
-                    (longitude, centre[1], centre[2]),
-                    radius2,
-                    found,
-                    cancelled=cancelled,
-                )
+        metric.positions(
+            tree,
+            centre,
+            coater_bound + splitter_bound,
+            found,
+            cancelled=cancelled,
+        )
         candidates.append(tuple(splitters[position] for position in sorted(found)))
     return tuple(candidates)
 
@@ -1923,6 +2121,7 @@ def _projected_addon_splitter_failure(
     *,
     cancelled: Callable[[], bool] | None = None,
     _coater_geometry: _ProjectedCoaterGeometry | None = None,
+    _coater_box_cache: _CoaterBoxCache | None = None,
 ) -> ProjectionFailure | None:
     """Authoritative coater/splitter keepout from the broke2 in-game refusal."""
     candidates = (
@@ -1947,19 +2146,12 @@ def _projected_addon_splitter_failure(
         for splitter in peers:
             if cancelled is not None and cancelled():
                 raise ProjectionCancelled
-            failure = (
-                projected_coater_splitter_failure(
-                    coater,
-                    splitter,
-                    projection,
-                )
-                if cancelled is None
-                else projected_coater_splitter_failure(
-                    coater,
-                    splitter,
-                    projection,
-                    cancelled=cancelled,
-                )
+            failure = projected_coater_splitter_failure(
+                coater,
+                splitter,
+                projection,
+                cancelled=cancelled,
+                _coater_box_cache=_coater_box_cache,
             )
             if failure is not None:
                 return failure
@@ -1967,15 +2159,14 @@ def _projected_addon_splitter_failure(
 
 
 def _projected_belt_failure(
-    previews: tuple[colliders.Preview, ...],
+    query: colliders.StableBeltCollisionQuery,
     projection: planet.Projection,
     *,
     cancelled: Callable[[], bool] | None = None,
 ) -> ProjectionFailure | None:
-    hits = colliders.stable_belt_collisions(previews, projection=projection, cancelled=cancelled)
-    if not hits:
+    hit = query.first(projection=projection, cancelled=cancelled)
+    if hit is None:
         return None
-    hit = hits[0]
     return ProjectionFailure(
         "game.belt_collide",
         (hit.belt, hit.collider),
@@ -2065,7 +2256,7 @@ def _projection_invariants(
         addons=addons,
         coaters=tuple(coaters),
         splitters=tuple(splitters),
-        previews=tuple(previews),
+        belt_query=colliders.StableBeltCollisionQuery(tuple(previews)),
     )
 
 
@@ -2169,9 +2360,9 @@ def _failure_at_projection(
             projection,
         )
     belt_failure = (
-        cache.belt_failure(invariants.previews, projection)
+        cache.belt_failure(invariants.belt_query, projection)
         if use_cache and cache is not None
-        else _projected_belt_failure(invariants.previews, projection, cancelled=cancelled)
+        else _projected_belt_failure(invariants.belt_query, projection, cancelled=cancelled)
     )
     if cancelled is not None and cancelled():
         raise ProjectionCancelled
@@ -2198,6 +2389,8 @@ def _certify_frame(
     pair_rotated: bool = False,
     stop_after_failure: bool = False,
     cache: _ProjectionCache | None = None,
+    candidate: FrameCandidate | None = None,
+    witnesses: list[ProjectionWitness] | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> tuple[ProjectionFailure, ...]:
     if cancelled is not None and cancelled():
@@ -2304,6 +2497,12 @@ def _certify_frame(
                 )
             )
             if projection_failures:
+                if witnesses is not None:
+                    assert candidate is not None
+                    witnesses.extend(
+                        ProjectionWitness(candidate, projection, failure)
+                        for failure in projection_failures
+                    )
                 failures.extend(projection_failures)
                 if stop_after_failure:
                     return projection_failures
@@ -2927,12 +3126,22 @@ def finalize_placement(
         raise ProjectionRefusal((_extent_failure(placement, policy),))
     counters = _ProjectionCounters()
     cache = _ProjectionCache(counters, cancelled=cancelled)
-    rejected_frames: list[tuple[Placement, AreaFrame]] = []
+    rejected_frames: list[tuple[Placement, FrameCandidate]] = []
+    materialized: dict[tuple[bool, int], Placement] = {}
     for candidate in candidates:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
         counters.frame_candidates += 1
-        framed = _materialize_frame(placement, candidate)
+        # North padding and the certified bands change the frame, not any
+        # building. Reuse only an exact transform of this immutable input;
+        # every candidate still receives its own frame and certification.
+        transform = (candidate.frame.rotated, candidate.south_padding)
+        previous = materialized.get(transform)
+        if previous is None:
+            framed = _materialize_frame(placement, candidate)
+            materialized[transform] = framed
+        else:
+            framed = replace(previous, frame=candidate.frame)
         candidate_failures = _certify_frame(
             framed,
             candidate.frame,
@@ -2942,27 +3151,30 @@ def finalize_placement(
             cancelled=cancelled,
         )
         if candidate_failures:
-            rejected_frames.append((framed, candidate.frame))
+            rejected_frames.append((framed, candidate))
             continue
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
         return _with_projection_stats(framed, counters)
 
     failures: list[ProjectionFailure] = []
-    for framed, frame in rejected_frames:
+    witnesses: list[ProjectionWitness] = []
+    for framed, candidate in rejected_frames:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
         failures.extend(
             _certify_frame(
                 framed,
-                frame,
+                candidate.frame,
                 counters,
                 stop_after_failure=False,
                 cache=cache,
+                candidate=candidate,
+                witnesses=witnesses,
                 cancelled=cancelled,
             )
         )
-    raise ProjectionRefusal(failures)
+    raise ProjectionRefusal(failures, witnesses)
 
 
 def _remove_buildings(
@@ -2970,6 +3182,7 @@ def _remove_buildings(
     removed: frozenset[int],
     *,
     cancelled: Callable[[], bool] | None = None,
+    _lineage: _CleanupLineage | None = None,
 ) -> Placement:
     """Remove indices, bypass their links, and rewrite every surviving reference."""
     if cancelled is not None and cancelled():
@@ -2989,14 +3202,23 @@ def _remove_buildings(
         if old not in removed:
             mapping[old] = len(mapping)
 
-    def remap(value: int | None, direction: _Direction) -> int | None:
+    dependencies: list[CleanupLinkDependency] = []
+
+    def remap(value: int | None, direction: _Direction, survivor: int) -> int | None:
         seen: set[int] = set()
+        traversed: list[int] | None = None
         while value is not None and value in removed and value not in seen:
             if cancelled is not None and cancelled():
                 raise ProjectionCancelled
             seen.add(value)
+            if _lineage is not None:
+                if traversed is None:
+                    traversed = []
+                traversed.append(value)
             building = placement.buildings[value]
             value = building.output_obj if direction == "output" else building.input_obj
+        if traversed:
+            dependencies.append(CleanupLinkDependency(survivor, direction, tuple(traversed)))
         return mapping.get(value) if value is not None else None
 
     surviving: list[PlacedBuilding] = []
@@ -3008,8 +3230,8 @@ def _remove_buildings(
         surviving.append(
             replace(
                 building,
-                output_obj=remap(building.output_obj, "output"),
-                input_obj=remap(building.input_obj, "input"),
+                output_obj=remap(building.output_obj, "output", index),
+                input_obj=remap(building.input_obj, "input", index),
             )
         )
     candidate = replace(
@@ -3026,7 +3248,15 @@ def _remove_buildings(
         stats["belt_tiles"] = float(belt_tiles) - len(removed)
     if cancelled is not None and cancelled():
         raise ProjectionCancelled
-    return replace(candidate, stats=stats)
+    result = replace(candidate, stats=stats)
+    if _lineage is not None:
+        survivor_indices = tuple(mapping)
+        link_dependencies = tuple(dependencies)
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        _lineage.survivor_indices = survivor_indices
+        _lineage.link_dependencies = link_dependencies
+    return result
 
 
 def _prunable_open_belts(
@@ -3910,6 +4140,24 @@ def uses_tall_saturated_role(
     return sprayed_lanes > 0 and 13 < strip_count <= 24 and machine_count >= 4 * strip_count
 
 
+def _certify_cleanup_candidate(
+    placement: Placement,
+    spec: BuildSpec,
+    *,
+    expect_power: bool,
+    belt_rules: catalog.BeltAltitudeRules,
+) -> Report:
+    """Reject broken bypass links before solving every candidate cargo flow.
+
+    This partial report can only reject a proposal. A passing screen always
+    receives the complete certificate before any cleanup is accepted.
+    """
+    links = belt_link_adjacency(placement.buildings)
+    if links.errors:
+        return links
+    return _certify(placement, spec, belt_rules=belt_rules, expect_power=expect_power)
+
+
 def _certified_side_fallback(
     placement: Placement,
     spec: BuildSpec,
@@ -3917,24 +4165,30 @@ def _certified_side_fallback(
     expect_power: bool,
     belt_rules: catalog.BeltAltitudeRules,
     cancelled: Callable[[], bool] | None = None,
+    _lineage: _CleanupLineage | None = None,
 ) -> tuple[Placement, int, Report | None]:
     """Use bounded side batches when structural pruning breaks addon geometry."""
     compacted = placement
     removed_total = 0
     accepted_report: Report | None = None
+    lineage = _CleanupLineage()
 
     def attempt(removed: frozenset[int]) -> bool:
         nonlocal compacted, removed_total, accepted_report
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        candidate = _remove_buildings(compacted, removed, cancelled=cancelled)
+        step = _CleanupLineage()
+        candidate = _remove_buildings(compacted, removed, cancelled=cancelled, _lineage=step)
         if candidate is compacted or candidate.area >= compacted.area:
             return False
-        report = _certify(candidate, spec, belt_rules=belt_rules, expect_power=expect_power)
+        report = _certify_cleanup_candidate(
+            candidate, spec, belt_rules=belt_rules, expect_power=expect_power
+        )
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
         if report.errors:
             return False
+        lineage.accept(step, cancelled=cancelled)
         compacted = candidate
         removed_total += len(removed)
         accepted_report = report
@@ -3981,15 +4235,20 @@ def _certified_side_fallback(
             )
             if not attempt(removed):
                 break
+    if _lineage is not None:
+        _lineage.survivor_indices = lineage.survivor_indices
+        _lineage.link_dependencies = lineage.link_dependencies
     return compacted, removed_total, accepted_report
 
 
 @dataclass(frozen=True, slots=True)
 class BoundaryCompactionResult:
-    """Compacted placement and its reusable exact certification, when changed."""
+    """Accepted cleanup; ``None`` is identity and empty dependencies mean no bypass."""
 
     placement: Placement
     report: Report | None
+    survivor_indices: tuple[int, ...] | None = None
+    link_dependencies: tuple[CleanupLinkDependency, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -4019,6 +4278,8 @@ class PlacementProjectionRefused:
     candidate: Placement
     refusal: ProjectionRefusal
     timings: PlacementCompletionTimings
+    survivor_indices: tuple[int, ...] | None = None
+    link_dependencies: tuple[CleanupLinkDependency, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -4034,6 +4295,8 @@ class PlacementProjectionReady:
     # This report is bound to candidate and the exact policy above. It never
     # crosses a physical finalizer transform, even if both geometries pass.
     _report: Report | None
+    survivor_indices: tuple[int, ...] | None = None
+    link_dependencies: tuple[CleanupLinkDependency, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -4041,6 +4304,8 @@ class PlacementCompleted:
     placement: Placement
     report: Report
     timings: PlacementCompletionTimings
+    survivor_indices: tuple[int, ...] | None = None
+    link_dependencies: tuple[CleanupLinkDependency, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -4048,6 +4313,8 @@ class PlacementInvalid:
     candidate: Placement
     report: Report
     timings: PlacementCompletionTimings
+    survivor_indices: tuple[int, ...] | None = None
+    link_dependencies: tuple[CleanupLinkDependency, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -4055,6 +4322,8 @@ class PlacementCertificationExpired:
     candidate: Placement
     report: Report
     timings: PlacementCompletionTimings
+    survivor_indices: tuple[int, ...] | None = None
+    link_dependencies: tuple[CleanupLinkDependency, ...] = ()
 
 
 type PlacementCompletionResult = (
@@ -4110,6 +4379,8 @@ def prepare_placement_completion(
             compacted.placement,
             exc,
             PlacementCompletionTimings(cleanup_s, time.monotonic() - started),
+            compacted.survivor_indices,
+            compacted.link_dependencies,
         )
     timings = PlacementCompletionTimings(cleanup_s, time.monotonic() - started)
     # The hierarchy's strict projection clock ends inside the finalizer.
@@ -4118,7 +4389,15 @@ def prepare_placement_completion(
         return PlacementCompletionCancelled("projection", timings)
     report = compacted.report if projected is compacted.placement else None
     return PlacementProjectionReady(
-        projected, spec, belt_rules, expect_power, deadlines.acceptance, timings, report
+        projected,
+        spec,
+        belt_rules,
+        expect_power,
+        deadlines.acceptance,
+        timings,
+        report,
+        compacted.survivor_indices,
+        compacted.link_dependencies,
     )
 
 
@@ -4137,13 +4416,27 @@ def complete_placement(projected: PlacementProjectionReady) -> PlacementCompleti
         certification_s = time.monotonic() - started
     timings = replace(projected.timings, certification_s=certification_s)
     if _completion_expired(projected.acceptance_deadline):
-        return PlacementCertificationExpired(projected.candidate, report, timings)
+        return PlacementCertificationExpired(
+            projected.candidate,
+            report,
+            timings,
+            projected.survivor_indices,
+            projected.link_dependencies,
+        )
     if report.errors:
-        return PlacementInvalid(projected.candidate, report, timings)
+        return PlacementInvalid(
+            projected.candidate,
+            report,
+            timings,
+            projected.survivor_indices,
+            projected.link_dependencies,
+        )
     return PlacementCompleted(
         replace(projected.candidate, completion=PlacementCompletion.COMPACTED_AND_FINALIZED),
         report,
         timings,
+        projected.survivor_indices,
+        projected.link_dependencies,
     )
 
 
@@ -4187,14 +4480,18 @@ def compact_open_boundary_belts_certified(
         if index not in survivors:
             removed_values.add(index)
     removed = frozenset(removed_values)
+    lineage = _CleanupLineage()
     compacted = _remove_buildings(
         placement,
         removed,
         cancelled=cancelled,
+        _lineage=lineage,
     )
     removed_total = len(removed) if compacted is not placement else 0
     structural_report = (
-        _certify(compacted, spec, belt_rules=belt_rules, expect_power=expect_power)
+        _certify_cleanup_candidate(
+            compacted, spec, belt_rules=belt_rules, expect_power=expect_power
+        )
         if compacted is not placement
         else None
     )
@@ -4207,21 +4504,26 @@ def compact_open_boundary_belts_certified(
     )
     report = structural_report
     if compacted is placement or (structural_report is not None and structural_report.errors):
+        lineage = _CleanupLineage()
         compacted, removed_total, report = _certified_side_fallback(
             placement,
             spec,
             expect_power=expect_power,
             belt_rules=belt_rules,
             cancelled=cancelled,
+            _lineage=lineage,
         )
     elif tall_role:
+        step = _CleanupLineage()
         compacted, side_removed, fallback_report = _certified_side_fallback(
             compacted,
             spec,
             expect_power=expect_power,
             belt_rules=belt_rules,
             cancelled=cancelled,
+            _lineage=step,
         )
+        lineage.accept(step, cancelled=cancelled)
         removed_total += side_removed
         if fallback_report is not None:
             report = fallback_report
@@ -4233,6 +4535,8 @@ def compact_open_boundary_belts_certified(
     return BoundaryCompactionResult(
         replace(compacted, stats=stats),
         report,
+        lineage.survivor_indices,
+        lineage.link_dependencies,
     )
 
 

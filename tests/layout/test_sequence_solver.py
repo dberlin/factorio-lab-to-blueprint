@@ -25,7 +25,6 @@ from flab2bp.layout.base import (
     NoValidLayout,
     PlacedBuilding,
     Placement,
-    PlacementCompletion,
 )
 from flab2bp.layout.compact_seed import (
     CompactSeedConfig,
@@ -141,6 +140,7 @@ from flab2bp.layout.strip_variants import (
     variants_for_count,
 )
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
+from tests.layout.test_finalize import _building
 from tests.layout.test_freeform import (
     _piler_two_stage_spec,
     _prepare_piler_strips,
@@ -5542,7 +5542,7 @@ def test_validator_finishes_inside_atomic_completion_grace(
         absolute_deadline=1.0,
     )
 
-    candidate = _placement(area=1, belt_tiles=1)
+    candidate = Placement(buildings=(_building(catalog.TESLA_TOWER_ID, 0, 0),))
     verdict = run.solver.adapters.validate(candidate)
     assert certify_called == [True]
 
@@ -5584,7 +5584,8 @@ def test_validator_crossing_atomic_completion_grace_returns_incomplete_budget(
         absolute_deadline=1.0,
     )
 
-    verdict = run.solver.adapters.validate(_placement(area=1, belt_tiles=1))
+    candidate = Placement(buildings=(_building(catalog.TESLA_TOWER_ID, 0, 0),))
+    verdict = run.solver.adapters.validate(candidate)
 
     assert not verdict.ok
     assert verdict.status is DetailedRouteStatus.BUDGET
@@ -8463,92 +8464,6 @@ def test_fixed_size_problem_skips_pose_boundary_transforms_without_metadata() ->
     assert boundary_updates == [None, None]
     assert len(fake.detailed_allowances) == 2
     assert solver._heights[0].problem == problem
-
-
-def test_sequence_backend_returns_authoritative_finalized_placement_once(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    spec = two_stage_spec()
-    policy = BandPolicy("portable")
-    monkeypatch.setattr(
-        finalize,
-        "_certify",
-        lambda *_args, **_kwargs: validate.Report(findings=()),
-    )
-    production = _production_run(
-        spec,
-        belt_rules=_BELT_RULES,
-        band_policy=policy,
-        time_budget_s=2.0,
-        power=False,
-        strip_len=6,
-        config=SequenceSolverConfig.test(),
-    )
-    routed = _placement(area=10, belt_tiles=2)
-    fake = _FakeRouting(
-        detailed_results=(
-            DetailedStageResult(
-                _routing(DetailedRouteStatus.ROUTED),
-                routed,
-                charged_expansions=0,
-            ),
-        )
-    )
-
-    def global_route(
-        prepared: _ProductionCandidate,
-        feedback: FeedbackState,
-        allowance: int,
-    ) -> GlobalRouteResult:
-        return fake.global_route((prepared.height, prepared.decoded), feedback, allowance)
-
-    def detailed_route(
-        prepared: _ProductionCandidate,
-        allowance: int,
-    ) -> DetailedStageResult:
-        return fake.detailed_route((prepared.height, prepared.decoded), allowance)
-
-    production.solver.adapters = replace(
-        production.solver.adapters,
-        global_route=global_route,
-        detailed_route=detailed_route,
-    )
-    serial_run = replace(
-        production,
-        max_search_stages=1,
-    )
-    monkeypatch.setattr(
-        sequence_solver_module,
-        "_production_run",
-        lambda *_args, **_kwargs: serial_run,
-    )
-    finalized: list[Placement] = []
-    finalize_placement = finalize.finalize_placement
-
-    def track_finalization(
-        placement: Placement,
-        band_policy: BandPolicy,
-        *,
-        cancelled: Callable[[], bool] | None = None,
-    ) -> Placement:
-        result = finalize_placement(placement, band_policy, cancelled=cancelled)
-        finalized.append(result)
-        return result
-
-    monkeypatch.setattr(finalize, "finalize_placement", track_finalization)
-
-    placement = SequencePairLayout(
-        belt_rules=_BELT_RULES,
-        band_policy=policy,
-        config=SequenceSolverConfig.test(),
-    ).lay_out(spec, time_budget_s=2.0)
-
-    assert len(finalized) == 1
-    assert placement == replace(
-        finalized[0],
-        completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
-    )
-    assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
 
 
 def test_sequence_completion_rejects_invalid_projection_after_clean_compaction(

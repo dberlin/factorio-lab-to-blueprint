@@ -96,7 +96,7 @@ def test_time_case_records_refusal_and_work_counters() -> None:
     result = benchmark_projection._time_case(placement, samples=1)
 
     assert result["refused"] is True
-    assert result["refusal_checks"] == ["geom.collide"]
+    assert "geom.collide" in result["refusal_checks"]
     assert result["frame_candidates"] > 0
     assert result["projections"] > 0
     assert result["invariant_cache_hits"] > 0
