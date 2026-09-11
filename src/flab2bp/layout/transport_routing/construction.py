@@ -2,45 +2,15 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from fractions import Fraction
-from functools import lru_cache
 
-from flab2bp.dsp import catalog, colliders
+from flab2bp.dsp import catalog
 from flab2bp.layout import junction
 from flab2bp.layout import routing_domain as rd
+from flab2bp.layout.base import PlacedBuilding
 from flab2bp.layout.route_feedback import Cell
 from flab2bp.spec import BuildSpec
-
-
-@lru_cache(maxsize=128)
-def spherical_overflight_limit(model_index: int, z: Fraction) -> int:
-    """First lattice plane above every projected collider corner.
-
-    A flat top is insufficient near an integer plane: a corner has greater
-    planetary radius than the collider's centre. Radial extent is invariant
-    under latitude and yaw, so this sufficient clearance needs no frame guess
-    or arbitrary padding. Target colliders inherit the preview rotation and
-    ignore their stored local quaternion, exactly as `target_boxes` does.
-    """
-    boxes = colliders.build_colliders(model_index)
-    if not boxes:
-        return math.floor(z) + 1
-    position, _ = colliders.preview_pose(0.0, 0.0, float(z), 0.0)
-    base_radius = math.hypot(*position)
-    outer_radius = max(
-        math.hypot(
-            abs(centre[0]) + half[0],
-            abs(base_radius + centre[1]) + half[1],
-            abs(centre[2]) + half[2],
-        )
-        for centre, half, _ in boxes
-    )
-    bound = float(z) + (
-        outer_radius - base_radius + colliders.BELT_PROBE_RADIUS - colliders.BELT_PROBE_LIFT
-    ) * float(catalog.BELT_Z_PER_WORLD_UNIT)
-    return math.floor(bound) + 1
 
 
 @dataclass(frozen=True)
@@ -101,7 +71,7 @@ class Constructor:
             raise ConstructionRefusal(f"fixed belt cell is occupied: {item} at {cell}")
         x, y, z = cell
         index = self.canvas.add(
-            rd.PlacedBuilding(
+            PlacedBuilding(
                 item_id=self.belt_id,
                 model_index=self.belt_model,
                 x=x,
@@ -153,7 +123,7 @@ class Constructor:
         # Game attachment records are colocated stubs, not the adjacent lattice
         # docks used by route queries. Canonical slot binding emits port poses.
         stub = self.canvas.add(
-            rd.PlacedBuilding(
+            PlacedBuilding(
                 item_id=self.belt_id,
                 model_index=self.belt_model,
                 x=node.x,

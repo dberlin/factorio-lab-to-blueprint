@@ -11,11 +11,13 @@ from flab2bp.dsp import catalog, colliders
 from flab2bp.layout import validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.markers import self_loop_prime_heads
+from flab2bp.layout.routing_domain import spherical_overflight_limit
 from flab2bp.layout.transport_routing import paths, solver
+from flab2bp.layout.transport_routing.allocation import select_topology
 from flab2bp.layout.transport_routing.budget import WorkBudget
-from flab2bp.layout.transport_routing.construction import spherical_overflight_limit
+from flab2bp.layout.transport_routing.inventory import prepare_inventory
 from flab2bp.layout.transport_routing.runtime import TransportRoutingKernel
-from flab2bp.spec import BeltTier, BuildSpec, MachineGroup, SelfLoopSeed
+from flab2bp.spec import BeltTier, BuildSpec, MachineGroup, ProliferatorMode, SelfLoopSeed
 
 _BELT_RULES = catalog.BeltAltitudeRules(
     max_z=catalog.belt_max_z(catalog.DEFAULT_LAB_LEVEL),
@@ -106,6 +108,53 @@ def test_seeded_return_survives_competing_import_of_the_same_item() -> None:
     assert report.ok, report.errors
     assert not report.skipped
     assert set(self_loop_prime_heads(placement, spec)) == {"hydrogen"}
+
+
+def test_split_cyclic_producer_exports_surplus_from_its_internal_lane() -> None:
+    # The two charging strips each produce 5/24 full accumulators/s. The first
+    # strip's captured lane only feeds discharge at 1/12/s, so its remaining
+    # 1/8/s must also reach the export rather than stranding exact production.
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="accumulator-discharge",
+                machine_item_id="energy-exchanger",
+                count=1,
+                inputs_per_machine={"accumulator-full": Fraction(1, 12)},
+                outputs_per_machine={"accumulator": Fraction(1, 12)},
+            ),
+            MachineGroup(
+                recipe_id="accumulator-full",
+                machine_item_id="energy-exchanger",
+                count=4,
+                proliferator_mode=ProliferatorMode.PRODUCTS,
+                inputs_per_machine={"accumulator": Fraction(1, 12)},
+                outputs_per_machine={"accumulator-full": Fraction(5, 48)},
+            ),
+        ),
+        external_inputs={"accumulator": Fraction(1, 4), "proliferator-3": Fraction(1, 180)},
+        outputs={"accumulator-full": Fraction(1, 3)},
+        spray_lanes={"accumulator": True},
+        belt_required_edges=frozenset({("accumulator-discharge", "accumulator-full")}),
+    )
+    budget = WorkBudget(monotonic() + 15)
+    inventory = prepare_inventory(spec, _BELT_RULES, BandPolicy("portable"), budget)
+    selected = select_topology(spec, inventory, "captured", budget)
+    exports = [
+        selected.rates[demand.ordinal]
+        for demand in selected.inventory.demands
+        if demand.sink is None and demand.item == "accumulator-full"
+    ]
+    discharge = sum(
+        (
+            selected.rates[demand.ordinal]
+            for demand in selected.inventory.demands
+            if demand.sink is not None and demand.item == "accumulator-full"
+        ),
+        Fraction(),
+    )
+    assert sum(exports, Fraction()) == Fraction(1, 3)
+    assert discharge == Fraction(1, 12)
 
 
 def test_native_routes_upgrade_above_floor_without_exceeding_allowed_ceiling() -> None:

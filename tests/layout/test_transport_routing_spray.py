@@ -102,3 +102,53 @@ def test_explicit_coater_sites_cannot_overlap_another_node() -> None:
             belt_rules=_RULES,
             coater_node_sites=sites,
         )
+
+
+def test_coaters_leave_room_for_transport_beyond_the_machine_envelope() -> None:
+    # The exchanger's shared output dock needs a splitter before coating.
+    # Coater staging must not freeze that partial machine envelope: the ring's
+    # ranked coated outlets and the external supply roots still extend it.
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="accumulator-full",
+                machine_item_id="energy-exchanger",
+                count=3,
+                proliferator_mode=ProliferatorMode.PRODUCTS,
+                inputs_per_machine={"accumulator": Fraction(1, 15)},
+                outputs_per_machine={"accumulator-full": Fraction(1, 12)},
+            ),
+            MachineGroup(
+                recipe_id="super-magnetic-ring",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                proliferator_mode=ProliferatorMode.PRODUCTS,
+                inputs_per_machine={
+                    "electromagnetic-turbine": Fraction(2, 5),
+                    "energetic-graphite": Fraction(1, 5),
+                    "magnet": Fraction(3, 5),
+                },
+                outputs_per_machine={"super-magnetic-ring": Fraction(1, 4)},
+            ),
+        ),
+        external_inputs={
+            "accumulator": Fraction(1, 5),
+            "electromagnetic-turbine": Fraction(2, 5),
+            "energetic-graphite": Fraction(1, 5),
+            "magnet": Fraction(3, 5),
+            "proliferator-3": Fraction(7, 300),
+        },
+        outputs={"accumulator-full": Fraction(1, 4), "super-magnetic-ring": Fraction(1, 4)},
+        spray_lanes={
+            "accumulator": True,
+            "electromagnetic-turbine": True,
+            "energetic-graphite": True,
+            "magnet": True,
+        },
+    )
+    placement = TransportRoutingKernel(belt_rules=_RULES, band_policy=_POLICY).lay_out(
+        spec, time_budget_s=15
+    )
+    report = validate.certify(placement, spec, belt_rules=_RULES, expect_power=True)
+    assert report.ok, report.errors
+    assert not report.skipped

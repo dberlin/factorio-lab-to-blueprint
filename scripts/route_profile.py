@@ -57,8 +57,13 @@ from flab2bp.layout import (  # noqa: E402
 )
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
 from flab2bp.layout.base import NoValidLayout, Placement  # noqa: E402
-from flab2bp.layout.route_feedback import Cell, DetailedRouteResult  # noqa: E402
-from flab2bp.layout.route_primitives import RoutePrimitives  # noqa: E402
+from flab2bp.layout.route_feedback import (  # noqa: E402
+    Cell,
+    DetailedRouteResult,
+    NetId,
+    RouteSettlement,
+)
+from flab2bp.layout.route_primitives import RouteOwnership, RoutePrimitives  # noqa: E402
 from flab2bp.pipeline import PRODUCTION_STRATEGIES  # noqa: E402
 from flab2bp.rates import CandidatePolicy, build_candidates  # noqa: E402
 from flab2bp.spec import BuildSpec  # noqa: E402
@@ -263,10 +268,7 @@ def install(tally: Tally) -> Callable[[], None]:
         junction_frame_bans: Sequence[frozenset[Cell]] = (),
         *,
         prioritize_source_families: bool = True,
-        settle: Callable[
-            [routing_domain._Canvas, tuple[frozenset[routing_domain.NetId], ...]],
-            routing_domain.RouteSettlement,
-        ]
+        settle: Callable[[routing_domain._Canvas, tuple[frozenset[NetId], ...]], RouteSettlement]
         | None = None,
         flow_limits: routing_domain.RoutingFlowLimits | None = None,
     ) -> DetailedRouteResult:
@@ -305,7 +307,7 @@ def install(tally: Tally) -> Callable[[], None]:
         primitives: RoutePrimitives | None = None,
         source_taps: Mapping[int, Cell] | None = None,
         deadline: float | None = None,
-        ownership: routing_domain.RouteOwnership | None = None,
+        ownership: RouteOwnership | None = None,
     ) -> tuple[int, ...]:
         t0 = time.perf_counter()
         out = orig_commit(
@@ -374,6 +376,7 @@ def install(tally: Tally) -> Callable[[], None]:
         path_ranges: Mapping[int, tuple[int, int]] | None = None,
         merged_cells: Collection[Cell] = frozenset(),
         protected_sinks: Collection[Cell] = frozenset(),
+        source_feeds: Mapping[int, int] | None = None,
     ) -> set[Cell]:
         t0 = time.perf_counter()
         out = orig_merge(
@@ -392,6 +395,7 @@ def install(tally: Tally) -> Callable[[], None]:
             path_ranges=path_ranges,
             merged_cells=merged_cells,
             protected_sinks=protected_sinks,
+            source_feeds=source_feeds,
         )
         tally.add("merge_frontier", time.perf_counter() - t0)
         return out

@@ -1,11 +1,12 @@
 """Save-specific height must survive occupancy, memoization and workspace copies."""
 
+import math
 from dataclasses import replace
 from fractions import Fraction
 
 import pytest
 
-from flab2bp.dsp import catalog
+from flab2bp.dsp import catalog, colliders
 from flab2bp.layout.base import PlacedBuilding
 from flab2bp.layout.routing_domain import (
     _DEFAULT_BELT_RULES,
@@ -79,6 +80,36 @@ def test_crossing_geometry_retains_levels_above_old_lattice() -> None:
     canvas = _Canvas(belt_rules=_rules(Fraction(12)))
     canvas.add(obstacle, solid=True)
     assert not canvas.free((0, 0, 7))
+
+
+def test_crossing_grid_rejects_projected_chemical_plant_corner() -> None:
+    machine = catalog.building(2317)
+    obstacle = PlacedBuilding(
+        machine.item_id,
+        machine.model_index,
+        0,
+        0,
+        width=machine.width,
+        height=machine.height,
+    )
+    canvas = _Canvas(belt_rules=_rules(Fraction(8)), limit=(-2, -2, 8, 6))
+    canvas.add(obstacle, solid=True)
+    assert canvas.limit is not None
+    grid = _make_grid(canvas, canvas.limit, _canvas_span(canvas, canvas.limit), {})
+    placed = colliders.Placed(machine.model_index, 0.0, 0.0, 0.0, 0.0)
+    boxes = colliders.target_boxes(placed, *colliders.preview_pose(0.0, 0.0, 0.0, 0.0))
+
+    for level, expected_collision in ((5, True), (6, False)):
+        position, _ = colliders.preview_pose(-3.0, -1.0, level, 0.0)
+        scale = 1 + colliders.BELT_PROBE_LIFT / math.hypot(*position)
+        probe = (position[0] * scale, position[1] * scale, position[2] * scale)
+        collision = any(
+            colliders.sphere_box_overlap(probe, colliders.BELT_PROBE_RADIUS, box) for box in boxes
+        )
+        assert collision is expected_collision
+        cell = (0, 1, level)
+        assert canvas.free(cell) is not collision
+        assert bool(grid.occ[grid.index(cell)]) is not collision
 
 
 def test_obstacle_cache_keeps_independent_save_domains() -> None:

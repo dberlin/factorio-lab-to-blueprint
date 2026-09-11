@@ -147,60 +147,50 @@ _DEFAULT_BELT_RULES = catalog.BeltAltitudeRules(
 )
 
 
-def _crossing_ban_levels(b: PlacedBuilding) -> tuple[int, ...]:
-    r"""Routing levels no belt may stand on over ``b``. **The game's rule.**
+@lru_cache(maxsize=128)
+def spherical_overflight_limit(model_index: int, z: Fraction) -> int:
+    """First lattice plane above every projected collider corner.
 
-    A machine is NOT solid at every altitude.  Nothing in the game says so.
-    The belt-versus-building test on a blueprint paste is one sphere against
-    the building's build collider and nothing else --
-    ``BuildTool_BlueprintPaste.cs`` line 2179 in the decompiled assembly (dump
-    line 145760; the per-file offset for this type is +143581, established
-    against the three citations this repo already carries into it)::
-
-        int num17 = ((!buildPreview2.desc.isBelt)
-            ? Physics.OverlapBoxNonAlloc(colliderData.pos, colliderData.ext,
-                  BuildTool._tmp_cols, colliderData.q, mask, ...)
-            : Physics.OverlapSphereNonAlloc(
-                  buildPreview2.lpos + buildPreview2.lpos.normalized * 0.2f,
-                  0.23f, BuildTool._tmp_cols, 395264, ...));
-
-    There is no footprint term, no tile test, and no altitude ceiling: a belt
-    whose 0.23-radius probe misses the collider is ``Ok`` however far inside the
-    machine's FOOTPRINT it sits.  Colliders start at the ground and rise
-    (:func:`colliders.belt_keepout_offsets` searches negative ``dz`` and comes
-    back empty for every model in the catalog), so "misses the collider" is
-    purely a question of height, and
-    :func:`flab2bp.dsp.colliders.belt_crossing_height` solves it in closed form
-    against the collider's own top.  ``spine`` has priced crossings this way in
-    ``_belt_floor_over`` all along; this is freeform being brought level with
-    it.
-
-    **What the rule depends on**, since a KEEP row owes that and not only a
-    number: the crossed building's ``model_index``, through its build collider.
-    It is a lookup, never a constant -- 0.758 over a Sorter, 1.747 over a
-    Splitter, 2.797 over an Arc Smelter, 3.532 over an Assembling Machine of
-    any of the three tiers, 4.973 over a Chemical Plant, 7.785 over an Oil
-    Refinery.  Tiers within a family often share a collider (Mk.I/II/III
-    assemblers all read 3.532) and often do not (Depot Mk.I 1.897, Mk.II
-    2.835), so a single constant here would be right by coincidence.  The
-    building's own ``z`` is added because the bound is measured from ITS
-    ground.  Whether the answer is REACHABLE is a second, save-dependent
-    question that :class:`catalog.BeltAltitudeRules` owns -- ``max_z`` from lab
-    level and ``vertical_construction`` from Super Magnetic Field Generator --
-    and it is FactorioLab's technology set that decides it, never this module.
-
-    Strictly greater clears, which is why a level exactly ON the bound is
-    banned.
+    A flat top is insufficient near an integer plane: a corner has greater
+    planetary radius than the collider's centre. Radial extent is invariant
+    under latitude and yaw, so this sufficient clearance needs no frame guess
+    or arbitrary padding. Target colliders inherit the preview rotation and
+    ignore their stored local quaternion, exactly as `target_boxes` does.
     """
-    top = colliders.belt_crossing_height(b.model_index) + b.z
-    return tuple(range(max(0, math.floor(top / _LEVEL_HEIGHT) + 1)))
+    boxes = colliders.build_colliders(model_index)
+    if not boxes:
+        return math.floor(z) + 1
+    position, _ = colliders.preview_pose(0.0, 0.0, float(z), 0.0)
+    base_radius = math.hypot(*position)
+    outer_radius = max(
+        math.hypot(
+            abs(centre[0]) + half[0],
+            abs(base_radius + centre[1]) + half[1],
+            abs(centre[2]) + half[2],
+        )
+        for centre, half, _ in boxes
+    )
+    bound = float(z) + (
+        outer_radius - base_radius + colliders.BELT_PROBE_RADIUS - colliders.BELT_PROBE_LIFT
+    ) * float(catalog.BELT_Z_PER_WORLD_UNIT)
+    return math.floor(bound) + 1
+
+
+def _crossing_ban_levels(b: PlacedBuilding) -> tuple[int, ...]:
+    """Reserve the band below a building's spherical collider envelope.
+
+    A flat top can clear the belt probe while a projected corner still hits
+    it. Use the shared radial clearance, which is independent of latitude and
+    yaw. Higher levels remain available when the save's belt rules permit them.
+    """
+    return tuple(range(max(0, spherical_overflight_limit(b.model_index, b.z))))
 
 
 #: Rip-up-and-reroute iterations before a placement is declared unroutable.
 RRR_MAX = 8
 
-#: Large prepared problems spend the deadline more effectively on independent
-#: pack arrangements than on replaying one greedy routing order.
+#: Large prepared problems first share ordinary work across all nets. Callers
+#: that can repack return after one round; final composition cannot repack.
 _SINGLE_ROUND_NETS = 64
 
 #: Exact commit validation can expose a different static collision after a
@@ -6213,6 +6203,7 @@ def _merge_frontier(
     path_ranges: Mapping[int, tuple[int, int]] | None = None,
     merged_cells: Collection[Cell] = frozenset(),
     protected_sinks: Collection[Cell] = frozenset(),
+    source_feeds: Mapping[int, int] | None = None,
 ) -> set[Cell]:
     """Free cells beside a sibling net's path -- somewhere to merge into.
 
@@ -6268,6 +6259,7 @@ def _merge_frontier(
     out: set[Cell] = set()
     for sibling in siblings:
         path = paths.get(sibling, ())
+        source_feed = None if source_feeds is None else source_feeds.get(sibling)
         first, last = (0, len(path)) if path_ranges is None else path_ranges.get(sibling, (0, 0))
         altitudes = (
             _altitude_profile(path, ramped=canvas.ramped)
@@ -6294,11 +6286,16 @@ def _merge_frontier(
             actual_level = int(altitude) if altitude.denominator == 1 else lvl
             if junctionable is not None and not junctionable(x, y, actual_level):
                 continue
+            feed = canvas.buildings[source_feed] if at == 0 and source_feed is not None else None
             carry_direction = (
                 _straight_path_direction(path, at)
                 if junctionable is not None and actual_level % 2
                 else None
             )
+            if junctionable is not None and actual_level % 2 and feed is not None:
+                carry_direction = _straight_path_direction(
+                    ((feed.x, feed.y, int(feed.z)), *path[:2]), 1
+                )
             if junctionable is not None and actual_level % 2 and carry_direction is None:
                 continue
             branch_level = actual_level - 1 if carry_direction is not None else lvl
@@ -6328,10 +6325,13 @@ def _merge_frontier(
                     actual_level,
                     branch_level,
                     carry_direction,
-                    tuple(
-                        (path[neighbour][0] - x, path[neighbour][1] - y)
-                        for neighbour in (at - 1, at + 1)
-                        if 0 <= neighbour < len(path)
+                    (
+                        (() if feed is None else ((feed.x - x, feed.y - y),))
+                        + tuple(
+                            (path[neighbour][0] - x, path[neighbour][1] - y)
+                            for neighbour in (at - 1, at + 1)
+                            if 0 <= neighbour < len(path)
+                        )
                     ),
                 )
                 free = [cell for cell in free if (cell[0] - x, cell[1] - y) in directions]
@@ -6345,6 +6345,7 @@ def _merge_frontier(
                 tentative_ok=tentative_ok,
                 path_cells=path_cells,
                 merged_cells=merged_cells,
+                source_feed=source_feed,
             ):
                 continue
             if witness is not None:
@@ -6455,6 +6456,7 @@ def _junction_belt_clear(
     tentative_ok: bool = False,
     path_cells: Collection[Cell] | None = None,
     merged_cells: Collection[Cell] = frozenset(),
+    source_feed: int | None = None,
 ) -> bool:
     """Is a junction on ``tap`` clear of belts the game would not excuse?
 
@@ -6473,6 +6475,11 @@ def _junction_belt_clear(
     if path_cells is None:
         path_cells = frozenset(path)
     excused = set(path[max(0, at - 2) : at + 3])
+    if source_feed is not None and at < 2:
+        # The selected prebuilt feeder is already connected to this path.
+        # Account for the head-to-tap distance before walking its real links;
+        # nearby same-item belts without that connection remain foreign.
+        excused.update(_run_cells(canvas, canvas.buildings.belts_into, source_feed, hops=1 - at))
     try:
         stack = _splitter_stack_geometry(tap[0], tap[1], tap[2])
     except ValueError:
@@ -6492,6 +6499,8 @@ def _junction_belt_clear(
                         return False
                     continue
                 return False
+            if top and cell in excused:
+                continue
             who = canvas.blocked.get(cell)
             if who is None:
                 continue
@@ -7564,7 +7573,12 @@ def _route_all(
         for cell in path:
             if canvas.blocked.get(cell, -1) == _TENTATIVE:
                 del canvas.blocked[cell]
-                grid.restore(cell)
+                # An owned branch dock can still be guarded by its provider
+                # after this path's own claims have been withdrawn.
+                if cell in canvas.guard:
+                    grid.block(cell)
+                else:
+                    grid.restore(cell)
             if owner.get(cell) == index:
                 del owner[cell]
 
@@ -7822,6 +7836,19 @@ def _route_all(
             for cell in starts:
                 if witness(cell, direct_tap):
                     return [cell], set(), ({}, {}, {cell: direct_tap})
+        source_feeds: dict[int, int] = {}
+        for sibling in siblings:
+            if sibling not in paths:
+                continue
+            sibling_source = nets[sibling].source
+            tap = source_hint.get(sibling, (sibling_source.x, sibling_source.y, sibling_source.z))
+            feeder = canvas.blocked.get(tap)
+            if (
+                feeder is not None
+                and feeder >= 0
+                and catalog.is_belt(canvas.buildings[feeder].item_id)
+            ):
+                source_feeds[sibling] = feeder
         frontier = _merge_frontier(
             canvas,
             paths,
@@ -7837,6 +7864,7 @@ def _route_all(
             deadline=deadline,
             path_ranges=source_ranges,
             merged_cells=existing_sink_targets,
+            source_feeds=source_feeds,
         )
         if witness is not None and frontier:
             cell = min(frontier)
@@ -7969,8 +7997,10 @@ def _route_all(
         index: int,
         path: tuple[Cell, ...],
         offers: tuple[Mapping[Cell, Cell], Mapping[Cell, Cell], Mapping[Cell, Cell]],
+        *,
+        tentative_ok: bool = False,
     ) -> dict[Cell, Cell]:
-        """Prove that each unserved source sibling retains an admitted tap."""
+        """Find future taps; tentative mode only discovers repair blockers."""
         routing_ports = canvas.routing_ports
         reservations = corridor_reservations.snapshot()
         _stake(index, path, hints=_selected_hints(path, offers))
@@ -7981,7 +8011,9 @@ def _route_all(
             for sibling in src_group.get(index, ()):
                 if sibling in paths:
                     continue
-                starts, _goals, sibling_offers = _ends(sibling, witnessed_taps=checked)
+                starts, _goals, sibling_offers = _ends(
+                    sibling, witnessed_taps=checked, tentative_ok=tentative_ok
+                )
                 witnessed = False
                 for start in starts:
                     source = nets[sibling].source
@@ -8536,49 +8568,27 @@ def _route_all(
             crossing[grid.index(cell)] += _REPAIR_CROSSING
         open_grid.hist = crossing
 
-        def _stands_on(
-            index: int,
-            through: Sequence[Cell],
-            victims: Set[int],
-            hints: tuple[Cell | None, Cell | None, Cell | None],
-        ) -> bool:
-            """Does ``through`` attach only to paths this swap is about to move?
+        def _tap_guard_victims(tap: Cell, excused: Collection[Cell]) -> set[int]:
+            victims: set[int] = set()
+            stack = _splitter_stack_geometry(*tap)
+            for offset, stack_member in enumerate(stack):
+                victims.update(
+                    _junction_guard_victims(
+                        owner,
+                        junction.keepout_cells(
+                            tap[0],
+                            tap[1],
+                            int(stack_member.z),
+                            model_index=stack_member.model_index,
+                            yaw=stack_member.yaw,
+                        ),
+                        excused=excused if offset == len(stack) - 1 else (),
+                    )
+                )
+            return victims
 
-            Asked at both ends and answered the way `_source_for` and
-            `_sink_for` will answer it at commit time: an end beside its OWN
-            lane needs nobody, and otherwise the only belts it may attach to are
-            its siblings' -- so if every sibling beside it is a victim, it will
-            end up beside nothing.  An end with no sibling beside it at all is
-            not this swap's doing and is left alone.
-            """
-            if any(hint is not None and owner.get(hint) in victims for hint in hints):
-                return True
-            net = nets[index]
-            for end, port, group, slack in (
-                (through[0], net.source, src_group, 0),
-                (through[-1], net.dst, dst_group, 1),
-            ):
-                if abs(end[0] - port.x) + abs(end[1] - port.y) <= 1 and abs(end[2]) <= slack:
-                    continue
-                kin = set(group.get(index, ()))
-                beside = {
-                    who
-                    for dx, dy in _STEPS
-                    if (who := owner.get((end[0] + dx, end[1] + dy, end[2]))) is not None
-                } & kin
-                if beside and beside <= set(victims):
-                    return True
-            return False
-
-        nonlocal expansions
-
-        still: list[int] = []
-        for index in stranded:
-            if _expired(deadline) or budget["left"] <= 0:
-                still.append(index)
-                continue
-            # Successful swaps change conditional guards after this crossing
-            # grid was created. Restore only withdrawn claims to its base map.
+        def _refresh_repair_guards() -> None:
+            nonlocal repair_guards
             for cell in repair_guards - guard_claims.keys():
                 if _inside_grid(cell):
                     open_grid.restore(cell)
@@ -8586,159 +8596,178 @@ def _route_all(
                 if _inside_grid(cell):
                     open_grid.block(cell)
             repair_guards = set(guard_claims)
-            starts, goals, through_offers = _ends(index, tentative_ok=True)
-            # The repair grid deliberately makes settled paths passable. Let it
-            # leave from or reach an endpoint dock those paths currently occupy
-            # as well; the transaction below will move every owning victim
-            # before this path is staked.
-            starts.extend(source_access_walls.get(index, ()))
-            goals.update(destination_access_walls.get(index, ()))
-            through = _search(
-                starts,
-                goals,
-                through_offers[2],
-                history,
-                1.0,
-                budget,
-                None,
-                open_grid,
-                owned_starts=owned_source_starts.get(index, ()),
-                released_starts=source_access_walls.get(index, ()),
-                forbidden=rejected_path_cells.get(index, ()),
-            )
-            canvas.routing_ports = frozenset()
-            expansions += through.expansions
-            round_expansions[index] = round_expansions.get(index, 0) + through.expansions
-            if through.path is None:
-                if through.kind is RouteFailureKind.BUDGET:
-                    # A per-search cap is unknown even while the shared pass
-                    # budget and deadline remain. It supersedes the primary
-                    # pocket diagnosis and carries no hard blocker evidence.
-                    search_failures[index] = through
-                    search_blockers[index] = ()
-                # A genuinely exhausted crossing search made settled paths
-                # passable, so keep the primary wall/ownership snapshot rather
-                # than reassigning historical blame from its empty census.
+
+        nonlocal expansions
+
+        still: list[int] = []
+        for index in stranded:
+            victims: set[int] = set()
+            repaired = False
+            while not _expired(deadline) and budget["left"] > 0:
+                if len(victims) > _REPAIR_MAX_VICTIMS:
+                    break
+                rebuild_order = _route_order(victims, _endpoint_dependents())
+                if rebuild_order is None:
+                    break
+                staked_before = paths.snapshot()
+                saved_hints = {
+                    hurt: (source_hint.get(hurt), sink_hint.get(hurt), path_tap.get(hurt))
+                    for hurt in victims
+                }
+                discovered: set[int] = set()
+                with corridor_reservations.temporarily_released({}) as release:
+                    try:
+                        for hurt in reversed(rebuild_order):
+                            _unstake(hurt)
+                        _refresh_repair_guards()
+                        # Removing a provider changes both endpoint offers and
+                        # their provenance. Never reuse its old attachment.
+                        starts, goals, through_offers = _ends(index, tentative_ok=True)
+                        starts.extend(source_access_walls.get(index, ()))
+                        goals.update(destination_access_walls.get(index, ()))
+                        if not starts:
+                            blocked_sources = set(source_access_blockers.get(index, ()))
+                            discovered.update(
+                                sibling for sibling in paths if _net_id(sibling) in blocked_sources
+                            )
+                        else:
+                            through = _search(
+                                starts,
+                                goals,
+                                through_offers[2],
+                                history,
+                                1.0,
+                                budget,
+                                None,
+                                open_grid,
+                                owned_starts=owned_source_starts.get(index, ()),
+                                released_starts=source_access_walls.get(index, ()),
+                                forbidden=rejected_path_cells.get(index, ()),
+                            )
+                            canvas.routing_ports = frozenset()
+                            expansions += through.expansions
+                            round_expansions[index] = (
+                                round_expansions.get(index, 0) + through.expansions
+                            )
+                            if through.path is None:
+                                if through.kind is RouteFailureKind.BUDGET:
+                                    search_failures[index] = through
+                                    search_blockers[index] = ()
+                            else:
+                                through_path = through.path
+                                discovered.update(
+                                    owner[cell] for cell in through_path if cell in owner
+                                )
+                                selected_tap = through_offers[2].get(through_path[0])
+                                if selected_tap is not None:
+                                    tapped = next(
+                                        (
+                                            (sibling, position)
+                                            for sibling in src_group.get(index, ())
+                                            if (
+                                                position := paths.position_in(sibling, selected_tap)
+                                            )
+                                            is not None
+                                        ),
+                                        None,
+                                    )
+                                    excused: set[Cell] = set()
+                                    if tapped is not None:
+                                        sibling, tap_at = tapped
+                                        sibling_path = paths[sibling]
+                                        excused.update(
+                                            sibling_path[max(0, tap_at - 2) : tap_at + 3]
+                                        )
+                                    discovered.update(_tap_guard_victims(selected_tap, excused))
+                                discovered.discard(index)
+                                if not discovered:
+                                    if _preserves_source_frontier(
+                                        index, through_path, through_offers
+                                    ):
+                                        _stake(
+                                            index,
+                                            through_path,
+                                            hints=_selected_hints(through_path, through_offers),
+                                        )
+                                        moved = 0
+                                        for hurt in rebuild_order:
+                                            starts, goals, again_offers = _ends(hurt)
+                                            again = _search_route(
+                                                hurt,
+                                                starts,
+                                                goals,
+                                                again_offers,
+                                                pressure,
+                                                budget,
+                                                blame,
+                                            )
+                                            canvas.routing_ports = frozenset()
+                                            expansions += again.expansions
+                                            round_expansions[hurt] = (
+                                                round_expansions.get(hurt, 0) + again.expansions
+                                            )
+                                            if again.path is None:
+                                                if again.kind is RouteFailureKind.BUDGET:
+                                                    search_failures[index] = again
+                                                    search_blockers[index] = ()
+                                                break
+                                            _stake(
+                                                hurt,
+                                                again.path,
+                                                hints=_selected_hints(again.path, again_offers),
+                                            )
+                                            moved += 1
+                                        if moved == len(victims):
+                                            release.commit()
+                                            repaired = True
+                                    else:
+                                        # A future sibling's Splitter may hit an
+                                        # owner that this path never crosses.
+                                        future = _future_source_offers(
+                                            index,
+                                            through_path,
+                                            through_offers,
+                                            tentative_ok=True,
+                                        )
+                                        for tap in future.values():
+                                            tap_path: Sequence[Cell] = through_path
+                                            try:
+                                                at = tap_path.index(tap)
+                                            except ValueError:
+                                                tap_path = paths.get(owner.get(tap, -1), ())
+                                                try:
+                                                    at = tap_path.index(tap)
+                                                except ValueError:
+                                                    at = -1
+                                            future_excused = (
+                                                () if at < 0 else tap_path[max(0, at - 2) : at + 3]
+                                            )
+                                            discovered.update(
+                                                _tap_guard_victims(tap, future_excused)
+                                            )
+                    finally:
+                        if not release.finished:
+                            canvas.routing_ports = frozenset()
+                            for hurt in (index, *victims):
+                                if hurt in paths:
+                                    _unstake(hurt)
+                            for hurt, path, _linked_head in staked_before:
+                                if hurt in saved_hints:
+                                    _stake(hurt, path, hints=saved_hints[hurt])
+                            paths.restore(staked_before)
+                _refresh_repair_guards()
+                if repaired:
+                    search_failures.pop(index, None)
+                    search_blockers.pop(index, None)
+                    break
+                # Close dependencies only after restoring the original hints.
+                # Every retry withdraws at least one newly discovered owner.
+                additional = _dependency_closure(discovered) - victims - {index}
+                if not additional:
+                    break
+                victims.update(additional)
+            if not repaired:
                 still.append(index)
-                continue
-            through_path = through.path
-            junction_victims: set[int] = set()
-            selected_tap = through_offers[2].get(through_path[0])
-            if selected_tap is not None:
-                tapped = next(
-                    (
-                        (sibling, position)
-                        for sibling in src_group.get(index, ())
-                        if (position := paths.position_in(sibling, selected_tap)) is not None
-                    ),
-                    None,
-                )
-                excused: set[Cell] = set()
-                if tapped is not None:
-                    sibling, tap_at = tapped
-                    sibling_path = paths[sibling]
-                    excused.update(sibling_path[max(0, tap_at - 2) : tap_at + 3])
-                stack = _splitter_stack_geometry(*selected_tap)
-                for offset, stack_member in enumerate(stack):
-                    top = offset == len(stack) - 1
-                    junction_victims.update(
-                        _junction_guard_victims(
-                            owner,
-                            junction.keepout_cells(
-                                selected_tap[0],
-                                selected_tap[1],
-                                int(stack_member.z),
-                                model_index=stack_member.model_index,
-                                yaw=stack_member.yaw,
-                            ),
-                            excused=excused if top else (),
-                        )
-                    )
-            # Every staked path retains its exact endpoint promises. Nearby
-            # sibling belts are not dependencies unless one promise names them.
-            victims = _dependency_closure(
-                {owner[cell] for cell in through_path if cell in owner} | junction_victims
-            )
-            victims.discard(index)
-            if len(victims) > _REPAIR_MAX_VICTIMS:
-                still.append(index)
-                continue
-            # The stranded path is not staked, so dependency closure cannot
-            # protect its providers. Reject a swap that would remove its own
-            # attachment before moving any selected path.
-            if _stands_on(
-                index, through_path, victims, _selected_hints(through_path, through_offers)
-            ):
-                still.append(index)
-                continue
-            # ALL OR NOTHING, and this is the whole difference between a repair
-            # and a churn.
-            #
-            # Taken greedily -- displace the victims, keep whichever of them find
-            # a way round -- this LOSES nets: measured on
-            # `universe-matrix/no-proliferator` power=1 at h=185, a round that
-            # stranded ONE net came out of the greedy repair stranding TEN,
-            # because each swap cashed in a settled path for a chance. So the
-            # swap is a transaction. Every displaced net must find a new route
-            # or the whole thing is rolled back, which makes a repair pass
-            # monotone: it can place a net or decline, never subtract one.
-            rebuild_order = _route_order(victims, _endpoint_dependents())
-            if rebuild_order is None:
-                still.append(index)
-                continue
-            staked_before = paths.snapshot()
-            saved_hints = {
-                hurt: (source_hint.get(hurt), sink_hint.get(hurt), path_tap.get(hurt))
-                for hurt in victims
-            }
-            with corridor_reservations.temporarily_released({}) as release:
-                try:
-                    for hurt in reversed(rebuild_order):
-                        _unstake(hurt)
-                    if not _preserves_source_frontier(index, through_path, through_offers):
-                        still.append(index)
-                        continue
-                    _stake(
-                        index,
-                        through_path,
-                        hints=_selected_hints(through_path, through_offers),
-                    )
-                    moved = 0
-                    for hurt in rebuild_order:
-                        starts, goals, again_offers = _ends(hurt)
-                        again = _search_route(
-                            hurt, starts, goals, again_offers, pressure, budget, blame
-                        )
-                        canvas.routing_ports = frozenset()
-                        expansions += again.expansions
-                        round_expansions[hurt] = round_expansions.get(hurt, 0) + again.expansions
-                        if again.path is None:
-                            if again.kind is RouteFailureKind.BUDGET:
-                                search_failures[index] = again
-                                search_blockers[index] = ()
-                            break
-                        _stake(
-                            hurt,
-                            again.path,
-                            hints=_selected_hints(again.path, again_offers),
-                        )
-                        moved += 1
-                    if moved == len(victims):
-                        release.commit()
-                        search_failures.pop(index, None)
-                        search_blockers.pop(index, None)
-                        continue
-                finally:
-                    if not release.finished:
-                        canvas.routing_ports = frozenset()
-                        for hurt in (index, *victims):
-                            if hurt in paths:
-                                _unstake(hurt)
-                        for hurt, path, _linked_head in staked_before:
-                            if hurt in saved_hints:
-                                _stake(hurt, path, hints=saved_hints[hurt])
-                        paths.restore(staked_before)
-            still.append(index)
         return still
 
     last_mile_counts = {
@@ -9166,6 +9195,62 @@ def _route_all(
             f"sibling_closed={problem.sibling_closed}"
         )
 
+    def _complete_source_dependents(stranded: list[int], providers: Collection[int]) -> list[int]:
+        """Consume source taps established by a solved, thinned cluster."""
+        nonlocal commit_attempt, expansions
+        remaining = list(stranded)
+        for index in stranded:
+            if not any(sibling in providers for sibling in src_group.get(index, ())):
+                continue
+            if _expired(deadline) or budget["left"] <= 0:
+                break
+            before = _round_state()
+            staked = paths.snapshot()
+            held = {
+                member: (source_hint.get(member), sink_hint.get(member), path_tap.get(member))
+                for member in paths
+            }
+            restored = True
+            with corridor_reservations.temporarily_released({}) as release:
+                try:
+                    starts, goals, offers = _ends(index)
+                    searched = _search_route(index, starts, goals, offers, pressure, budget, blame)
+                    canvas.routing_ports = frozenset()
+                    expansions += searched.expansions
+                    round_expansions[index] = round_expansions.get(index, 0) + searched.expansions
+                    if searched.path is None:
+                        search_failures[index] = searched
+                        search_blockers[index] = _blocking_nets(
+                            searched.wall, source_access_blockers.get(index, ())
+                        )
+                        round_failures[index] = _failure(index, searched, search_blockers[index])
+                    else:
+                        _stake(index, searched.path, hints=_selected_hints(searched.path, offers))
+                        candidate = commit_once()
+                        if terminal_attempt(candidate) or not candidate.unlinked:
+                            commit_attempt = candidate
+                            release.commit()
+                            remaining.remove(index)
+                            round_failures.pop(index, None)
+                        else:
+                            retain_commit_failures(
+                                (index,),
+                                {
+                                    index: candidate.details.get(
+                                        index, _CommitFailure(searched.path[0], "contextual")
+                                    )
+                                },
+                            )
+                finally:
+                    canvas.routing_ports = frozenset()
+                    if not release.finished:
+                        if index in paths:
+                            _unstake(index)
+                        restored = _restore_staked(staked, held, before, release)
+            if not restored or (commit_attempt is not None and terminal_attempt(commit_attempt)):
+                break
+        return remaining
+
     def _last_mile(round_stranded: list[int], round_index: int) -> list[int]:
         """Search the conflict cluster once per pass; see the Phase B spec 5.6."""
         nonlocal last_mile_done, last_mile_floor, proved_round
@@ -9287,6 +9372,10 @@ def _route_all(
                         release.commit()
                         if not terminal_attempt(commit_attempt):
                             last_mile_counts["solved"] += 1
+                            # Thinning protects the cluster's independent-root
+                            # search. Its accepted provider can now offer the
+                            # dropped sibling a dock that did not exist before.
+                            return _complete_source_dependents(left_out, problem.stranded)
                         return left_out
                     joint_refused = True
                     last_mile_counts["commit_rejected"] += 1
@@ -18635,12 +18724,6 @@ def _place_coaters(
                 "lateral keepout in every viable frame",
                 failure=splitter_failure,
             )
-
-        # This is the same fixed capacity `_prepare_routing_problem` establishes
-        # after Coater placement. Keep it local until every staged pair passes so
-        # a refusal leaves an initially unbounded canvas unchanged.
-        if canvas.limit is None:
-            canvas.limit = projected_capacity
 
     out: list[CoaterSupplyPort] = []
     for candidate in staged:

@@ -918,6 +918,20 @@ def _projected_power_candidates(
     # ``itertools.combinations`` order before the unchanged exact predicate
     # runs, preserving the validator's first failure and deterministic detail.
     cell_size = math.sqrt(max(node.gate_sqr for _index, _building, node in nodes))
+    if len(nodes) == 2:
+        # Prospective power sites ask about one pair at a time. Compare the
+        # same bucket coordinates directly instead of building a spatial
+        # index and visiting 54 neighbor buckets for that single pair.
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        left_cell = tuple(math.floor(axis / cell_size) for axis in poses[0])
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        right_cell = tuple(math.floor(axis / cell_size) for axis in poses[1])
+        adjacent = all(
+            abs(left - right) <= 1 for left, right in zip(left_cell, right_cell, strict=True)
+        )
+        return poses, ((0, 1),) if adjacent else ()
     grid: dict[tuple[int, int, int], list[int]] = {}
     pairs: list[tuple[int, int]] = []
     for right, pose in enumerate(poses):
@@ -3062,7 +3076,10 @@ def _with_projection_stats(
     cache_stats["projection_addon_splitter_result_cache_hits"] = (
         counters.addon_splitter_result_cache_hits
     )
-    return replace(placement, stats=stats)
+    updated = replace(placement, stats=stats)
+    # Only statistics changed; retain the index of the identical building tuple.
+    object.__setattr__(updated, "buildings_index", placement.buildings_index)
+    return updated
 
 
 def _extent_failure_for_dimensions(

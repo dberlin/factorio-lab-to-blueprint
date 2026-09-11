@@ -169,10 +169,16 @@ def select_topology(
     sinks = {d.sink for d in candidates if d.sink is not None}
     source_items = {d.source: (d.item, d.domain) for d in candidates if d.source is not None}
     sink_items = {d.sink: (d.item, d.domain) for d in candidates if d.sink is not None}
+    exports = {(d.item, d.domain) for d in candidates if d.sink is None}
     for left in sorted(sources, key=lambda p: (p.strip, p.belt)):
+        item, domain = source_items[left]
+        # Captured lanes describe one allocation, not exclusive destinations.
+        # A strip feeding an internal consumer can also have export surplus.
+        if (item, domain) in exports and (item, domain, left, None) not in original:
+            budget.charge("arcs")
+            candidates.append(TransportDemand(len(candidates), item, domain, left, None, "output"))
         for right in sorted(sinks, key=lambda p: (p.strip, p.belt)):
             budget.check()
-            item, domain = source_items[left]
             if (
                 (item, domain) == sink_items[right]
                 and left.strip != right.strip

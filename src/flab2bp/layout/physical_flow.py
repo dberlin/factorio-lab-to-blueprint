@@ -193,6 +193,13 @@ def _solve(
 
     floats = tuple(variable.solution_value() for variable in variables)
     constrained = frozenset(limits)
+    # Merged flows must reconstruct on a shared rate lattice. This is only
+    # a proposal: coupled resources can require other denominators, and the
+    # exact certificate below still checks every original constraint.
+    values = _network_values(model.nodes, edges, floats)
+    flows = _certify_primal(model, active, edges, values, constrained, required)
+    if flows is not None:
+        return Result(True, required, required, flows, tuple(prices))
     lattice = 0
     for denominator in (1_000_000, 1_000_000_000):
         # Transport chains repeat native values; equal floats reconstruct identically.
@@ -215,13 +222,6 @@ def _solve(
         flows = _certify_primal(model, active, edges, recovered, constrained, required)
         if flows is not None:
             return Result(True, required, required, flows, tuple(prices))
-    # Merged flows must reconstruct on a shared rate lattice. This is only
-    # a proposal: coupled resources can require other denominators, and the
-    # exact certificate below still checks every original constraint.
-    values = _network_values(model.nodes, edges, floats)
-    flows = _certify_primal(model, active, edges, values, constrained, required)
-    if flows is not None:
-        return Result(True, required, required, flows, tuple(prices))
 
     potentials = [Fraction(row.dual_value()).limit_denominator(1_000_000) for row in rows]
     potentials.extend((Fraction(0), Fraction(0)))

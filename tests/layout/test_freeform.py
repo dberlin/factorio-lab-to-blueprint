@@ -11854,8 +11854,8 @@ class TestABuildingDeniesOnlyTheBandUnderItsCollider:
     The belt half of a blueprint paste is ONE sphere against the build
     collider -- ``BuildTool_BlueprintPaste.cs:2179``, dump line 145760 -- with
     no footprint term and no ceiling.  Colliders start at the ground and rise,
-    so what a building denies a belt is a BAND, and
-    :func:`colliders.belt_crossing_height` is where its top comes from.
+    so the routing band must clear the spherical collider envelope, including
+    corners whose planetary radius exceeds the flat top.
     ``freeform`` used to blank the whole column instead, which is the invented
     constraint this class exists to keep deleted.
     """
@@ -11932,24 +11932,13 @@ class TestABuildingDeniesOnlyTheBandUnderItsCollider:
                     f"{colliders.belt_crossing_height(catalog.building(item_id).model_index)}"
                 )
 
-    def test_the_band_is_exactly_what_the_full_collider_probe_says(self) -> None:
-        """The band against the game's own geometry, model by model.
-
-        ``_crossing_ban_levels`` reads one closed-form bound;
-        :func:`colliders.belt_crossings` places the actual 0.23 probe sphere at
-        the actual altitude against the actual collider boxes.  They are
-        independent routes to the same answer, so a disagreement is a real
-        defect in one of them -- under-banning ships belts the game pastes as
-        ``Collide``, over-banning is the invented rule creeping back.
-
-        Swept over the whole footprint plus a ring, because "no footprint term"
-        is itself part of the claim: the collider's top governs at the centre
-        and at the edge alike.
-        """
+    def test_the_band_is_exactly_what_the_projected_collider_probe_says(self) -> None:
+        """Compare routing admission with independent spherical probe geometry."""
         for item_id in _packable_machine_ids() | {catalog.TESLA_TOWER_ID, 2020, 2030}:
             info = catalog.building(item_id)
             banned = set(routing_domain._crossing_ban_levels(self._at(item_id, 0, 0)))
             placed = colliders.Placed(info.model_index, 0.0, 0.0, 0.0, 0.0)
+            boxes = colliders.target_boxes(placed, *colliders.preview_pose(0.0, 0.0, 0.0, 0.0))
             w, h = catalog.footprint(item_id)
             tiles = [
                 (dx, dy)
@@ -11958,8 +11947,15 @@ class TestABuildingDeniesOnlyTheBandUnderItsCollider:
             ]
             for lvl in range(max(banned, default=0) + 2):
                 z = float(lvl * routing_domain._LEVEL_HEIGHT)
-                probe = [colliders.Placed(35, dx, dy, z, 0.0) for dx, dy in tiles]
-                hits = bool(colliders.belt_crossings(probe, [placed]))
+                hits = False
+                for dx, dy in tiles:
+                    position, _ = colliders.preview_pose(dx, dy, z, 0.0)
+                    scale = 1 + colliders.BELT_PROBE_LIFT / math.hypot(*position)
+                    probe = (position[0] * scale, position[1] * scale, position[2] * scale)
+                    hits |= any(
+                        colliders.sphere_box_overlap(probe, colliders.BELT_PROBE_RADIUS, box)
+                        for box in boxes
+                    )
                 assert (lvl in banned) == hits, (
                     f"{info.name} at level {lvl}: the band says "
                     f"{'banned' if lvl in banned else 'free'} and the probe says "

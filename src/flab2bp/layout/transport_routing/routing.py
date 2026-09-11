@@ -13,7 +13,6 @@ from flab2bp.spec import BuildSpec
 
 from .allocation import Order
 from .budget import TransportRefusal, WorkBudget
-from .construction import spherical_overflight_limit
 from .flights import ReusingConstructor
 from .paths import Endpoint, FixedPath, Obligation, TemplateProblem
 from .solver import SolveStats, select
@@ -47,10 +46,11 @@ class TemplateConstructor(ReusingConstructor):
 
     def endpoint(self, port: rd._Port, outward: tuple[int, int]) -> Endpoint:
         building = self.canvas.buildings[port.belt]
-        if not catalog.is_belt(building.item_id) or (building.x, building.y, building.z) != (
-            port.x,
-            port.y,
-            port.z,
+        if (
+            not catalog.is_belt(building.item_id)
+            or building.x != port.x
+            or building.y != port.y
+            or building.z != port.z
         ):
             raise TransportRefusal("PHYSICAL_ACCESS_CONFLICT", "attachment is not its actual belt")
         node = next(
@@ -75,8 +75,12 @@ class TemplateConstructor(ReusingConstructor):
         # The occupancy map stores only the last of a splitter's co-located
         # attachment belts. Verify actual incidence, not coordinate coincidence.
         return (
-            (junction.x, junction.y, junction.z) == endpoint.cell
-            and (other.x, other.y, other.z) == endpoint.cell
+            junction.x == endpoint.cell[0]
+            and junction.y == endpoint.cell[1]
+            and junction.z == endpoint.cell[2]
+            and other.x == endpoint.cell[0]
+            and other.y == endpoint.cell[1]
+            and other.z == endpoint.cell[2]
             and catalog.is_belt(other.item_id)
             and node in (other.input_obj, other.output_obj)
         )
@@ -157,24 +161,6 @@ class TemplateConstructor(ReusingConstructor):
             else:
                 raise TransportRefusal("PHYSICAL_ACCESS_CONFLICT", "fixed link has a cycle")
         blocked = {cell for cell, owner in self.canvas.blocked.items() if owner not in fixed_belts}
-        # Flat footprint masks omit corner curvature. Reserve only additional
-        # overflight planes required by the actual projected collider envelope.
-        for building in self.canvas.buildings:
-            if catalog.is_belt(building.item_id) or catalog.is_sorter(building.item_id):
-                continue
-            lower = len(rd._crossing_ban_levels(building))
-            upper = min(
-                self.canvas.levels,
-                spherical_overflight_limit(building.model_index, building.z),
-            )
-            if lower < upper:
-                budget.check()
-                blocked.update(
-                    (x, y, level)
-                    for x in range(building.x, building.x + building.width)
-                    for y in range(building.y, building.y + building.height)
-                    for level in range(lower, upper)
-                )
         blocked.update(self.canvas.guard)
         for (x, y), levels in self.canvas.belt_ban.items():
             blocked.update((x, y, z) for z in levels)
@@ -209,9 +195,13 @@ class TemplateConstructor(ReusingConstructor):
             y_tracks,
             tuple(range(3, self.canvas.levels)),
         )
+        attachment_paths: tuple[Obligation | FixedPath, ...] = (
+            *self.problem.obligations,
+            *fixed_paths,
+        )
         endpoints = tuple(
             endpoint
-            for path in (*self.problem.obligations, *fixed_paths)
+            for path in attachment_paths
             for endpoint in (path.source, path.sink)
             if self._owns_blocked_endpoint(endpoint)
             and endpoint.cell not in self.canvas.guard

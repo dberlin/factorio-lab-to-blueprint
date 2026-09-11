@@ -368,6 +368,68 @@ def test_source_body_rejection_keeps_other_ordinary_taps_available() -> None:
     assert {trunk.belt, below.belt} <= reached
 
 
+@pytest.mark.parametrize("foreign_belt", (False, True))
+def test_supplied_head_can_branch_without_excusing_foreign_belts(foreign_belt: bool) -> None:
+    bounds = (-4, -4, 8, 8)
+    canvas = domain._Canvas(limit=bounds)
+
+    def port(x: int, y: int) -> domain._Port:
+        index = canvas.add(PlacedBuilding(2001, 35, x, y, carries_item="gear"))
+        return domain._Port(index, x, y, x, x)
+
+    source = port(0, 0)
+    canvas.add(PlacedBuilding(2001, 35, -1, 0, carries_item="gear", output_obj=source.belt))
+    destinations = (port(6, 0), port(1, 5))
+    if foreign_belt:
+        canvas.add(PlacedBuilding(2001, 35, 1, -1, carries_item="gear"))
+    before = tuple(canvas.buildings)
+    # Only the supplied path head can carry this family's required Splitter.
+    # Its actual prebuilt feeder is within keepout; an unrelated belt is not
+    # excused merely because it carries the same item.
+    canvas.junction_ban.update(
+        (x, y, level)
+        for x in range(-4, 9)
+        for y in range(-4, 9)
+        for level in range(canvas.levels)
+        if (x, y, level) != (1, 0, 0)
+    )
+    nets = [
+        domain._Net(
+            source,
+            destination,
+            "gear",
+            net_id=NetId(0, index + 1, "gear", NetRole.INTERNAL, index),
+        )
+        for index, destination in enumerate(destinations)
+    ]
+    result = domain._route_all(
+        canvas,
+        nets,
+        2001,
+        35,
+        bounds,
+        budget={"left": 10_000},
+        flow_limits=domain.RoutingFlowLimits((Fraction(1), Fraction(1)), Fraction(6)),
+    )
+    if foreign_belt:
+        assert result.status is not DetailedRouteStatus.ROUTED
+        assert tuple(canvas.buildings) == before
+        return
+    assert result.status is DetailedRouteStatus.ROUTED
+    reached: set[int] = set()
+    pending = [source.belt]
+    while pending:
+        index = pending.pop()
+        if index in reached:
+            continue
+        reached.add(index)
+        output = canvas.buildings[index].output_obj
+        if output is not None:
+            pending.append(output)
+        pending.extend(canvas.buildings.by_input_obj(index))
+    assert {destination.belt for destination in destinations} <= reached
+
+
 def test_ordinary_routing_cannot_escape_the_composition_frame() -> None:
     from flab2bp.layout import finalize
     from flab2bp.layout.band_policy import BandPolicy
@@ -415,3 +477,327 @@ def test_ordinary_routing_cannot_escape_the_composition_frame() -> None:
     assert finalize.band_policy_search_envelope(policy, perimeter=0).frame_candidates(
         x1 - x0 + 1, y1 - y0 + 1
     )
+
+
+def test_source_witness_rollback_preserves_another_routes_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Borrowing a sibling's branch dock must not open it to unrelated searches."""
+    bounds = (-4, -8, 14, 8)
+    canvas = domain._Canvas(limit=bounds)
+
+    def port(x: int, y: int) -> domain._Port:
+        index = canvas.add(PlacedBuilding(2001, 35, x, y, carries_item="gear"))
+        return domain._Port(index, x, y, x, x)
+
+    source = port(0, 0)
+    canvas.add(PlacedBuilding(2001, 35, -1, 0, carries_item="gear", output_obj=source.belt))
+    destinations = (port(12, 0), port(1, 6), port(1, -6))
+    # The first route must promise a downstream Splitter. The next route
+    # borrows its guarded dock while proving access for the final sibling.
+    canvas.junction_ban.add((0, 0, 0))
+    nets = [
+        domain._Net(
+            source,
+            destination,
+            "gear",
+            net_id=NetId(0, index + 1, "gear", NetRole.INTERNAL, index),
+        )
+        for index, destination in enumerate(destinations)
+    ]
+    make_grid = domain._make_grid
+    overhead_path = domain.overhead_path
+    workspaces: list[tuple[domain._Canvas, domain._Grid]] = []
+    leaked_guards: set[Cell] = set()
+
+    def observe_grid(*args, **kwargs):
+        grid = make_grid(*args, **kwargs)
+        workspaces.append((args[0], grid))
+        return grid
+
+    def observe_search(*args, **kwargs):
+        path = overhead_path(*args, **kwargs)
+        working_canvas, grid = workspaces[0]
+        leaked_guards.update(cell for cell in working_canvas.guard if grid.occ[grid.index(cell)])
+        return path
+
+    monkeypatch.setattr(domain, "_make_grid", observe_grid)
+    monkeypatch.setattr(domain, "overhead_path", observe_search)
+    result = domain._route_all(
+        canvas,
+        nets,
+        2001,
+        35,
+        bounds,
+        budget={"left": 10_000},
+        flow_limits=domain.RoutingFlowLimits((Fraction(1),) * len(nets), Fraction(6)),
+    )
+    assert not leaked_guards
+    assert result.status is DetailedRouteStatus.ROUTED
+    reached: set[int] = set()
+    pending = [source.belt]
+    while pending:
+        index = pending.pop()
+        if index in reached:
+            continue
+        reached.add(index)
+        output = canvas.buildings[index].output_obj
+        if output is not None:
+            pending.append(output)
+        pending.extend(canvas.buildings.by_input_obj(index))
+    assert {destination.belt for destination in destinations} <= reached
+
+
+@pytest.mark.parametrize("refuse_completion", (False, True))
+def test_cluster_provider_hands_its_new_tap_to_the_dropped_sibling(
+    monkeypatch: pytest.MonkeyPatch, refuse_completion: bool
+) -> None:
+    from flab2bp.layout.route_feedback import RouteFailureKind, RouteSettlementRefused
+
+    bounds = (-4, -4, 16, 10)
+    canvas = domain._Canvas(limit=bounds)
+
+    def port(x: int, y: int) -> domain._Port:
+        index = canvas.add(PlacedBuilding(2001, 35, x, y, carries_item="gear"))
+        return domain._Port(index, x, y, x, x)
+
+    source = port(0, 0)
+    canvas.add(PlacedBuilding(2001, 35, -1, 0, carries_item="gear", output_obj=source.belt))
+    destinations = (port(12, 0), port(1, 6))
+    canvas.junction_ban.add((0, 0, 0))
+    nets = [
+        domain._Net(
+            source,
+            destination,
+            "gear",
+            net_id=NetId(0, index + 1, "gear", NetRole.INTERNAL, index),
+        )
+        for index, destination in enumerate(destinations)
+    ]
+    search = domain._astar
+    initial_queries = 2
+
+    def bounded_initial_queries(*args, **kwargs):
+        nonlocal initial_queries
+        if initial_queries:
+            initial_queries -= 1
+            kwargs["budget"]["left"] -= 1
+            return domain._PathSearchResult(None, RouteFailureKind.BUDGET, (), 1)
+        return search(*args, **kwargs)
+
+    def refuse_candidate(_workspace, _owners):
+        identity = nets[1].net_id
+        assert identity is not None
+        return RouteSettlementRefused("candidate refused", frozenset((identity,)))
+
+    # Simulate bounded first-pass queries, not fabricated paths. The real
+    # cluster search must preserve its blocked-root safeguard, then supply
+    # the excluded sibling through the provider's newly established dock.
+    monkeypatch.setattr(domain, "_astar", bounded_initial_queries)
+    monkeypatch.setattr(domain, "_REPAIR_PASSES", 0)
+    monkeypatch.setattr(domain, "RRR_MAX", 1)
+    monkeypatch.setattr(domain, "_SINGLE_ROUND_NETS", 2)
+    result = domain._route_all(
+        canvas,
+        nets,
+        2001,
+        35,
+        bounds,
+        budget={"left": 20_000},
+        settle=refuse_candidate if refuse_completion else None,
+    )
+    reached: set[int] = set()
+    pending = [source.belt]
+    while pending:
+        index = pending.pop()
+        if index in reached:
+            continue
+        reached.add(index)
+        output = canvas.buildings[index].output_obj
+        if output is not None:
+            pending.append(output)
+        pending.extend(canvas.buildings.by_input_obj(index))
+    assert destinations[0].belt in reached
+    if refuse_completion:
+        assert destinations[1].belt not in reached
+        assert {failure.net_id for failure in result.failures} == {nets[1].net_id}
+        assert {failure.kind for failure in result.failures} == {RouteFailureKind.COMMIT_LINK}
+    else:
+        assert result.status is DetailedRouteStatus.ROUTED
+        assert destinations[1].belt in reached
+
+
+@pytest.mark.parametrize("allow_displacement", (False, True))
+def test_repair_moves_a_route_blocking_only_the_future_splitter(
+    monkeypatch: pytest.MonkeyPatch, allow_displacement: bool
+) -> None:
+    from flab2bp.layout.route_feedback import RouteFailureKind
+
+    bounds = (-6, -6, 16, 8)
+    canvas = domain._Canvas(
+        limit=bounds, belt_rules=replace(domain._DEFAULT_BELT_RULES, max_z=Fraction(0))
+    )
+
+    def port(x: int, y: int, item: str) -> domain._Port:
+        index = canvas.add(PlacedBuilding(2001, 35, x, y, carries_item=item))
+        return domain._Port(index, x, y, x, x)
+
+    source = port(0, 0, "gear")
+    canvas.add(PlacedBuilding(2001, 35, -1, 0, carries_item="gear", output_obj=source.belt))
+    destinations = (port(12, 0, "gear"), port(1, 6, "gear"))
+    foreign_source = port(-4, -1, "iron-ingot")
+    foreign_destination = port(14, -1, "iron-ingot")
+    canvas.junction_ban.update(
+        (x, y, 0) for x in range(-6, 17) for y in range(-6, 9) if (x, y) != (1, 0)
+    )
+    canvas.guard.update(((0, -1, 0), (0, 1, 0)))
+    nets = [
+        domain._Net(
+            foreign_source,
+            foreign_destination,
+            "iron-ingot",
+            net_id=NetId(0, 1, "iron-ingot", NetRole.INTERNAL, 0),
+        ),
+        *[
+            domain._Net(
+                source,
+                destination,
+                "gear",
+                net_id=NetId(2, index + 3, "gear", NetRole.INTERNAL, index + 1),
+            )
+            for index, destination in enumerate(destinations)
+        ],
+    ]
+    search = domain._astar
+    queries = 0
+
+    def bounded_family_queries(*args, **kwargs):
+        nonlocal queries
+        queries += 1
+        if queries in (2, 3):
+            kwargs["budget"]["left"] -= 1
+            return domain._PathSearchResult(None, RouteFailureKind.BUDGET, (), 1)
+        return search(*args, **kwargs)
+
+    # The longer foreign route settles first. Bound the family's initial
+    # queries so repair sees the conflict without history steering a path
+    # across the foreign belt and accidentally naming the missing victim.
+    monkeypatch.setattr(domain, "_astar", bounded_family_queries)
+    monkeypatch.setattr(domain, "_SINGLE_ROUND_NETS", 3)
+    monkeypatch.setattr(domain, "RRR_MAX", 1)
+    monkeypatch.setattr(domain.last_mile, "B_MAX_STRANDED", 0)
+    if not allow_displacement:
+        monkeypatch.setattr(domain, "_REPAIR_MAX_VICTIMS", 0)
+    result = domain._route_all(
+        canvas,
+        nets,
+        2001,
+        35,
+        bounds,
+        budget={"left": 100_000},
+        prioritize_source_families=False,
+    )
+    for root, targets in ((foreign_source, (foreign_destination,)), (source, destinations)):
+        reached: set[int] = set()
+        pending = [root.belt]
+        while pending:
+            index = pending.pop()
+            if index in reached:
+                continue
+            reached.add(index)
+            output = canvas.buildings[index].output_obj
+            if output is not None:
+                pending.append(output)
+            pending.extend(canvas.buildings.by_input_obj(index))
+        if root == foreign_source or allow_displacement:
+            assert {target.belt for target in targets} <= reached
+        else:
+            assert not {target.belt for target in targets} & reached
+    if allow_displacement:
+        assert result.status is DetailedRouteStatus.ROUTED
+    else:
+        assert {failure.net_id for failure in result.failures} == {net.net_id for net in nets[1:]}
+
+
+@pytest.mark.parametrize("allow_displacement", (False, True))
+def test_repair_reselects_source_after_displacing_its_provider(
+    monkeypatch: pytest.MonkeyPatch, allow_displacement: bool
+) -> None:
+    from flab2bp.layout.route_feedback import RouteFailureKind
+
+    bounds = (-4, -4, 24, 8)
+    canvas = domain._Canvas(
+        limit=bounds, belt_rules=replace(domain._DEFAULT_BELT_RULES, max_z=Fraction(0))
+    )
+
+    def port(x: int, y: int) -> domain._Port:
+        index = canvas.add(PlacedBuilding(2001, 35, x, y, carries_item="gear"))
+        return domain._Port(index, x, y, x, x)
+
+    source = port(0, 0)
+    canvas.add(PlacedBuilding(2001, 35, -1, 0, carries_item="gear", output_obj=source.belt))
+    destinations = (port(20, 0), port(8, 4))
+    canvas.guard.update(((0, -1, 0), (0, 1, 0)))
+    nets = [
+        domain._Net(
+            source,
+            destination,
+            "gear",
+            net_id=NetId(0, index + 1, "gear", NetRole.INTERNAL, index),
+        )
+        for index, destination in enumerate(destinations)
+    ]
+    search = domain._astar
+    queries = 0
+
+    def provider_crossing_query(*args, **kwargs):
+        nonlocal queries
+        queries += 1
+        if queries == 2:
+            kwargs["budget"]["left"] -= 1
+            return domain._PathSearchResult(None, RouteFailureKind.BUDGET, (), 1)
+        if queries == 3:
+            start = next(cell for cell in args[1] if cell[1] == -1 and cell[0] < 16)
+            path = (
+                start,
+                (start[0], -2, 0),
+                (start[0], -3, 0),
+                *((x, -3, 0) for x in range(start[0] + 1, 19)),
+                *((18, y, 0) for y in range(-2, 4)),
+                *((x, 3, 0) for x in range(17, 7, -1)),
+            )
+            assert path[-1] in args[2]
+            kwargs["budget"]["left"] -= len(path)
+            return domain._PathSearchResult(path, None, (), len(path))
+        return search(*args, **kwargs)
+
+    # A bounded primary query leaves a sibling behind. Its crossing witness
+    # attaches to the provider it must displace, so that source must be reselected.
+    monkeypatch.setattr(domain, "_astar", provider_crossing_query)
+    monkeypatch.setattr(domain, "_SINGLE_ROUND_NETS", 2)
+    monkeypatch.setattr(domain, "RRR_MAX", 1)
+    monkeypatch.setattr(domain, "_REPAIR_PASSES", 1)
+    monkeypatch.setattr(domain.last_mile, "B_MAX_STRANDED", 0)
+    if not allow_displacement:
+        monkeypatch.setattr(domain, "_REPAIR_MAX_VICTIMS", 0)
+    result = domain._route_all(
+        canvas, nets, 2001, 35, bounds, budget={"left": 100_000}, prioritize_source_families=False
+    )
+    reached: set[int] = set()
+    pending = [source.belt]
+    while pending:
+        index = pending.pop()
+        if index in reached:
+            continue
+        reached.add(index)
+        output = canvas.buildings[index].output_obj
+        if output is not None:
+            pending.append(output)
+        pending.extend(canvas.buildings.by_input_obj(index))
+    assert destinations[0].belt in reached
+    if allow_displacement:
+        assert result.status is DetailedRouteStatus.ROUTED
+        assert destinations[1].belt in reached
+    else:
+        assert destinations[1].belt not in reached
+        assert {failure.net_id for failure in result.failures} == {nets[1].net_id}
