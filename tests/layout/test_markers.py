@@ -73,6 +73,27 @@ def _piler_output_placement() -> Placement:
     )
 
 
+def test_native_machine_ports_expose_only_their_external_boundaries() -> None:
+    exchanger = catalog.building(catalog.ENERGY_EXCHANGER_ID)
+    placement = Placement(
+        buildings=(
+            PlacedBuilding(
+                item_id=exchanger.item_id,
+                model_index=exchanger.model_index,
+                x=0,
+                y=0,
+            ),
+            _belt(-1, 0, item="accumulator-full", output=0),
+            _belt(1, 0, item="accumulator", input_obj=0, output=3),
+            _belt(2, 0, item="accumulator", output=None),
+            _belt(3, 1, item="accumulator", output=None),
+        )
+    )
+
+    assert markers.input_belt_heads(placement) == [1, 4]
+    assert markers.output_belt_tails(placement) == [3]
+
+
 def test_piler_transit_preserves_producer_boundary() -> None:
     placement = _piler_output_placement()
     assert markers.output_belt_tails(placement) == [4]

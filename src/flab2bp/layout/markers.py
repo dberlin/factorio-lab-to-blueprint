@@ -39,14 +39,15 @@ def _links_splitter(buildings: tuple[PlacedBuilding, ...], belt: PlacedBuilding)
 def input_belt_heads(placement: Placement) -> list[int]:
     """Indices of genuinely exposed belt entry points.
 
-    Heads have no incoming transport edge, including a Piler/Splitter host
-    named by ``input_obj``. Splitter port belts remain internal boundaries.
+    Heads have neither an incoming transport edge nor a native machine-port
+    source named by ``input_obj``. Splitter port belts remain internal boundaries.
     """
     buildings = Buildings.of(placement)
     return [
         i
         for i in buildings.belts()
         if not buildings.transport_predecessors(i)
+        and buildings.by_index(placement.buildings[i].input_obj) is None
         and not _links_splitter(placement.buildings, placement.buildings[i])
     ]
 
@@ -62,6 +63,10 @@ def output_belt_tails(placement: Placement) -> list[int]:
     building_index = Buildings.of(placement)
     reached: set[int] = set()
     sorter_drawn: set[int] = set()
+    for machine in building_index.machines():
+        for port_belt in building_index.by_input_obj(machine):
+            if port_belt not in reached and catalog.is_belt(buildings[port_belt].item_id):
+                reached.update(building_index.belt_run(port_belt, forward=True))
     for i in building_index.sorters():
         sorter = buildings[i]
         if sorter.input_obj is not None:

@@ -215,7 +215,13 @@ def test_head_commit_falls_back_to_unknown_when_git_cannot_run(
 
 
 def test_all_includes_native_transport_and_the_portfolio() -> None:
-    assert audit.strategy_names("all") == ("freeform", "sequence-pair", "transport-routing", "best")
+    assert audit.strategy_names("all") == (
+        "freeform",
+        "sequence-pair",
+        "transport-routing",
+        "hierarchical",
+        "best",
+    )
     assert audit.strategy_names("both") == ("freeform", "sequence-pair")
 
 
@@ -227,12 +233,13 @@ def test_a_full_all_strategy_run_covers_every_policy_and_strategy() -> None:
         8,
     )
 
-    # 12 corpus URLs x 3 candidate policies x 4 strategies.
-    assert len(jobs) == 144
+    # 12 corpus URLs x 3 candidate policies x 5 strategies.
+    assert len(jobs) == 180
     assert {job.strategy for job in jobs} == {
         "freeform",
         "sequence-pair",
         "transport-routing",
+        "hierarchical",
         "best",
     }
 

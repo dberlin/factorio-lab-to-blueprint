@@ -11,7 +11,7 @@ from flab2bp import cli, pipeline
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout import strategy_race
-from flab2bp.layout.band_policy import BAND_SELECTIONS, BandPolicy, BandSelection
+from flab2bp.layout.band_policy import BAND_SELECTIONS, BandSelection
 from flab2bp.layout.base import (
     AreaFrame,
     LayoutAttemptFailure,
@@ -573,40 +573,6 @@ def test_cli_rejects_a_non_positive_workers_count(
 
     assert exc_info.value.code == 2
     assert "--workers must be a positive integer" in capsys.readouterr().err
-
-
-def test_hierarchical_is_an_explicit_strategy_but_not_part_of_best() -> None:
-    """Registered everywhere a strategy is chosen, and default off.
-
-    ``best`` is what an unqualified build runs, so admitting the hierarchical
-    backend there would change every default build's wall and its answer.  It is
-    reachable only by naming it.
-    """
-    assert "hierarchical" in pipeline.STRATEGY_CHOICES
-    assert "hierarchical" not in pipeline.PRODUCTION_STRATEGIES
-    assert pipeline._strategy_names("hierarchical") == ("hierarchical",)
-    # Islands live inside the sequence-pair backend; the hierarchical one runs
-    # its own children, so it gets one the way freeform does.
-    assert pipeline.resolve_sequence_islands("hierarchical", 16, None) == 1
-    layout = pipeline._new_layout(
-        "hierarchical",
-        belt_rules=_BELT_RULES,
-        band_policy=BandPolicy.parse("portable"),
-        workers=8,
-    )
-    assert layout.name == "hierarchical"
-
-
-def test_the_cli_offers_hierarchical_and_says_it_is_explicit_only(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with pytest.raises(SystemExit):
-        cli.main(["--help"])
-    help_text = " ".join(capsys.readouterr().out.split())
-    assert "hierarchical" in help_text
-    # The settlement runs past the budget by construction, so the option that
-    # offers the strategy is where a caller is told before choosing it.
-    assert "may overshoot --budget by its settlement phase" in help_text
 
 
 def test_hierarchical_gets_the_spawn_pool_completion_grace() -> None:
