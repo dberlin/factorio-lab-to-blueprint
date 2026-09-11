@@ -1,0 +1,37 @@
+{
+  "base_master": "02706fa142afd146e60e09c46036235c00e931f1",
+  "feature_commit": "a1a2d4a1",
+  "verified_tree_commit": "f01c7300",
+  "integration": "Rebased only the verified feature onto rewritten master; preserved newer transport acceptance tests. Did not merge superseded history or generated evidence blobs.",
+  "local_archive": ".local-evidence/2026-09-11-mall-completion",
+  "archive_manifests": ["pre-merge-copy-sha256.json", "integration-sha256.json"],
+  "original_requests": {
+    "evidence": "integration/integrated-originals/results.json",
+    "budget_s": 60,
+    "all_products": {"exit": 0, "wall_s": 44.884228338021785, "decoded_buildings": 25759, "payload_roundtrip": true},
+    "no_proliferator": {"exit": 0, "wall_s": 61.421326463110745, "decoded_buildings": 41554, "payload_roundtrip": true},
+    "source_unchanged": true,
+    "certification": "full; no allow-invalid"
+  },
+  "full_regressions": {
+    "evidence": "integration/final-full-regressions/result.json",
+    "passed": 4510,
+    "failed": 2,
+    "skipped": 4,
+    "errors": 0,
+    "wall_s": 801.1587978871539,
+    "source_unchanged": true,
+    "bound_files": 279,
+    "baseline_failures": [
+      "tests/bench/test_broke6_url.py::test_the_pair_builds_and_pastes_clean[all-products-transport-routing]: fixed belt cell occupied, energetic-graphite at (165,18,0)",
+      "tests/bench/test_broke6_url.py::test_the_pair_builds_and_pastes_clean[output-products-transport-routing]: CAPACITY_CUT delivered 117/8 required 59/4"
+    ],
+    "baseline_control": "integration/master-comparison.log; both failures reproduce identically on base master",
+    "race_diagnostic": "Initial stale-bytecode run exhausted startup deadlines. After compileall, both focused real-spawn races and the final full-suite races pass without source or budget changes. Initial failures retained."
+  },
+  "static_checks": "static-checks.json",
+  "independent_reviews": "reviews.json",
+  "prior_evidence": "pre-merge/",
+  "root_runtime_smoke": "master-smoke/results.json",
+  "limitations": "Full suite is not green: two confirmed existing master transport failures remain. No live-game paste or external-decoder claim. No push."
+}
