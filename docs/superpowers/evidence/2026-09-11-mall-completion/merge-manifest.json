@@ -32,6 +32,13 @@
   "static_checks": "static-checks.json",
   "independent_reviews": "reviews.json",
   "prior_evidence": "pre-merge/",
-  "root_runtime_smoke": "master-smoke/results.json",
-  "limitations": "Full suite is not green: two confirmed existing master transport failures remain. No live-game paste or external-decoder claim. No push."
+  "root_runtime_smoke": {
+    "evidence": "master-smoke/results.json",
+    "source_binding": "root-source-check.json",
+    "native_build_exit": 0,
+    "all_products": {"exit": 0, "wall_s": 44.35892426222563},
+    "no_proliferator": {"exit": 3, "wall_s": 62.10184557689354, "reason": "One magnet cut block 2 -> block 16 exhausted BUDGET; composition power infill could not start."},
+    "interpretation": "Same integrated source passed both originals before merge. The post-merge no-proliferator attempt failed its unchanged 60-second search budget; no reliability guarantee or green post-merge pair is claimed."
+  },
+  "limitations": "Full suite is not green: two confirmed existing master transport failures remain. Post-merge root no-proliferator smoke failed its original budget. No live-game paste or external-decoder claim. No push."
 }
