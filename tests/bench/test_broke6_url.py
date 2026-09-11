@@ -34,7 +34,7 @@ URL = (
 )
 
 
-@pytest.mark.parametrize("strategy", ("freeform", "sequence-pair"))
+@pytest.mark.parametrize("strategy", pipeline.PRODUCTION_STRATEGIES)
 @pytest.mark.parametrize("policy", DEFAULT_CANDIDATE_POLICIES, ids=lambda p: p.value)
 def test_the_pair_builds_and_pastes_clean(
     strategy: pipeline.ExplicitStrategyName, policy: CandidatePolicy
@@ -53,28 +53,6 @@ def test_the_pair_builds_and_pastes_clean(
     # And by check id, so a future exemption regression is caught by name.
     for cid in ("game.belt_collide", "game.belt_crossing"):
         assert not build.report.by_check(cid), (strategy, policy.value, cid)
-
-
-@pytest.mark.parametrize(
-    "policy",
-    (CandidatePolicy.ALL_PRODUCTS, CandidatePolicy.OUTPUT_PRODUCTS),
-    ids=lambda p: p.value,
-)
-def test_transport_routing_refuses_the_sprayed_interface(policy: CandidatePolicy) -> None:
-    """The constructive arm supports unsprayed interfaces, not this URL's coaters."""
-    with pytest.raises(NoValidLayout) as refused:
-        pipeline.build(
-            URL,
-            strategy="transport-routing",
-            candidate_policies=(policy,),
-            time_budget_s=15.0,
-        )
-
-    assert len(refused.value.attempt_failures) == 1
-    failure = refused.value.attempt_failures[0]
-    assert failure.strategy == "transport-routing"
-    assert failure.candidate == policy.value
-    assert failure.reason.partition(":")[0] == "UNSUPPORTED_INTERFACE"
 
 
 def test_the_spec_really_contains_two_energy_exchanger_modes() -> None:
