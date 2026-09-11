@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import multiprocessing
+import os
 import pickle
 import queue
+import signal
 import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future
+from contextlib import suppress
 from dataclasses import fields, replace
 from fractions import Fraction
+from multiprocessing.connection import Connection
 from multiprocessing.context import BaseContext
 from typing import ClassVar, get_type_hints
 
@@ -50,7 +54,6 @@ from flab2bp.layout.sequence_solver import (
 from flab2bp.layout.strategy_race import (
     RACE_COMPLETION_GRACE_S,
     RACE_DRAIN_MAX_MESSAGES,
-    RACE_FREEFORM_WORKER_SHARE,
     RACE_MIN_WORKERS,
     RACE_QUEUE_MAXSIZE,
     RACE_STRATEGIES,
@@ -229,7 +232,7 @@ def test_drain_bounds_what_it_pulls_not_only_what_it_keeps() -> None:
     assert consume.qsize() == 5
 
 
-@pytest.mark.parametrize("total", [1, 3, 16])
+@pytest.mark.parametrize("total", [1, 2, 3, 4, 5, 16, 32])
 def test_the_worker_split_never_hands_a_racer_zero(total: int) -> None:
     # ortools reads num_search_workers == 0 as ALL CORES, so a split that ever
     # produced 0 would hand one racer the whole box.
@@ -241,9 +244,8 @@ def test_the_worker_split_never_hands_a_racer_zero(total: int) -> None:
 
 
 def test_the_worker_split_sums_to_the_total_it_was_given() -> None:
-    # Only for total >= 3: at 1 and 2 the floor of one worker per racer wins and
-    # insufficient budgets retain the minimum of one worker per racer.
-    for total in (3, 4, 8, 16, 128):
+    # Below four, the floor of one worker per racer takes precedence.
+    for total in (4, 5, 8, 16, 32, 128):
         assert sum(race_worker_split(total)) == total
 
 
@@ -268,12 +270,30 @@ def test_outcomes_are_ordered_by_strategy_not_by_arrival() -> None:
     late = _StrategyRaceOutcome("freeform", "refused", refusal_reason="f")
     early = _StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="s")
     native = _StrategyRaceOutcome("transport-routing", "refused", refusal_reason="t")
+    hierarchy = _StrategyRaceOutcome("hierarchical", "refused", refusal_reason="h")
 
-    assert tuple(o.strategy for o in _ordered((native, early, late))) == RACE_STRATEGIES
+    assert tuple(o.strategy for o in _ordered((hierarchy, native, early, late))) == (
+        "freeform",
+        "sequence-pair",
+        "transport-routing",
+        "hierarchical",
+    )
 
 
-def test_the_freeform_share_is_three_quarters() -> None:
-    assert Fraction(3, 4) == RACE_FREEFORM_WORKER_SHARE
+@pytest.mark.parametrize(
+    ("total", "expected"),
+    [
+        (3, (1, 1, 1, 1)),
+        (4, (1, 1, 1, 1)),
+        (5, (2, 1, 1, 1)),
+        (16, (8, 3, 1, 4)),
+        (32, (17, 6, 1, 8)),
+    ],
+)
+def test_the_worker_split_funds_hierarchy_before_dividing_the_remaining_pool(
+    total: int, expected: tuple[int, int, int, int]
+) -> None:
+    assert race_worker_split(total) == expected
 
 
 def test_the_worker_share_is_a_declared_coincidence_not_a_lint_dodge() -> None:
@@ -410,9 +430,12 @@ def test_race_deadline_reaps_a_worker_interrupted_during_result_write() -> None:
         assert sent.wait(10), "worker never wrote the partial result"
         assert receiving.wait(10), "manager never entered the interrupted receive"
         print("RESULT PROBE partial payload and active manager reader confirmed", flush=True)
-        peer = Future()
-        peer.set_result(_StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="peer"))
-        return {blocked: "freeform", peer: "sequence-pair"}, pool
+        futures = {blocked: "hierarchical"}
+        for strategy in ("freeform", "sequence-pair", "transport-routing"):
+            peer = Future()
+            peer.set_result(_StrategyRaceOutcome(strategy, "refused", refusal_reason="peer"))
+            futures[peer] = strategy
+        return futures, pool
 
     try:
         ticks = iter((0.0, 1000.0))
@@ -425,7 +448,12 @@ def test_race_deadline_reaps_a_worker_interrupted_during_result_write() -> None:
             submit=submit,
             monotonic=lambda: next(ticks),
         )
-        assert [outcome.status for outcome in outcomes] == ["terminated", "refused"]
+        assert [(outcome.strategy, outcome.status) for outcome in outcomes] == [
+            ("freeform", "refused"),
+            ("sequence-pair", "refused"),
+            ("transport-routing", "refused"),
+            ("hierarchical", "terminated"),
+        ]
         print("RESULT PROBE deadline returned", flush=True)
         assert not any(worker.is_alive() for worker in workers)
         assert not any(manager.is_alive() for manager in managers), (
@@ -449,6 +477,54 @@ def test_race_deadline_reaps_a_worker_interrupted_during_result_write() -> None:
         for manager in managers:
             manager.join(10)
             assert not manager.is_alive(), "probe could not settle its result reader"
+
+
+_nested_lifetime_connection: Connection | None = None
+
+
+def _nested_block_lifetime(connection: Connection, active: bool) -> None:
+    global _nested_lifetime_connection
+    # Keep the endpoint alive even after an idle worker returns its task.
+    _nested_lifetime_connection = connection
+    connection.send(os.getpid())
+    if active:
+        time.sleep(60)
+
+
+def _nested_hierarchy_owner(connection: Connection, active: bool) -> None:
+    from flab2bp.layout.hierarchy.strategy import _spawn_pool
+
+    with _spawn_pool(1) as pool:
+        pool.submit(_nested_block_lifetime, connection, active).result()
+        time.sleep(60)
+
+
+@pytest.mark.parametrize("active", (False, True), ids=("idle", "solving"))
+def test_terminating_racer_also_stops_its_nested_hierarchy_worker(active: bool) -> None:
+    from concurrent.futures import ProcessPoolExecutor
+
+    context = multiprocessing.get_context("spawn")
+    receiving, sending = context.Pipe(duplex=False)
+    pool = ProcessPoolExecutor(max_workers=1, mp_context=context)
+    child_pid = None
+    stopped = False
+    try:
+        future = pool.submit(_nested_hierarchy_owner, sending, active)
+        assert receiving.poll(20), "nested worker did not start"
+        child_pid = receiving.recv()
+        sending.close()
+        _terminate_executor(pool, (future,))
+        assert receiving.poll(5), "nested worker survived termination of its racer"
+        with pytest.raises(EOFError):
+            receiving.recv()
+        stopped = True
+    finally:
+        if child_pid is not None and not stopped:
+            with suppress(ProcessLookupError):
+                os.kill(child_pid, signal.SIGTERM)
+        _terminate_executor(pool, ())
+        sending.close()
+        receiving.close()
 
 
 _fault_started = None
@@ -570,7 +646,7 @@ class _NoopExecutor:
 
 
 def _stub_submit(results: dict[str, object]) -> RaceSubmit:
-    """Resolve both legs synchronously; ``None`` means "never returns".
+    """Resolve all legs synchronously; ``None`` means "never returns".
 
     The futures are built in REVERSED ``RACE_STRATEGIES`` order on purpose: the
     order tests below must fail if the parent ever collects in future order
@@ -614,13 +690,16 @@ def _race(
     )
 
 
-def test_both_arms_return_in_strategy_order() -> None:
+def test_all_four_arms_return_in_strategy_order() -> None:
     outcomes = _race(
         {
             "sequence-pair": _StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="s"),
             "freeform": _StrategyRaceOutcome("freeform", "refused", refusal_reason="f"),
             "transport-routing": _StrategyRaceOutcome(
                 "transport-routing", "refused", refusal_reason="fixture has no transport route"
+            ),
+            "hierarchical": _StrategyRaceOutcome(
+                "hierarchical", "refused", refusal_reason="no block layout"
             ),
         }
     )
@@ -636,6 +715,9 @@ def test_a_crashed_arm_is_reported_and_the_survivor_decides() -> None:
             "transport-routing": _StrategyRaceOutcome(
                 "transport-routing", "refused", refusal_reason="fixture has no transport route"
             ),
+            "hierarchical": _StrategyRaceOutcome(
+                "hierarchical", "refused", refusal_reason="no block layout"
+            ),
         }
     )
     crashed = next(o for o in outcomes if o.strategy == "freeform")
@@ -645,17 +727,18 @@ def test_a_crashed_arm_is_reported_and_the_survivor_decides() -> None:
     assert next(o for o in outcomes if o.strategy == "sequence-pair").status == "refused"
 
 
-def test_two_crashed_arms_reraise_the_first_in_strategy_order() -> None:
+def test_all_crashed_arms_reraise_the_first_in_strategy_order() -> None:
     # freeform is first in RACE_STRATEGIES, so its exception is the one that
     # propagates -- deterministically, not by `done`-set iteration order.  The
-    # stub hands the futures back sequence-pair first, so a parent that walked
-    # them in future order would raise the KeyError instead.
+    # stub hands the futures back hierarchical first, so a parent that walked
+    # them in future order would raise the LookupError instead.
     with pytest.raises(ValueError, match="boom"):
         _race(
             {
                 "freeform": ValueError("boom"),
                 "sequence-pair": KeyError("other"),
                 "transport-routing": RuntimeError("native failed"),
+                "hierarchical": LookupError("block failed"),
             }
         )
 
@@ -671,10 +754,13 @@ def test_a_surviving_arm_means_a_crash_is_reported_and_not_raised() -> None:
             "transport-routing": _StrategyRaceOutcome(
                 "transport-routing", "refused", refusal_reason="fixture has no transport route"
             ),
+            "hierarchical": _StrategyRaceOutcome(
+                "hierarchical", "refused", refusal_reason="no block layout"
+            ),
         }
     )
 
-    assert [o.status for o in outcomes] == ["crashed", "refused", "refused"]
+    assert [o.status for o in outcomes] == ["crashed", "refused", "refused", "refused"]
 
 
 def test_an_arm_that_ignores_the_wall_is_terminated() -> None:
@@ -690,6 +776,7 @@ def test_an_arm_that_ignores_the_wall_is_terminated() -> None:
             "transport-routing": _StrategyRaceOutcome(
                 "transport-routing", "refused", refusal_reason="fixture has no transport route"
             ),
+            "hierarchical": None,
         },
         monotonic=lambda: next(ticks),
     )
@@ -697,6 +784,8 @@ def test_an_arm_that_ignores_the_wall_is_terminated() -> None:
 
     assert stuck.status == "terminated"
     assert "was terminated" in (stuck.refusal_reason or "")
+    assert next(o for o in outcomes if o.strategy == "hierarchical").status == "terminated"
+    assert tuple(o.strategy for o in outcomes) == RACE_STRATEGIES
     assert _NoopExecutor.terminated is True
 
 
@@ -722,16 +811,21 @@ def test_the_race_spends_the_measured_grace_before_it_kills() -> None:
         channels: dict[str, RaceChannels],
         trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
-        futures: dict[Future[_StrategyRaceOutcome], str] = {slow: "freeform"}
-        quick: Future[_StrategyRaceOutcome] = Future()
-        quick.set_result(_StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="s"))
-        futures[quick] = "sequence-pair"
+        futures: dict[Future[_StrategyRaceOutcome], str] = {slow: "hierarchical"}
+        for request in requests:
+            if request.strategy == "hierarchical":
+                continue
+            quick: Future[_StrategyRaceOutcome] = Future()
+            quick.set_result(
+                _StrategyRaceOutcome(request.strategy, "refused", refusal_reason="early")
+            )
+            futures[quick] = request.strategy
         return futures, _NoopExecutor()
 
     late = threading.Timer(
         0.05,
         slow.set_result,
-        args=(_StrategyRaceOutcome("freeform", "refused", refusal_reason="late"),),
+        args=(_StrategyRaceOutcome("hierarchical", "refused", refusal_reason="late"),),
     )
     late.start()
     try:
@@ -747,7 +841,8 @@ def test_the_race_spends_the_measured_grace_before_it_kills() -> None:
     finally:
         late.cancel()
 
-    assert next(o for o in outcomes if o.strategy == "freeform").status == "refused"
+    assert tuple(o.strategy for o in outcomes) == RACE_STRATEGIES
+    assert next(o for o in outcomes if o.strategy == "hierarchical").status == "refused"
     assert _NoopExecutor.terminated is False
 
 
@@ -851,9 +946,9 @@ def test_a_race_without_a_budget_is_refused() -> None:
 def test_a_race_rejects_sequence_islands_outside_the_serial_range(islands: int) -> None:
     """`run_strategy_race` must refuse the same range `SequencePairLayout` does.
 
-    Left unvalidated, an out-of-range count reaches each child, which fails at
-    construction there instead: the race reports two crashed arms rather than
-    raising, unlike the serial path which raises `ValueError` immediately.
+    Left unvalidated, an out-of-range count reaches the sequence-pair child,
+    turning a bad caller argument into a crashed outcome rather than raising
+    `ValueError` immediately as the serial path does.
     """
     with pytest.raises(ValueError, match="islands must be an integer from 1 to"):
         run_strategy_race(
@@ -954,6 +1049,8 @@ def test_install_race_channels_keys_each_arm_to_its_own_inbox() -> None:
         assert freeform.publish is to_sequence_pair
         assert sequence.consume is to_sequence_pair
         assert sequence.publish is to_freeform
+        assert _channels_for("transport-routing") is None
+        assert _channels_for("hierarchical") is None
 
         incumbent = IncumbentMessage("freeform", (480, 62))
         freeform.publish_incumbent(incumbent)
@@ -1073,6 +1170,7 @@ def test_a_leg_produces_exactly_what_the_serial_arm_produces(
         arrangements=1,
         share=False,
     )
+    from flab2bp.layout.hierarchy.strategy import HierarchicalLayout
     from flab2bp.layout.transport_routing.strategy import TransportRoutingLayout
 
     serial: LayoutStrategy
@@ -1087,6 +1185,12 @@ def test_a_leg_produces_exactly_what_the_serial_arm_produces(
         serial = TransportRoutingLayout(
             band_policy=request.band_policy,
             belt_rules=request.belt_rules,
+        )
+    elif strategy == "hierarchical":
+        serial = HierarchicalLayout(
+            band_policy=request.band_policy,
+            belt_rules=request.belt_rules,
+            workers=request.workers,
         )
     else:
         serial = SequencePairLayout(
@@ -1209,19 +1313,12 @@ def test_two_futures_for_one_arm_is_refused_before_the_wait() -> None:
 
 
 @pytest.mark.slow
-def test_the_real_pool_races_both_arms_end_to_end() -> None:
-    """No seam, no stub: two spawned children, two real strategies, one wall.
+def test_the_real_pool_races_all_four_arms_end_to_end() -> None:
+    """Four real spawned strategies share the original tight two-second wall.
 
-    Everything above this line replaces the pool with something in-process, so
-    this is the only test that proves the request pickles out, a whole strategy
-    runs in a child, and a ``Placement`` pickles back.
-
-    Runtime is load-dependent and no single figure stays true: 2.2-2.5 s at a
-    load average around 3, 3.1 s measured during a review run on a busier box.
-    Both arms finish inside the 2 s wall either way -- the spawn and interpreter
-    start each child pays comes out of that wall rather than on top of it, which
-    is also why this test is the first thing that would start refusing if
-    ``two_stage_spec`` ever got harder.
+    Hierarchy may refuse: its nested block pool must start under that same wall.
+    Such a refusal is an observed result, not a reason to extend the deadline,
+    omit the fourth arm, or tolerate a crashed or unreaped child.
     """
     outcomes = run_strategy_race(
         two_stage_spec(),
@@ -1232,10 +1329,16 @@ def test_the_real_pool_races_both_arms_end_to_end() -> None:
     )
 
     assert tuple(o.strategy for o in outcomes) == RACE_STRATEGIES
-    assert all(outcome.status == "completed" for outcome in outcomes)
+    assert all(outcome.status in ("completed", "refused") for outcome in outcomes)
+    assert all(
+        outcome.status == "completed" for outcome in outcomes if outcome.strategy != "hierarchical"
+    )
     for outcome in outcomes:
-        assert outcome.placement is not None
-        assert outcome.placement.area > 0
+        if outcome.status == "completed":
+            assert outcome.placement is not None
+            assert outcome.placement.area > 0
+        else:
+            assert outcome.refusal_reason
         assert outcome.dropped_messages == 0
 
 
@@ -1666,29 +1769,53 @@ def test_the_racing_layout_prefers_fewer_belt_tiles_at_equal_area() -> None:
     assert merged.stats["belt_tiles"] == 50
 
 
-def test_the_racing_layout_takes_the_only_arm_that_finished() -> None:
-    # A refusal beside a completion is not a refused race: the survivor decides.
-    layout = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)
-    merged = layout._merge(
-        (
-            _StrategyRaceOutcome("freeform", "refused", refusal_reason="no pack"),
-            _completed("sequence-pair", area=400, belt_tiles=50),
-        )
-    )
+@pytest.mark.slow
+def test_the_racing_layout_takes_a_real_hierarchical_only_survivor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A genuine composed placement survives collection and winner selection.
 
-    assert merged.area == 400
-    # A refusal is not a kill: the counter is arms the PARENT had to terminate,
-    # not arms that failed to produce.
+    Peers exercise real deadline refusals; hierarchy gets the normal leg budget.
+    The different deadlines deliberately produce mixed outcomes, not a simulated
+    shared-wall race. No layout or validator is replaced with a canned success.
+    """
+    del monkeypatch  # Disable the suite's freeform memo, as in serial parity above.
+    results: dict[str, object] = {}
+    for strategy in RACE_STRATEGIES:
+        results[strategy] = _run_race_leg(
+            replace(
+                _request(strategy),
+                workers=1,
+                share=False,
+                soft_deadline=time.monotonic() + (30.0 if strategy == "hierarchical" else -1.0),
+            )
+        )
+    outcomes = _race(results)
+
+    assert [(outcome.strategy, outcome.status) for outcome in outcomes] == [
+        ("freeform", "refused"),
+        ("sequence-pair", "refused"),
+        ("transport-routing", "refused"),
+        ("hierarchical", "completed"),
+    ]
+    hierarchy = outcomes[-1]
+    assert hierarchy.placement is not None
+    merged = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)._merge(outcomes)
+
+    assert merged is hierarchy.placement
+    assert merged.area > 0
     assert merged.stats["race_terminated"] == 0.0
 
 
-def test_the_racing_layout_refuses_naming_both_arms() -> None:
+def test_the_racing_layout_refuses_naming_all_four_arms() -> None:
     layout = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)
     outcomes = (
         _StrategyRaceOutcome(
             "freeform", "refused", refusal_reason="no pack", refusal_spec_label="np"
         ),
         _StrategyRaceOutcome("sequence-pair", "terminated", refusal_reason="overran"),
+        _StrategyRaceOutcome("transport-routing", "refused", refusal_reason="no route"),
+        _StrategyRaceOutcome("hierarchical", "refused", refusal_reason="no block layout"),
     )
 
     with pytest.raises(NoValidLayout) as caught:
@@ -1696,6 +1823,8 @@ def test_the_racing_layout_refuses_naming_both_arms() -> None:
 
     assert "freeform: no pack" in caught.value.reason
     assert "sequence-pair: overran" in caught.value.reason
+    assert "transport-routing: no route" in caught.value.reason
+    assert "hierarchical: no block layout" in caught.value.reason
     assert caught.value.spec_label == "np"
 
 
@@ -1735,7 +1864,7 @@ def test_a_completed_arm_with_no_placement_is_not_a_winner() -> None:
     # crashing on the shape.
     layout = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)
 
-    with pytest.raises(NoValidLayout, match="both raced strategies refused"):
+    with pytest.raises(NoValidLayout):
         layout._merge(
             (
                 _StrategyRaceOutcome("freeform", "completed", placement=None),
@@ -1757,7 +1886,7 @@ def test_an_invalid_arm_never_wins_however_small_its_placement_is() -> None:
     """
     layout = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)
 
-    with pytest.raises(NoValidLayout, match="both raced strategies refused"):
+    with pytest.raises(NoValidLayout):
         layout._merge(
             (
                 _StrategyRaceOutcome(
@@ -1776,10 +1905,12 @@ def test_the_winner_carries_how_many_arms_were_killed() -> None:
         (
             _completed("freeform", area=400, belt_tiles=50),
             _StrategyRaceOutcome("sequence-pair", "terminated", refusal_reason="overran"),
+            _StrategyRaceOutcome("transport-routing", "refused", refusal_reason="no route"),
+            _StrategyRaceOutcome("hierarchical", "terminated", refusal_reason="overran"),
         )
     )
 
-    assert merged.stats["race_terminated"] == 1.0
+    assert merged.stats["race_terminated"] == 2.0
 
 
 def test_a_race_that_killed_nobody_still_says_so() -> None:
@@ -1819,8 +1950,8 @@ def test_the_racing_layout_is_a_layout_strategy() -> None:
 # spawning is not fast or reliable on this box, so every test below fakes the
 # pool, the queue, or both, EXCEPT ONE -- the real end-to-end test at the
 # bottom, kept to a single `@pytest.mark.slow` case with the same tight
-# ``two_stage_spec`` / 2s / 4-worker budget already proven fast and stable by
-# ``test_the_real_pool_races_both_arms_end_to_end`` above.
+# ``two_stage_spec`` / 2s / 4-worker budget used by
+# ``test_the_real_pool_races_all_four_arms_end_to_end`` above.
 # --------------------------------------------------------------------------
 
 
@@ -2098,8 +2229,8 @@ def test_a_raced_build_delivers_events_from_both_arms_to_the_parent() -> None:
     This is the only one proving the request pickles out, a real
     `SampledObserver` fires inside a really-spawned child, `TraceChannel.offer`
     puts a real `SearchEvent` on a real `multiprocessing.Queue`, and
-    `drain_trace` reads it back here. Same budget already proven fast and
-    stable by `test_the_real_pool_races_both_arms_end_to_end` above.
+    `drain_trace` reads it back here. Same budget as
+    `test_the_real_pool_races_all_four_arms_end_to_end` above.
     """
     context = multiprocessing.get_context("spawn")
     trace_queue = context.Queue(maxsize=TRACE_QUEUE_MAXSIZE)
@@ -2114,8 +2245,12 @@ def test_a_raced_build_delivers_events_from_both_arms_to_the_parent() -> None:
         )
 
         assert {o.strategy for o in outcomes} == set(RACE_STRATEGIES)
-        for outcome in outcomes:
-            assert outcome.status == "completed"
+        assert all(outcome.status in ("completed", "refused") for outcome in outcomes)
+        assert all(
+            outcome.status == "completed"
+            for outcome in outcomes
+            if outcome.strategy != "hierarchical"
+        )
 
         # `get_nowait` (inside `drain_trace`) can legitimately race a
         # `multiprocessing.Queue`'s feeder thread on a loaded box: an event
@@ -2135,9 +2270,9 @@ def test_a_raced_build_delivers_events_from_both_arms_to_the_parent() -> None:
             else:
                 consecutive_empty += 1
                 time.sleep(0.05)
-        # Two arms, one time axis: the UI's side-by-side view depends on the
-        # strategy travelling on every event rather than being inferred, and
-        # every event travelling this whole path proves it made it out of a
+        # Only freeform and sequence-pair emit search events; transport-routing
+        # and hierarchy still contribute outcomes in this four-arm race.
+        # The strategy on every event proves it made it out of a
         # REAL spawned child.
         assert events, "a traced race must deliver at least one event to the parent"
         # `==`, not `<=`: the test's own name claims BOTH arms deliver, and a

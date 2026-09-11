@@ -30,19 +30,24 @@ in plain text rather than 404ing.
 ## Strategy choices
 
 The strategy choices are `best`, `freeform`, `sequence-pair`, `transport-routing`,
-and the explicit `hierarchical` backend. `best` runs Freeform, SequencePair and
-CaDiCaL-based transport-routing, then selects the smallest validator-clean result.
-It is a portfolio, not first-finisher-wins; hierarchical remains explicit-only.
+and `hierarchical`. `best` automatically runs Freeform, SequencePair,
+CaDiCaL-based transport-routing and hierarchical, then selects the smallest
+validator-clean result. It is a portfolio, not first-finisher-wins.
 
 The solver-work ceiling is `candidates × active production strategies × budget` for `best`,
-using the pipeline's canonical three-strategy tuple. One build defaults to an aggregate
+using the pipeline's canonical four-strategy tuple. One build defaults to an aggregate
 budget of at most 16 CPUs from its process affinity set. The widest candidate batch runs
-whose shares can fund all three strategies. Each candidate reserves one worker for
-transport-routing and divides the remaining share between Freeform and SequencePair.
-If even one three-strategy portfolio cannot fit, the strategies run serially instead.
+whose shares can fund all four strategies. Each candidate gives hierarchical one quarter
+of its share (rounded down, with at least one worker). Of the remaining share, Freeform
+gets three quarters rounded down minus one (at least one); transport-routing gets one;
+SequencePair gets the remainder. A single 16-worker candidate gets 8/3/1/4 workers in
+portfolio order; three candidates share 6/5/5 workers, funding 2/1/1 SequencePair islands.
+If even one four-worker portfolio cannot fit, the strategies run serially within the
+aggregate worker budget instead. Only explicitly selected hierarchical may size its
+pool from uncapped CPU affinity when no worker count is supplied.
 Uploaded or fetched flows remain a single pinned candidate. Explicit strategies run
-serially across candidates. Transport-routing owns a supervised single worker and
-currently refuses sprayed interfaces explicitly; other portfolio strategies still try them.
+serially across candidates. Transport-routing owns a supervised single worker and supports
+unsprayed and sprayed interfaces; every portfolio strategy faces the same certification.
 
 ## Latitude bands
 
@@ -169,9 +174,10 @@ It is the one item on this list that is unfinished rather than decided.
 **Jobs queue; one job's candidate portfolio may run in bounded parallel.** The default
 one-job queue prevents two users from each claiming a solver budget. Inside that job, the
 pipeline uses at most 16 available CPUs by default and divides them across concurrent
-candidate portfolios. Each reserves one worker for transport-routing and splits the
-remaining share between Freeform and SequencePair. Candidate concurrency narrows when
-necessary; underfunded portfolios run serially. `--workers` above 1 still permits concurrent jobs and can
+candidate portfolios. Each allocates a quarter share to hierarchical, reserves one worker
+for transport-routing, and divides the remaining workers between Freeform and SequencePair
+as described under Strategy choices. Candidate concurrency narrows to fund at least four
+workers per portfolio; underfunded portfolios run serially. `--workers` above 1 still permits concurrent jobs and can
 make every build slower because
 `time_budget_s` is wall-clock. There is no admission control at all beyond the queue: the
 budget has no upper bound, and a projected total over 300s is warned about rather than

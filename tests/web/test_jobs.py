@@ -546,9 +546,12 @@ def _terminated_trace_scenario(
         if not collector_failed:
             assert read_entered.wait(10), "collector never entered the blocking receive"
         print("TRACE PROBE gated producer confirmed", flush=True)
-        peer = Future()
-        peer.set_result(_StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="peer"))
-        return {blocked: "freeform", peer: "sequence-pair"}, pool
+        futures = {blocked: "freeform"}
+        for strategy in ("sequence-pair", "transport-routing", "hierarchical"):
+            peer = Future()
+            peer.set_result(_StrategyRaceOutcome(strategy, "refused", refusal_reason="peer"))
+            futures[peer] = strategy
+        return futures, pool
 
     def solve(options, progress, observer, trace_queue):
         if not options.trace:
@@ -588,7 +591,12 @@ def _terminated_trace_scenario(
             monotonic=lambda: next(ticks),
         )
         expected_status = "refused" if normal_return else "terminated"
-        assert [outcome.status for outcome in outcomes] == [expected_status, "refused"]
+        assert [outcome.status for outcome in outcomes] == [
+            expected_status,
+            "refused",
+            "refused",
+            "refused",
+        ]
         if normal_return:
             assert outcomes[0].refusal_reason == "normal solver result"
         print("TRACE PROBE race returned", flush=True)

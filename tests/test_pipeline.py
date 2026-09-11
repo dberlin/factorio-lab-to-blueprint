@@ -378,6 +378,7 @@ def test_blueprint_encoding_failure_does_not_abort_later_strategy(
     assert [attempt.strategy for attempt in result.attempts] == [
         "sequence-pair",
         "transport-routing",
+        "hierarchical",
     ]
     assert len(result.refused) == 1
     assert result.refused[0].strategy == "freeform"
@@ -431,7 +432,7 @@ def test_every_pair_reports_started_and_then_how_it_ended() -> None:
 
 
 @pytest.mark.slow
-def test_best_reports_freeform_and_sequence_pairs() -> None:
+def test_best_reports_every_strategy() -> None:
     """``best`` announces every strategy and selects a validated result."""
     steps: list[pipeline.AttemptProgress] = []
     build = pipeline.build(
@@ -443,8 +444,8 @@ def test_best_reports_freeform_and_sequence_pairs() -> None:
     )
     started = [s for s in steps if s.phase == "started"]
     assert len(started) == len(pipeline.PRODUCTION_STRATEGIES)
-    assert [s.index for s in started] == [1, 2, 3]
-    assert {s.total for s in started} == {3}
+    assert [s.index for s in started] == [1, 2, 3, 4]
+    assert {s.total for s in started} == {4}
     assert [s.strategy for s in started] == list(pipeline.PRODUCTION_STRATEGIES)
     valid = [attempt for attempt in build.attempts if attempt.ok]
     winner = min(valid, key=lambda attempt: attempt.area)
@@ -1356,16 +1357,17 @@ def _lay_out_synthetic_piler_spec(
     strategy: pipeline.ExplicitStrategyName,
     spec: BuildSpec,
 ) -> Placement:
-    layout = (
-        FreeformLayout(
+    if strategy == "freeform":
+        return FreeformLayout(
             belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), strip_len=1, workers=1
-        )
-        if strategy == "freeform"
-        else SequencePairLayout(
+        ).lay_out(spec, time_budget_s=15.0)
+    if strategy == "sequence-pair":
+        return SequencePairLayout(
             belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), strip_len=1
-        )
-    )
-    return layout.lay_out(spec, time_budget_s=15.0)
+        ).lay_out(spec, time_budget_s=15.0)
+    return pipeline._new_layout(
+        strategy, belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=1
+    ).lay_out(spec, time_budget_s=15.0)
 
 
 def _piler_stack_transitions(placement: Placement, spec: BuildSpec) -> list[tuple[int, int]]:
@@ -1476,6 +1478,16 @@ def test_one_piler_per_producer_lane_lays_out_cleanly_and_reports(
     assert total > ceiling
     assert total / 2 == 20 <= ceiling
 
+    if strategy == "transport-routing":
+        with pytest.raises(NoValidLayout, match="fixed piler transitions"):
+            _lay_out_synthetic_piler_spec(strategy, spec)
+        return
+    if strategy == "hierarchical":
+        # Hierarchical partition contracts do not carry these fixed piler paths.
+        with pytest.raises(NoValidLayout):
+            _lay_out_synthetic_piler_spec(strategy, spec)
+        return
+
     placement = _lay_out_synthetic_piler_spec(strategy, spec)
     report = validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True)
     pilers = [building for building in placement.buildings if building.item_id == 2040]
@@ -1535,6 +1547,15 @@ def test_two_serial_pilers_per_producer_lane_reach_stack_four_and_validate(
     assert total == 80
     assert total / 2 == 40 > ceiling
     assert total / 4 == 20 <= ceiling
+
+    if strategy == "transport-routing":
+        with pytest.raises(NoValidLayout, match="fixed piler transitions"):
+            _lay_out_synthetic_piler_spec(strategy, spec)
+        return
+    if strategy == "hierarchical":
+        with pytest.raises(NoValidLayout):
+            _lay_out_synthetic_piler_spec(strategy, spec)
+        return
 
     placement = _lay_out_synthetic_piler_spec(strategy, spec)
     report = validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True)
@@ -1656,6 +1677,9 @@ def _mixed_race_outcomes() -> tuple[strategy_race._StrategyRaceOutcome, ...]:
         strategy_race._StrategyRaceOutcome(
             "transport-routing", "refused", refusal_reason="fixture has no transport route"
         ),
+        strategy_race._StrategyRaceOutcome(
+            "hierarchical", "refused", refusal_reason="fixture has no feasible blocks"
+        ),
     )
 
 
@@ -1690,6 +1714,9 @@ def test_candidate_races_run_concurrently_and_publish_progress_by_candidate(
             strategy_race._StrategyRaceOutcome(
                 "transport-routing", "refused", refusal_reason="fixture has no transport route"
             ),
+            strategy_race._StrategyRaceOutcome(
+                "hierarchical", "refused", refusal_reason="fixture has no feasible blocks"
+            ),
         )
 
     monkeypatch.setattr(strategy_race, "run_strategy_race", record)
@@ -1722,9 +1749,15 @@ def test_candidate_races_run_concurrently_and_publish_progress_by_candidate(
         ("all-products", "freeform"),
         ("all-products", "sequence-pair"),
     ]
-    expected_candidates = ["no-proliferator"] * 3 + ["all-products"] * 3
+    assert [(failure.candidate, failure.strategy) for failure in built.refused] == [
+        (candidate, strategy)
+        for candidate in ("no-proliferator", "all-products")
+        for strategy in ("transport-routing", "hierarchical")
+    ]
+    expected_candidates = ["no-proliferator"] * 4 + ["all-products"] * 4
     assert [step.candidate for step in steps] == expected_candidates * 2
-    assert [step.index for step in steps] == list(range(1, 7)) * 2
+    assert [step.index for step in steps] == list(range(1, 9)) * 2
+    assert {step.total for step in steps} == {8}
 
 
 def test_candidate_batch_settles_before_the_next_batch_starts(
@@ -1762,6 +1795,9 @@ def test_candidate_batch_settles_before_the_next_batch_starts(
             strategy_race._StrategyRaceOutcome(
                 "transport-routing", "refused", refusal_reason="fixture has no transport route"
             ),
+            strategy_race._StrategyRaceOutcome(
+                "hierarchical", "refused", refusal_reason="fixture has no feasible blocks"
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -1783,15 +1819,15 @@ def test_candidate_batch_settles_before_the_next_batch_starts(
         *(
             (candidate, "started")
             for candidate in ("no-proliferator", "all-products")
-            for _ in range(3)
+            for _ in range(4)
         ),
         *(
             (candidate, phase)
             for candidate in ("no-proliferator", "all-products")
-            for phase in ("laid-out", "laid-out", "refused")
+            for phase in ("laid-out", "laid-out", "refused", "refused")
         ),
-        *(("output-products", "started") for _ in range(3)),
-        *(("output-products", phase) for phase in ("laid-out", "laid-out", "refused")),
+        *(("output-products", "started") for _ in range(4)),
+        *(("output-products", phase) for phase in ("laid-out", "laid-out", "refused", "refused")),
     ]
 
 
@@ -1826,6 +1862,9 @@ def test_candidate_attempt_wall_excludes_waiting_for_a_slower_peer(
             ),
             strategy_race._StrategyRaceOutcome(
                 "transport-routing", "refused", refusal_reason="fixture has no transport route"
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "hierarchical", "refused", refusal_reason="fixture has no feasible blocks"
             ),
         )
 
@@ -1889,6 +1928,9 @@ def test_candidate_concurrency_uses_one_shared_rate_frontier(
             strategy_race._StrategyRaceOutcome(
                 "transport-routing", "refused", refusal_reason="fixture has no transport route"
             ),
+            strategy_race._StrategyRaceOutcome(
+                "hierarchical", "refused", refusal_reason="fixture has no feasible blocks"
+            ),
         )
 
     monkeypatch.setattr(pipeline, "_build_candidates_canonical", candidates)
@@ -1925,6 +1967,7 @@ def test_candidate_concurrency_uses_one_shared_rate_frontier(
     ("available_cpus", "sequence_islands", "expected_workers"),
     [
         (4, 1, {"no-proliferator": 4, "all-products": 4, "output-products": 4}),
+        (7, 1, {"no-proliferator": 7, "all-products": 7, "output-products": 7}),
         (8, 1, {"no-proliferator": 4, "all-products": 4, "output-products": 8}),
         (16, 1, {"no-proliferator": 6, "all-products": 5, "output-products": 5}),
         (64, 1, {"no-proliferator": 6, "all-products": 5, "output-products": 5}),
@@ -1967,6 +2010,9 @@ def test_raced_build_defaults_to_a_shared_sixteen_cpu_budget(
             strategy_race._StrategyRaceOutcome(
                 "transport-routing", "refused", refusal_reason="fixture has no transport route"
             ),
+            strategy_race._StrategyRaceOutcome(
+                "hierarchical", "refused", refusal_reason="fixture has no feasible blocks"
+            ),
         )
 
     monkeypatch.setattr(
@@ -2001,12 +2047,12 @@ def test_raced_build_defaults_to_a_shared_sixteen_cpu_budget(
 @pytest.mark.parametrize(
     ("workers", "sequence_islands"),
     # Only ONE thing can leave a race unfunded now: a worker budget too small to
-    # give each of the three strategies a worker. `(16, 5)` used to belong
+    # give each of the four strategies a worker. `(16, 5)` used to belong
     # here -- five islands could not be reserved out of a 16-worker share -- and
     # no longer does, because islands are resolved after the batch rather than
     # gating it. `test_an_explicit_island_count_no_longer_unfunds_a_race` pins
     # that reversal.
-    [(1, 1), (2, 1)],
+    [(1, 1), (2, 1), (3, 1)],
 )
 def test_unfunded_strategy_race_falls_back_to_serial_strategies(
     monkeypatch: pytest.MonkeyPatch,
@@ -2035,6 +2081,7 @@ def test_unfunded_strategy_race_falls_back_to_serial_strategies(
         "freeform",
         "sequence-pair",
         "transport-routing",
+        "hierarchical",
     ]
 
 
@@ -2066,6 +2113,9 @@ def test_an_explicit_island_count_no_longer_unfunds_a_race(
             ),
             strategy_race._StrategyRaceOutcome(
                 "transport-routing", "refused", refusal_reason="fixture has no transport route"
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "hierarchical", "refused", refusal_reason="fixture has no feasible blocks"
             ),
         )
 
@@ -2167,7 +2217,11 @@ def test_a_raced_build_reports_one_attempt_or_failure_per_outcome(
 
     assert len(calls) == 1
     assert [attempt.strategy for attempt in built.attempts] == ["freeform"]
-    assert [failure.strategy for failure in built.refused] == ["sequence-pair", "transport-routing"]
+    assert [failure.strategy for failure in built.refused] == [
+        "sequence-pair",
+        "transport-routing",
+        "hierarchical",
+    ]
     assert built.refused[0].reason == "no arrangement fit the band"
     assert built.refused[0].stats["process_wall_time_s"] == 4.5
     assert built.refused[0].stats["process_user_cpu_s"] == 3.0
@@ -2176,9 +2230,14 @@ def test_a_raced_build_reports_one_attempt_or_failure_per_outcome(
     assert built.strategy == "freeform"
     assert built.placement.area == 6
     # Each strategy starts once and settles once, including refusals.
-    assert [step.index for step in steps] == [1, 2, 3, 1, 2, 3]
-    assert {step.total for step in steps} == {3}
-    assert [step.phase for step in steps] == ["started"] * 3 + ["laid-out", "refused", "refused"]
+    assert [step.index for step in steps] == [1, 2, 3, 4, 1, 2, 3, 4]
+    assert {step.total for step in steps} == {4}
+    assert [step.phase for step in steps] == ["started"] * 4 + [
+        "laid-out",
+        "refused",
+        "refused",
+        "refused",
+    ]
     assert [step.strategy for step in steps] == list(pipeline.PRODUCTION_STRATEGIES) * 2
 
 
@@ -2204,6 +2263,9 @@ def test_raced_build_breaks_equal_area_ties_by_belt_tiles(
         strategy_race._StrategyRaceOutcome(
             "transport-routing", "refused", refusal_reason="fixture has no transport route"
         ),
+        strategy_race._StrategyRaceOutcome(
+            "hierarchical", "refused", refusal_reason="fixture has no feasible blocks"
+        ),
     )
     calls: list[dict[str, object]] = []
     _install_stub_race(monkeypatch, outcomes, calls)
@@ -2221,13 +2283,71 @@ def test_raced_build_breaks_equal_area_ties_by_belt_tiles(
     assert built.placement.stats["belt_tiles"] == 3
 
 
-def test_both_arms_are_announced_before_the_race_rather_than_after_it(
+@pytest.mark.slow
+def test_hierarchy_can_win_best_after_normal_certification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Spec 5.4: ``started`` fires for both pairs BEFORE the race.
+    baseline = pipeline.build(
+        SMALL_URL,
+        strategy="sequence-pair",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=8.0,
+        workers=1,
+        sequence_islands=1,
+    )
+    outcomes = (
+        strategy_race._StrategyRaceOutcome("freeform", "completed", placement=_finished(1, 1)),
+        strategy_race._StrategyRaceOutcome(
+            "sequence-pair", "refused", refusal_reason="no sequence arrangement"
+        ),
+        strategy_race._StrategyRaceOutcome(
+            "transport-routing", "refused", refusal_reason="no transport route"
+        ),
+        strategy_race._StrategyRaceOutcome(
+            "hierarchical", "completed", placement=baseline.placement
+        ),
+    )
+    monkeypatch.setattr(strategy_race, "run_strategy_race", lambda *_a, **_k: outcomes)
+    steps: list[pipeline.AttemptProgress] = []
+
+    built = pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=STUB_RACE_BUDGET_S,
+        workers=4,
+        race=True,
+        on_progress=steps.append,
+    )
+
+    assert built.strategy == "hierarchical"
+    assert built.report.ok
+    assert built.blueprint
+    assert [(attempt.strategy, attempt.ok) for attempt in built.attempts] == [
+        ("freeform", False),
+        ("hierarchical", True),
+    ]
+    assert [failure.strategy for failure in built.refused] == [
+        "sequence-pair",
+        "transport-routing",
+    ]
+    assert [step.strategy for step in steps] == list(pipeline.PRODUCTION_STRATEGIES) * 2
+    assert [step.phase for step in steps] == ["started"] * 4 + [
+        "laid-out",
+        "refused",
+        "refused",
+        "laid-out",
+    ]
+    assert codec.decode(built.blueprint).buildings
+
+
+def test_all_arms_are_announced_before_the_race_rather_than_after_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``started`` fires for every strategy BEFORE the race.
 
     Announcing afterwards would leave a progress bar silent for a whole budget
-    and then jump by two, which is the one thing ``AttemptProgress`` exists to
+    and then jump by four, which is the one thing ``AttemptProgress`` exists to
     prevent -- and it would make the field's own docstring ("``started`` fires
     before the solve") false for a raced build.
     """
@@ -2257,8 +2377,8 @@ def test_both_arms_are_announced_before_the_race_rather_than_after_it(
         on_progress=steps.append,
     )
 
-    assert announced_when_the_race_began == [3]
-    assert [step.phase for step in steps[:3]] == ["started"] * 3
+    assert announced_when_the_race_began == [4]
+    assert [step.phase for step in steps[:4]] == ["started"] * 4
 
 
 def test_an_explicit_strategy_never_races_even_when_asked_to(
@@ -2327,8 +2447,8 @@ def test_racing_rejects_sequence_islands_outside_the_serial_range_before_work(
 @pytest.mark.parametrize(
     ("strategy", "worker_budget", "requested", "expected"),
     [
-        ("best", 16, None, 4),
-        ("sequence-pair", 16, None, 4),
+        ("best", 16, None, 3),
+        ("sequence-pair", 16, None, 3),
         ("sequence-pair", 2, None, 1),  # race_worker_split(2)[1] is the cap
         ("freeform", 16, None, 1),
         ("sequence-pair", 16, 2, 2),  # an explicit request is honoured
@@ -2344,15 +2464,11 @@ def test_resolve_sequence_islands(
     assert pipeline.resolve_sequence_islands(strategy, worker_budget, requested) == expected
 
 
-def test_the_default_island_count_is_four() -> None:
-    assert pipeline.DEFAULT_SEQUENCE_ISLANDS == 4
-
-
 @pytest.mark.parametrize(
     ("worker_budget", "candidate_count", "parallelism", "shares", "islands_each"),
     (
-        (16, 3, 3, (6, 5, 5), 2),
-        (16, 1, 1, (16,), 4),
+        (16, 3, 3, (6, 5, 5), (2, 1, 1)),
+        (16, 1, 1, (16,), (3,)),
     ),
 )
 def test_raced_islands_come_from_the_candidate_share_and_never_narrow_the_batch(
@@ -2360,7 +2476,7 @@ def test_raced_islands_come_from_the_candidate_share_and_never_narrow_the_batch(
     candidate_count: int,
     parallelism: int,
     shares: tuple[int, ...],
-    islands_each: int,
+    islands_each: tuple[int, ...],
 ) -> None:
     """Batch width first, islands second -- never the other way round.
 
@@ -2381,9 +2497,10 @@ def test_raced_islands_come_from_the_candidate_share_and_never_narrow_the_batch(
     )
     allocations = pipeline._worker_allocations(worker_budget, parallelism)
     assert allocations == shares
-    assert [pipeline.resolve_sequence_islands("best", share, None) for share in allocations] == [
-        islands_each
-    ] * parallelism
+    assert (
+        tuple(pipeline.resolve_sequence_islands("best", share, None) for share in allocations)
+        == islands_each
+    )
 
 
 def test_an_explicit_island_count_still_reaches_every_raced_candidate() -> None:
@@ -2416,7 +2533,7 @@ def test_the_serial_path_settles_each_pair_before_starting_the_next(
 ) -> None:
     """Serial `best` interleaves solve and settlement, exactly as it always did.
 
-    Resolving both strategies up front and settling them afterwards would look
+    Resolving all strategies up front and settling them afterwards would look
     identical in the result, and would still be wrong: an attempt's
     ``attempt_deadline`` is its own solve start plus one budget and the grace,
     so the first pair's finalization would begin a whole budget late and refuse
@@ -2444,8 +2561,8 @@ def test_the_serial_path_settles_each_pair_before_starting_the_next(
         on_progress=steps.append,
     )
 
-    assert [step.phase for step in steps] == ["started", "laid-out"] * 3
-    assert [step.index for step in steps] == [1, 1, 2, 2, 3, 3]
+    assert [step.phase for step in steps] == ["started", "laid-out"] * 4
+    assert [step.index for step in steps] == [1, 1, 2, 2, 3, 3, 4, 4]
 
 
 def _install_new_layout_spy(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, object]]:
@@ -2511,6 +2628,26 @@ def test_an_explicit_workers_count_reaches_the_hierarchical_backend_verbatim(
     assert calls == [("hierarchical", 5)]
 
 
+@pytest.mark.parametrize("workers", [None, 3])
+def test_serial_best_caps_hierarchy_with_the_shared_worker_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    workers: int | None,
+) -> None:
+    calls = _install_new_layout_spy(monkeypatch)
+    monkeypatch.setattr(pipeline, "_available_cpu_count", lambda: 64)
+
+    built = pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=STUB_RACE_BUDGET_S,
+        workers=workers,
+    )
+
+    assert calls == [(strategy, workers or 16) for strategy in pipeline.PRODUCTION_STRATEGIES]
+    assert [attempt.strategy for attempt in built.attempts] == list(pipeline.PRODUCTION_STRATEGIES)
+
+
 def test_a_terminated_or_crashed_arm_is_a_failure_and_never_an_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2532,6 +2669,9 @@ def test_a_terminated_or_crashed_arm_is_a_failure_and_never_an_attempt(
             strategy_race._StrategyRaceOutcome(
                 "transport-routing", "refused", refusal_reason="fixture has no transport route"
             ),
+            strategy_race._StrategyRaceOutcome(
+                "hierarchical", "refused", refusal_reason="fixture has no feasible blocks"
+            ),
         ),
         calls,
     )
@@ -2549,6 +2689,7 @@ def test_a_terminated_or_crashed_arm_is_a_failure_and_never_an_attempt(
         "freeform",
         "sequence-pair",
         "transport-routing",
+        "hierarchical",
     ]
     assert "was terminated" in str(caught.value)
     assert "ValueError: boom" in str(caught.value)
@@ -2568,6 +2709,9 @@ def test_every_raced_attempt_reports_its_wall_and_its_overshoot(
             ),
             strategy_race._StrategyRaceOutcome(
                 "transport-routing", "refused", refusal_reason="fixture has no transport route"
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "hierarchical", "refused", refusal_reason="fixture has no feasible blocks"
             ),
         ),
         calls,
@@ -2624,6 +2768,9 @@ def test_a_raced_attempt_reports_overshoot_against_the_races_own_grace(
             ),
             strategy_race._StrategyRaceOutcome(
                 "transport-routing", "refused", refusal_reason="fixture has no transport route"
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "hierarchical", "refused", refusal_reason="fixture has no feasible blocks"
             ),
         ),
         calls,
@@ -2684,6 +2831,9 @@ def test_a_raced_attempt_is_not_born_deadline_expired(
             strategy_race._StrategyRaceOutcome(
                 "transport-routing", "refused", refusal_reason="fixture has no transport route"
             ),
+            strategy_race._StrategyRaceOutcome(
+                "hierarchical", "refused", refusal_reason="fixture has no feasible blocks"
+            ),
         ),
         calls,
         on_call=spend_the_race,
@@ -2717,13 +2867,17 @@ def test_a_raced_attempt_is_not_born_deadline_expired(
 
     assert polled == [False]
     assert [attempt.strategy for attempt in built.attempts] == ["freeform"]
-    assert [failure.strategy for failure in built.refused] == ["sequence-pair", "transport-routing"]
+    assert [failure.strategy for failure in built.refused] == [
+        "sequence-pair",
+        "transport-routing",
+        "hierarchical",
+    ]
 
 
 def test_a_race_that_loses_an_arm_refuses_rather_than_reporting_a_full_build(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`total_pairs` promised two settlements, so one outcome is a lost arm.
+    """``total_pairs`` promised four settlements, so one outcome loses three arms.
 
     `run_strategy_race` filters its collector on both a present future and a
     known name, so a `submit` seam that returned fewer outcomes than arms would

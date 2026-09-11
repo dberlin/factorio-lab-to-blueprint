@@ -207,14 +207,13 @@ export function BuildPanel() {
           }}
         >
           <option value="best">
-            best (freeform + sequence-pair + transport-routing, smallest valid wins)
+            best (freeform + sequence-pair + transport-routing + hierarchical, smallest valid wins)
           </option>
           <option value="freeform">freeform</option>
           <option value="sequence-pair">sequence-pair</option>
           <option value="transport-routing">transport-routing</option>
           <option value="hierarchical">
-            hierarchical (explicit only: block decomposition, experimental; may overshoot the budget
-            by its settlement phase)
+            hierarchical (block decomposition; also competes in best)
           </option>
         </select>
 

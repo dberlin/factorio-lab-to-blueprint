@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import multiprocessing
+import os
 import sys
+import threading
+from multiprocessing.connection import wait
 
 try:
     import resource
@@ -23,3 +27,16 @@ def usage() -> tuple[float, float, int]:
         return 0.0, 0.0, 0
     measured = resource.getrusage(resource.RUSAGE_SELF)
     return measured.ru_utime, measured.ru_stime, peak_rss_kib(measured.ru_maxrss)
+
+
+def exit_with_parent() -> None:
+    """Bind a spawned worker's lifetime to its owner, including forced exits."""
+    parent = multiprocessing.parent_process()
+    assert parent is not None, "parent lifetime binding requires a spawned worker"
+
+    def watch_parent() -> None:
+        wait((parent.sentinel,))
+        # Pool shutdown cannot run when the owning racer is forcibly terminated.
+        os._exit(1)
+
+    threading.Thread(target=watch_parent, name="parent-lifetime", daemon=True).start()

@@ -729,32 +729,32 @@ test.each([
 
 test('the budget copy follows selected and pinned effective candidates', () => {
   mount();
-  // Defaults: 3 candidates x 3 active production strategies x 15s.
-  expect(screen.getByText(/up to 135s of solving/)).toBeInTheDocument();
+  // Defaults: 3 candidates x 4 active production strategies x 15s.
+  expect(screen.getByText(/up to 180s of solving/)).toBeInTheDocument();
 
   const group = screen.getByRole('group', { name: 'Candidate policies' });
   fireEvent.click(within(group).getByRole('checkbox', { name: 'output-products' }));
   fireEvent.click(within(group).getByRole('checkbox', { name: 'no-proliferator' }));
-  expect(screen.getByText(/1 candidate × 3 strategies × 15s/)).toBeInTheDocument();
-  expect(screen.getByText(/up to 45s of solving/)).toBeInTheDocument();
+  expect(screen.getByText(/1 candidate × 4 strategies × 15s/)).toBeInTheDocument();
+  expect(screen.getByText(/up to 60s of solving/)).toBeInTheDocument();
 
   fireEvent.click(within(group).getByRole('checkbox', { name: 'output-products' }));
   fireEvent.click(within(group).getByRole('checkbox', { name: 'no-proliferator' }));
   fireEvent.click(screen.getByRole('checkbox', { name: 'Fetch FactorioLab flow automatically' }));
-  expect(screen.getByText(/1 candidate × 3 strategies × 15s/)).toBeInTheDocument();
-  expect(screen.getByText(/up to 45s of solving/)).toBeInTheDocument();
+  expect(screen.getByText(/1 candidate × 4 strategies × 15s/)).toBeInTheDocument();
+  expect(screen.getByText(/up to 60s of solving/)).toBeInTheDocument();
 });
 
 test('a long projected total warns instead of blocking the build', () => {
   mount();
-  // Defaults: 3 candidates x 3 strategies x (15s budget + 6s grace) = 189s.
+  // Defaults: 3 candidates x 4 strategies x (15s budget + 6s grace) = 252s.
   // Unremarkable, and a warning that is always on screen is one nobody reads.
   expect(screen.queryByTestId('budget-warning')).not.toBeInTheDocument();
 
   fireEvent.change(screen.getByLabelText('Budget (s/layout)'), { target: { value: '45' } });
   const warning = screen.getByTestId('budget-warning');
-  // Both numbers make the total visible: 9 layouts x (45s + 6s) = 459s.
-  expect(warning).toHaveTextContent('459s');
+  // Both numbers make the total visible: 12 layouts x (45s + 6s) = 612s.
+  expect(warning).toHaveTextContent('612s');
   expect(warning).toHaveTextContent('45s per layout');
 
   // ...and it is a warning. The button still builds.

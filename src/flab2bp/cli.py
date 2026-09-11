@@ -373,14 +373,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--strategy",
         choices=pipeline.STRATEGY_CHOICES,
         default="best",
-        help="layout backend; best runs freeform, sequence-pair and transport-routing "
-        "and keeps the smallest valid result (default). transport-routing constructs "
-        "unsprayed interfaces with bounded native SAT routing. "
-        "hierarchical decomposes the spec into "
-        "blocks, solves them apart and composes them; it is explicit-only and "
-        "never part of best, and it may overshoot --budget by its settlement "
-        "phase, which composes, routes every cut lane and certifies after the "
-        "last block",
+        help="layout backend; best runs freeform, sequence-pair, transport-routing "
+        "and hierarchical and keeps the smallest valid result (default). "
+        "transport-routing constructs interfaces with bounded native SAT routing. "
+        "hierarchical decomposes the spec into blocks, solves them apart and "
+        "composes them; it automatically competes in best. Racing shares one "
+        "deadline across all four strategies; explicit hierarchical may overshoot "
+        "--budget while settling, routing cut lanes and certifying",
     )
     ap.add_argument(
         "--band",
@@ -394,11 +393,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--sequence-islands",
         type=int,
         metavar="N",
-        help="whole-solve process islands for explicit sequence-pair (default: "
-        "CPU affinity capped at 8; explicit range 1..16). Islands inside a "
-        "RACED sequence-pair arm pay the spawn cost twice and start a fresh "
-        "budget those seconds late, because the islands branch derives its own "
-        "deadlines and takes no absolute one",
+        help="whole-solve process islands for sequence-pair or best (range 1..16). "
+        "By default, use up to four islands, capped by CPU affinity and the "
+        "sequence-pair worker share: three with a single 16-worker best portfolio, "
+        "or one per candidate in its default three-candidate batch",
     )
     add_candidate_policy_argument(ap)
     ap.add_argument(
@@ -460,13 +458,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="aggregate solver workers (default: up to 16 available CPUs; "
-        "divided across candidate and strategy races)",
+        "divided across candidate races, with at least four per raced candidate). "
+        "Explicit hierarchical defaults to all available CPUs",
     )
     ap.add_argument(
         "--race",
         action="store_true",
         help="run --strategy best as a concurrent race for ONE budget instead of "
-        "two serial solves for one budget each",
+        "four serial solves for one budget each; fewer than four workers falls back to serial",
     )
     ap.add_argument(
         "--no-share",
@@ -526,17 +525,9 @@ def main(argv: list[str] | None = None) -> int:
             "combination would silently write an empty trace file. Drop "
             "--race, or omit --trace-jsonl."
         )
-    # Islands are ON by default for both `sequence-pair` and `best`, which is
-    # every plain `flab2bp <url>` build: four islands measured 13.6 % smaller
-    # layouts at the same budget (design doc L1).  The count is deliberately NOT
-    # resolved here.  `None` means "you decide", and only `pipeline.build` can:
-    # a raced build resolves islands per candidate, from the worker share that
-    # candidate's batch actually gave it, and the batch width is not known until
-    # the candidates are.  Resolving eagerly here would hand `build` a number
-    # that looks like an EXPLICIT request -- which travels verbatim, by design --
-    # and every raced candidate would then get the whole build's island count
-    # instead of its own share's.  Measured: four islands per candidate on a
-    # five-worker share, where two is what the share funds.
+    # Keep None unresolved: only pipeline.build knows each candidate's worker
+    # share. Resolving here would turn the build-wide default into an explicit
+    # request and oversubscribe the sequence-pair arms in a concurrent batch.
     sequence_islands = args.sequence_islands
 
     # --trace-jsonl opens its output file here, before any solve starts, so a

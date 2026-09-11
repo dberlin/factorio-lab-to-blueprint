@@ -34,13 +34,19 @@ press **Build**. The page exposes the resulting blueprint for copying and render
 second tool.
 
 **A build is a job, not a request.** `--budget` is per layout and `best` lays out every
-candidate with freeform, sequence-pair and CaDiCaL-based transport-routing, so a build can run
-for seconds to minutes. `best` selects the smallest validator-clean result, not the first to
+candidate with freeform, sequence-pair, CaDiCaL-based transport-routing and hierarchical,
+so a build can run for seconds to minutes. `best` selects the smallest validator-clean result, not the first to
 finish. Transport-routing supports unsprayed and sprayed interfaces, including separate
 raw-material and proliferator feeds; every result must pass the same physical validation.
 `POST /api/build` returns an id immediately and the page polls `GET /api/build/<id>`. `pipeline.build` reports
 each candidate/strategy pair as it starts and settles. A projected total over 300 seconds
 warns that the job may take a while; it does not refuse or silently clamp the request.
+Raced builds allocate an aggregate CPU budget (by default at most 16 affinity CPUs)
+across the widest candidate batch that can fund four workers per candidate. Each
+candidate gives hierarchical one quarter of its share (at least one worker), keeps
+one worker for transport-routing, and divides the rest between freeform and sequence-pair.
+A single 16-worker portfolio uses 8/3/1/4 workers in that order. If four workers cannot
+be funded, `best` runs the strategies serially within the aggregate worker budget.
 
 **A refusal is a result.** A spec that cannot be laid out reports why each strategy and
 candidate gave up. An invalid build withholds the blueprint and lists the validation errors,
@@ -106,7 +112,8 @@ Density is the objective. The layout may use direct insertion between adjacent m
 choosing per recipe between *extra products* mode, which compounds savings up the chain, and
 *production speedup* mode, which halves machine count at that step.
 
-The explicit `hierarchical` strategy prioritizes a feasible factory: it tries one eligible
+The `hierarchical` strategy automatically competes in `best` and can also be selected alone.
+It prioritizes a feasible factory: it tries one eligible
 solver per unresolved block shape and runs an alternate only if that shape remains unresolved. Divisible
 refused blocks are cut before another parent-widening round, within the existing budget.
 This can trade density for lower latency; it does not promise the smallest layout.
@@ -114,7 +121,7 @@ The `best` portfolio's smallest-validator-clean-result selection is unchanged.
 
 ## Latitude portability
 
-`--band portable` is the default for both layout strategies and the web interface. The
+`--band portable` is the default for all layout strategies and the web interface. The
 available selections are:
 
 ```text
@@ -166,11 +173,13 @@ URL ──1──> LabRequest ──2──> RateSolution ──3──> BuildSp
 | `layout/base.py` | `LayoutStrategy` protocol, `Placement`, geometry primitives |
 | `layout/freeform.py` | Freeform — CP-SAT rectangle packing + detailed belt router |
 | `layout/sequence_solver.py` | SequencePair — staged sequence-pair search using the shared router |
+| `layout/transport_routing/` | CaDiCaL-backed constructive transport routing |
+| `layout/hierarchy/` | Hierarchical block decomposition, solving and composition |
 | `layout/validate.py` | Strategy-independent judge: overlap, reach, continuity, throughput |
 | `dsp/codec.py` | `Placement` → binary → gzip → base64 → header → MD5F, and back |
 | `bench/` | Compares Freeform and SequencePair over the URL corpus |
 
-Stage 4 has two production implementations behind one interface. `best` runs both and
+Stage 4 has four production implementations behind one interface. `best` runs all four and
 returns the smallest validator-clean placement.
 
 Everything upstream of `BuildSpec` is arithmetic on rationals with no geometry. Everything

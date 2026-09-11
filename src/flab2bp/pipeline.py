@@ -73,14 +73,12 @@ STRATEGY_CHOICES: tuple[StrategyName, ...] = (
     "hierarchical",
     "transport-routing",
 )
-#: Explicit strategies included when callers request ``best``.  ``hierarchical``
-#: is deliberately absent: it decomposes a spec and runs the other two backends
-#: underneath itself, so admitting it here would change every default build's
-#: wall and its answer.  It is reachable only by naming it.
+#: Explicit strategies competing for the smallest valid result under ``best``.
 PRODUCTION_STRATEGIES: tuple[ExplicitStrategyName, ...] = (
     "freeform",
     "sequence-pair",
     "transport-routing",
+    "hierarchical",
 )
 PRODUCTION_STRATEGY_COUNT = len(PRODUCTION_STRATEGIES)
 POWER_TOWER_CHOICES = catalog.POWER_TOWER_CHOICES
@@ -98,9 +96,8 @@ DEFAULT_WORKER_BUDGET_CAP = 16
 #: mean area fell 13.6 % at four and 13.5 % at eight, and no cell got worse.
 #: The win is diversification rather than throughput -- on qc180 the winning
 #: island took a ``compact_seed_attempt`` branch the serial run, which always
-#: takes attempt 0, cannot reach.  Four rather than eight because eight bought
-#: nothing measurable and because ``race_worker_split(16)[1] == 4`` caps the
-#: raced sequence-pair arm at four anyway, so the cap costs nothing.
+#: takes attempt 0, cannot reach. The portfolio's allocated worker share can
+#: further constrain this upper bound.
 DEFAULT_SEQUENCE_ISLANDS = 4
 
 
@@ -134,8 +131,8 @@ def resolve_sequence_islands(
     spent out of: the WHOLE build budget for a serial strategy, and ONE
     CANDIDATE'S share for a raced one, resolved per candidate after the batch
     width is chosen.  A three-candidate raced build on the default 16 workers
-    gives each candidate 5 or 6, which funds one island each; the same build
-    with a single candidate gives it all 16 and four islands.
+    gives candidates 6/5/5 workers, funding 2/1/1 islands; the same build
+    with a single candidate gives it all 16 and three islands.
     """
     if requested is not None:
         return requested
@@ -679,13 +676,12 @@ def build(
     #: and reserve the SequencePair arm's island processes.
     workers: int | None = None,
     #: Candidate races to run at once. ``None`` admits the widest batch whose
-    #: candidate shares each fund a two-strategy race; islands are then resolved
+    #: candidate shares each fund a four-strategy race; islands are then resolved
     #: per candidate from that share rather than constraining the batch.
-    #: An unfunded two-strategy race falls back to serial strategies.
+    #: An unfunded four-strategy race falls back to serial strategies.
     candidate_parallelism: int | None = None,
-    #: Race the two strategies for ONE budget instead of running them serially
-    #: for one budget EACH.  OFF by default until the flip commit: a change this
-    #: large in wall time and process count opts in before it opts everyone in.
+    #: Race all four strategies for one budget instead of running them serially
+    #: for one budget each. Library callers opt in; the CLI and web UI enable it.
     race: bool = False,
     #: Exchange certified incumbents and cluster no-goods between the racers.
     #: Meaningless unless ``race`` is true.
@@ -918,27 +914,16 @@ def build(
         The loop below branches on the RESULT rather than catching, so one shape
         handles a raced pair and a serial one.
 
-        ``hierarchical`` gets the caller's raw ``workers`` (explicit count, or
-        ``None``), never ``worker_budget``.  ``_new_layout``'s own ``workers``
-        parameter is documented as "CP-SAT search workers for the one backend
-        that has a multi-threaded solve" -- ``worker_budget``'s 16-CPU cap
-        exists for THAT, the freeform arm inside a race sharing one process.
-        ``HierarchicalLayout`` spends the same argument on a different
-        quantity: how many whole block placers (each its own process, each
-        holding its OWN CP-SAT workers) may run at once, and it is never part
-        of a race (``hierarchical`` is absent from ``PRODUCTION_STRATEGIES``
-        and ``strategy_race_parallelism`` is only ever set under
-        ``strategy == "best"``), so nothing here divides it with a competing
-        arm the way the cap's own rationale assumes.  Passing ``None`` through
-        lets ``HierarchicalLayout._pool_width`` size its pool from the box's
-        real affinity set instead of a cap sized for a different backend.
+        Explicit ``hierarchical`` keeps the caller's raw worker choice, allowing
+        its own affinity-aware default. A serial ``best`` fallback instead uses
+        the aggregate build budget, just as its other arms do.
         """
         layout = _new_layout(
             sname,
             belt_rules=belt_rules,
             sequence_islands=islands,
             band_policy=policy,
-            workers=workers if sname == "hierarchical" else worker_budget,
+            workers=workers if strategy == "hierarchical" else worker_budget,
             observer=search_observer,
         )
         try:

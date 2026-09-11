@@ -132,6 +132,7 @@ from dataclasses import dataclass, field
 from typing import Literal, cast
 
 from flab2bp.dsp import catalog
+from flab2bp.layout import process_resources
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     NoValidLayout,
@@ -333,6 +334,7 @@ def _spawn_pool(max_workers: int) -> Executor:
     return ProcessPoolExecutor(
         max_workers=max_workers,
         mp_context=multiprocessing.get_context("spawn"),
+        initializer=process_resources.exit_with_parent,
     )
 
 
@@ -905,6 +907,9 @@ class HierarchicalLayout:
                 PlacementStats,
                 {
                     **stats.as_stats(),
+                    "belt_tiles": sum(
+                        catalog.is_belt(building.item_id) for building in placement.buildings
+                    ),
                     "block_wall_s": round(block_wall, 3),
                     "compose_wall_s": round(compose_wall, 3),
                 },
@@ -1089,7 +1094,7 @@ class HierarchicalLayout:
                     key[1],
                     block_budget,
                     self.belt_rules,
-                    _BLOCK_WORKERS,
+                    min(_BLOCK_WORKERS, self.workers or _BLOCK_WORKERS),
                     # Each worker clips at job start, not at round start.
                     deadline,
                 )

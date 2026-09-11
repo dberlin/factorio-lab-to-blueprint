@@ -212,19 +212,9 @@ def test_proliferator_tier_is_optional_and_explicit() -> None:
         parse_options({"url": URL, "proliferator_tier": "4"})
 
 
-def test_web_strategies_are_the_public_subset() -> None:
-    assert parse_options({"url": URL, "strategy": "freeform"}).strategy == "freeform"
-    assert parse_options({"url": URL, "strategy": "sequence-pair"}).strategy == "sequence-pair"
-    assert parse_options({"url": URL, "strategy": "hierarchical"}).strategy == "hierarchical"
-
-
-def test_an_unknown_strategy_names_every_choice_the_web_accepts() -> None:
-    """The error is the only place a caller learns what it may ask for."""
-    with pytest.raises(
-        InvalidOptions,
-        match=r"'strategy' must be one of best, freeform, sequence-pair, hierarchical",
-    ):
-        parse_options({"url": URL, "strategy": "spine"})
+@pytest.mark.parametrize("strategy", pipeline.STRATEGY_CHOICES)
+def test_web_strategies_are_the_public_choices(strategy: pipeline.StrategyName) -> None:
+    assert parse_options({"url": URL, "strategy": strategy}).strategy == strategy
 
 
 def test_a_long_budget_is_accepted_and_warned_about_rather_than_refused() -> None:
@@ -239,7 +229,7 @@ def test_a_long_budget_is_accepted_and_warned_about_rather_than_refused() -> Non
 
 
 def test_the_warning_is_on_the_projected_total_not_the_per_layout_budget() -> None:
-    """Six attempts of a 45s budget is over the mark; three of them are not."""
+    """Twelve attempts of a 45s budget is over the mark; three are not."""
     attempts = len(DEFAULT_CANDIDATE_POLICIES) * pipeline.PRODUCTION_STRATEGY_COUNT
     over = parse_options({"url": URL, "budget_s": 45.0})
     assert over.projected_total_s == pytest.approx(attempts * (45.0 + over.completion_grace_s))

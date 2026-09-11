@@ -1,9 +1,8 @@
-"""Race the two production strategies for one wall budget, sharing what they prove.
+"""Race the production portfolio for one wall budget.
 
-``pipeline.build(strategy="best")`` used to run freeform and then sequence-pair,
-each with the FULL budget, and throw the loser's work away.  This module runs
-both concurrently in spawned children for ONE budget and lets each tell the
-other what it has certified and what it has proved impossible.
+Freeform, sequence-pair, transport-routing and hierarchical compete concurrently
+in spawned children. Freeform and sequence-pair additionally exchange certified
+bounds; every arm retains its own physical acceptance checks.
 
 The process shape is deliberately the one ``sequence_islands.py`` already runs in
 production: a frozen, ``slots=True`` request that is the whole pickled unit; a
@@ -39,6 +38,7 @@ if TYPE_CHECKING:
     from multiprocessing.connection import _ConnectionBase
 
     from flab2bp.layout.freeform import FreeformLayout
+    from flab2bp.layout.hierarchy.strategy import HierarchicalLayout
     from flab2bp.layout.sequence_solver import SequencePairLayout
     from flab2bp.layout.transport_routing.runtime import TransportRoutingKernel
 
@@ -68,12 +68,17 @@ from flab2bp.layout.sequence_solver import SequenceSolverConfig, _validate_seque
 from flab2bp.layout.strip_variants import StripInstanceId
 from flab2bp.spec import BuildSpec
 
-type RaceStrategyName = Literal["freeform", "sequence-pair", "transport-routing"]
+type RaceStrategyName = Literal["freeform", "sequence-pair", "transport-routing", "hierarchical"]
 
 #: The portfolio, in the order outcomes are returned.  Same membership and same
 #: order as ``pipeline.PRODUCTION_STRATEGIES``; named here so this module does
 #: not import ``pipeline``, which imports it.
-RACE_STRATEGIES: tuple[RaceStrategyName, ...] = ("freeform", "sequence-pair", "transport-routing")
+RACE_STRATEGIES: tuple[RaceStrategyName, ...] = (
+    "freeform",
+    "sequence-pair",
+    "transport-routing",
+    "hierarchical",
+)
 
 #: Seconds past the soft deadline the parent waits before killing a racer.
 #:
@@ -124,17 +129,20 @@ RACE_FREEFORM_WORKER_SHARE = Fraction(3, 4)
 RACE_MIN_WORKERS = 1
 
 
-def race_worker_split(total: int) -> tuple[int, int, int]:
-    """Split workers into freeform, sequence-pair and one native transport child."""
+def race_worker_split(total: int) -> tuple[int, int, int, int]:
+    """Fund hierarchy's block pool, then split the remaining portfolio share."""
     if type(total) is not int or total < 1:
         raise ValueError("racing worker total must be a positive integer")
-    if total <= 3:
-        return (RACE_MIN_WORKERS, RACE_MIN_WORKERS, RACE_MIN_WORKERS)
+    if total <= len(RACE_STRATEGIES):
+        return (RACE_MIN_WORKERS,) * 4
+    hierarchy = max(RACE_MIN_WORKERS, total // len(RACE_STRATEGIES))
+    remaining = total - hierarchy
     freeform = max(
         RACE_MIN_WORKERS,
-        total * RACE_FREEFORM_WORKER_SHARE.numerator // RACE_FREEFORM_WORKER_SHARE.denominator - 1,
+        remaining * RACE_FREEFORM_WORKER_SHARE.numerator // RACE_FREEFORM_WORKER_SHARE.denominator
+        - 1,
     )
-    return (freeform, max(RACE_MIN_WORKERS, total - freeform - 1), RACE_MIN_WORKERS)
+    return (freeform, max(RACE_MIN_WORKERS, remaining - freeform - 1), RACE_MIN_WORKERS, hierarchy)
 
 
 class _MessageQueue(Protocol):
@@ -522,7 +530,7 @@ def _build_layout(
     portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
     publish_incumbent: Callable[[Placement], None] | None = None,
     observer: SearchObserver | None = None,
-) -> FreeformLayout | SequencePairLayout | TransportRoutingKernel:
+) -> FreeformLayout | SequencePairLayout | TransportRoutingKernel | HierarchicalLayout:
     """Reconstruct one strategy from the pickled request, in the child.
 
     ``observer`` is a SEPARATE parameter from ``publish_incumbent`` (Ruling 3,
@@ -531,6 +539,7 @@ def _build_layout(
     hooks -- portfolio, publish, and observer -- coexist.
     """
     from flab2bp.layout.freeform import FreeformLayout
+    from flab2bp.layout.hierarchy.strategy import HierarchicalLayout
     from flab2bp.layout.sequence_solver import SequencePairLayout
     from flab2bp.layout.transport_routing.runtime import TransportRoutingKernel
 
@@ -538,6 +547,12 @@ def _build_layout(
         return TransportRoutingKernel(
             band_policy=request.band_policy,
             belt_rules=request.belt_rules,
+        )
+    if request.strategy == "hierarchical":
+        return HierarchicalLayout(
+            band_policy=request.band_policy,
+            belt_rules=request.belt_rules,
+            workers=request.workers,
         )
 
     if request.strategy == "freeform":
@@ -866,11 +881,10 @@ def run_strategy_race(
     submit: RaceSubmit | None = None,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> tuple[_StrategyRaceOutcome, ...]:
-    """Run both strategies concurrently for ONE budget and return both outcomes.
+    """Run the portfolio concurrently for one budget and return every outcome.
 
-    The first validator-clean result deliberately does NOT stop the race: the
-    other arm may still find something smaller, and ``pipeline.build`` picks the
-    winner by ``min(area)`` over whatever both produced.
+    A validator-clean result does not stop its competitors: the pipeline keeps
+    the smallest valid result, with its existing deterministic tie-breaks.
     """
     if time_budget_s <= 0:
         raise ValueError("racing requires a positive time budget")
@@ -881,18 +895,18 @@ def run_strategy_race(
     # crashed outcomes instead of raising -- refuse before anything is
     # submitted, exactly like the serial path.
     _validate_sequence_islands(sequence_islands)
-    # Incumbent sharing joins the two density-searching arms. The constructive
-    # transport arm uses no incumbent pruning and needs no sharing channel.
+    # Only the two density-searching arms exchange incumbent bounds.
     started = monotonic()
     soft_deadline = started + time_budget_s
     hard_deadline = soft_deadline + RACE_COMPLETION_GRACE_S
-    freeform_workers, sequence_workers, transport_workers = race_worker_split(
+    freeform_workers, sequence_workers, transport_workers, hierarchy_workers = race_worker_split(
         _available_cores() if workers is None else workers
     )
     workers_by_strategy = {
         "freeform": freeform_workers,
         "sequence-pair": sequence_workers,
         "transport-routing": transport_workers,
+        "hierarchical": hierarchy_workers,
     }
     requests = tuple(
         _StrategyRaceRequest(
@@ -907,7 +921,7 @@ def run_strategy_race(
             sequence_islands=sequence_islands,
             config=config or SequenceSolverConfig(),
             compact_seed_config=compact_seed_config or CompactSeedConfig(),
-            share=share and name != "transport-routing",
+            share=share and name in ("freeform", "sequence-pair"),
             trace=trace_queue is not None,
         )
         for name in RACE_STRATEGIES

@@ -289,7 +289,7 @@ export const DEFAULT_OPTIONS: BuildOptions = {
 };
 
 /** Active production strategies — `pipeline.PRODUCTION_STRATEGY_COUNT`. */
-const PRODUCTION_STRATEGY_COUNT = 3;
+const PRODUCTION_STRATEGY_COUNT = 4;
 
 /**
  * What ONE layout attempt may spend on top of its search budget, in seconds.
