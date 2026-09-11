@@ -49,8 +49,8 @@
 
 **Files:**
 - Create: `docs/superpowers/evidence/2026-09-02-phase-b-last-mile/baseline-budget30-round{1,2,3}.jsonl`
-- Create: `docs/superpowers/evidence/2026-09-02-phase-b-last-mile/route-cases-universe-matrix-output-products.pkl`
-- Create: `docs/superpowers/evidence/2026-09-02-phase-b-last-mile/route-cases-quantum-chip-all-products.pkl`
+- Create locally (gitignored): `.local-evidence/2026-09-02-phase-b-last-mile/route-cases-universe-matrix-output-products.pkl`
+- Create locally (gitignored): `.local-evidence/2026-09-02-phase-b-last-mile/route-cases-quantum-chip-all-products.pkl`
 - Create: `docs/superpowers/evidence/2026-09-02-phase-b-last-mile/digests-before.txt`
 - Modify: `scripts/route_bench.py:93-179` (`capture`), `:260-277` (`main`)
 - Test: `tests/scripts/test_route_bench_policy.py`
@@ -168,7 +168,8 @@ Expected: PASS, 2 passed.
 - [ ] **Step 6: Capture the two target cells and record their digests**
 
 ```bash
-d=docs/superpowers/evidence/2026-09-02-phase-b-last-mile
+d=.local-evidence/2026-09-02-phase-b-last-mile
+mkdir -p "$d"
 uv run python setup.py build_ext --inplace
 uv run python scripts/route_bench.py --capture universe-matrix --policy output-products \
   --budget 30 --every 8 --cap 64 --cases "$d/route-cases-universe-matrix-output-products.pkl"
@@ -177,7 +178,7 @@ uv run python scripts/route_bench.py --capture quantum-chip --policy all-product
 {
   uv run python scripts/route_bench.py --cases "$d/route-cases-universe-matrix-output-products.pkl" --rounds 3 --check
   uv run python scripts/route_bench.py --cases "$d/route-cases-quantum-chip-all-products.pkl" --rounds 3 --check
-} | tee "$d/digests-before.txt"
+} | tee "docs/superpowers/evidence/2026-09-02-phase-b-last-mile/digests-before.txt"
 ```
 
 Expected: each capture prints `captured 64 of N searches -> …` and each check prints a `BEST …` line followed by `captured digest X   replay digest X   MATCH`. Both exit 0. These two digests are the parity oracle for Tasks 4 and 11.
@@ -1809,7 +1810,7 @@ Expected: the six new tests PASS and `test_route_feedback.py` is unchanged and g
 - [ ] **Step 8: Prove the replay digests did not move**
 
 ```bash
-d=docs/superpowers/evidence/2026-09-02-phase-b-last-mile
+d=.local-evidence/2026-09-02-phase-b-last-mile
 uv run python scripts/route_bench.py --cases "$d/route-cases-universe-matrix-output-products.pkl" --rounds 3 --check
 uv run python scripts/route_bench.py --cases "$d/route-cases-quantum-chip-all-products.pkl" --rounds 3 --check
 ```
@@ -2749,7 +2750,7 @@ Expected: the five new tests PASS, and the pre-existing no-good tests at `tests/
 - [ ] **Step 6: Prove the replay digests still have not moved**
 
 ```bash
-d=docs/superpowers/evidence/2026-09-02-phase-b-last-mile
+d=.local-evidence/2026-09-02-phase-b-last-mile
 uv run python scripts/route_bench.py --cases "$d/route-cases-universe-matrix-output-products.pkl" --rounds 3 --check
 uv run python scripts/route_bench.py --cases "$d/route-cases-quantum-chip-all-products.pkl" --rounds 3 --check
 ```
@@ -3035,8 +3036,8 @@ git commit -m "feat(layout): exclude a proved cluster relation in sequence-pair 
 
 **Files:**
 - Create: `scripts/last_mile_bench.py`
-- Create: `docs/superpowers/evidence/2026-09-02-phase-b-last-mile/cluster-cases-universe-matrix-output-products.pkl`
-- Create: `docs/superpowers/evidence/2026-09-02-phase-b-last-mile/cluster-cases-quantum-chip-all-products.pkl`
+- Create locally (gitignored): `.local-evidence/2026-09-02-phase-b-last-mile/cluster-cases-universe-matrix-output-products.pkl`
+- Create locally (gitignored): `.local-evidence/2026-09-02-phase-b-last-mile/cluster-cases-quantum-chip-all-products.pkl`
 - Create: `docs/superpowers/evidence/2026-09-02-phase-b-last-mile/cluster-bench.txt`
 - Modify: `scripts/route_bench.py` (`capture_clusters`, `--stranded`)
 - Test: `tests/scripts/test_last_mile_bench.py`
@@ -3453,7 +3454,8 @@ Expected: PASS, 2 passed.
 - [ ] **Step 8: Capture and replay the two target cells**
 
 ```bash
-d=docs/superpowers/evidence/2026-09-02-phase-b-last-mile
+d=.local-evidence/2026-09-02-phase-b-last-mile
+mkdir -p "$d"
 uv run python scripts/route_bench.py --capture universe-matrix --policy output-products \
   --stranded --budget 30 --cap 32 \
   --cases "$d/cluster-cases-universe-matrix-output-products.pkl"
@@ -3463,7 +3465,7 @@ uv run python scripts/route_bench.py --capture quantum-chip --policy all-product
 {
   uv run python scripts/last_mile_bench.py --cases "$d/cluster-cases-universe-matrix-output-products.pkl" --rounds 3 --check
   uv run python scripts/last_mile_bench.py --cases "$d/cluster-cases-quantum-chip-all-products.pkl" --rounds 3 --check
-} | tee "$d/cluster-bench.txt"
+} | tee "docs/superpowers/evidence/2026-09-02-phase-b-last-mile/cluster-bench.txt"
 ```
 
 Expected: each capture reports at least one cluster search, and each replay prints `MATCH` and exits 0.
@@ -3480,7 +3482,7 @@ d=docs/superpowers/evidence/2026-09-02-phase-b-last-mile
 uv run python - <<'EOF' | tee -a "$d/cluster-bench.txt"
 import pickle, statistics, sys
 sys.path.insert(0, "src")
-d = "docs/superpowers/evidence/2026-09-02-phase-b-last-mile/"
+d = ".local-evidence/2026-09-02-phase-b-last-mile/"
 for name in (
     "cluster-cases-universe-matrix-output-products.pkl",
     "cluster-cases-quantum-chip-all-products.pkl",
@@ -4005,14 +4007,14 @@ Expected: PASS, including the pre-existing tests unchanged.
 - [ ] **Step 5: Re-check every digest**
 
 ```bash
-d=docs/superpowers/evidence/2026-09-02-phase-b-last-mile
+d=.local-evidence/2026-09-02-phase-b-last-mile
 uv run python setup.py build_ext --inplace
 {
   uv run python scripts/route_bench.py --cases "$d/route-cases-universe-matrix-output-products.pkl" --rounds 3 --check
   uv run python scripts/route_bench.py --cases "$d/route-cases-quantum-chip-all-products.pkl" --rounds 3 --check
   uv run python scripts/last_mile_bench.py --cases "$d/cluster-cases-universe-matrix-output-products.pkl" --rounds 3 --check
   uv run python scripts/last_mile_bench.py --cases "$d/cluster-cases-quantum-chip-all-products.pkl" --rounds 3 --check
-} | tee "$d/digests-after.txt"
+} | tee "docs/superpowers/evidence/2026-09-02-phase-b-last-mile/digests-after.txt"
 ```
 
 Expected: four `MATCH` lines. The two `route_bench` digests must equal the ones in `digests-before.txt`.

@@ -1,5 +1,5 @@
 {
-  "workspace": "Extract reproduction.zip into a new directory; paths below are relative to that directory.",
+  "workspace": "Extract .local-evidence/2026-09-06-feasibility-first/cadical-physical-flow/reproduction.zip (relative to the repository root, retained in gitignored local storage) into a new directory; paths below are relative to that directory.",
   "runtime": "Recorded existing Python 3.14 runtime; package versions are captured by restoration-checks.json. Native extensions in the archive are Linux x86_64 CPython 3.14 binaries.",
   "dependencies": [
     "uv sync --locked",

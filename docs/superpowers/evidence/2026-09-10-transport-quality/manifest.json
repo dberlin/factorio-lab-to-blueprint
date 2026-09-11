@@ -1,5 +1,7 @@
 {
   "archive": "evidence.zip",
+  "local_archive": ".local-evidence/2026-09-10-transport-quality/evidence.zip",
+  "local_archive_note": "Repository-root-relative gitignored storage; archive, recorded_root and member hashes below retain the original capture provenance.",
   "archive_sha256": "df4ad6387193e2e2183807378d38000239a89fac52e3a0eb6797460242852547",
   "archive_bytes": 87661840,
   "members_verified": 11671,

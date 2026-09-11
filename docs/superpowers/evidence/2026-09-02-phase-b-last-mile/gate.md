@@ -1,5 +1,12 @@
 # Phase B last-mile router — corpus gate record
 
+Local artifact storage (2026-09-10): the four generated `route-cases-*.pkl`
+and `cluster-cases-*.pkl` captures are retained byte-for-byte under
+`.local-evidence/2026-09-02-phase-b-last-mile/` at the repository root.
+This directory keeps the small gate records and digests. The ignored
+`.local-evidence/migration-manifest.json` records original paths, sizes and SHA-256
+hashes; historical capture output below retains its original provenance.
+
 ## VERDICT: FAIL
 
 ## Commits

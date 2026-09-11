@@ -298,7 +298,7 @@ Expected: PASS. `test_lay_out_threads_one_strip_families_tuple_through_every_pla
 The router is untouched; confirm:
 
 ```bash
-d=docs/superpowers/evidence/2026-09-02-phase-b-last-mile
+d=.local-evidence/2026-09-02-phase-b-last-mile
 uv run python scripts/route_bench.py --cases $d/route-cases-universe-matrix-output-products.pkl --check --rounds 1
 uv run python scripts/route_bench.py --cases $d/route-cases-quantum-chip-all-products.pkl --check --rounds 1
 ```

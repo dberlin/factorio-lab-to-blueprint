@@ -1,4 +1,6 @@
 {
+  "local_archive": ".local-evidence/2026-09-06-feasibility-first/cadical-settlement-progress/reproduction.zip",
+  "local_archive_note": "Repository-root-relative gitignored storage; original archive bytes and recorded provenance are unchanged.",
   "scope": "Incomplete factory checkpoint; validator-design approval pending",
   "archive_sha256": "57e53c79aea8b7b07be0ff7fe01ab5258e89a12d224401892d9801316b10299c",
   "members": 911,

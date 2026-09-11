@@ -14,6 +14,9 @@ wheels/
 # Generated blueprints -- output, not source.
 /out/
 
+# Oversized generated evidence is retained locally, never versioned.
+/.local-evidence/
+
 # Serena's local index and memories stay local, but the project definition is
 # tracked so every git worktree is its own Serena project at its own path.
 /.serena/*
