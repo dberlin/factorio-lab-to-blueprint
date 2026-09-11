@@ -396,7 +396,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="whole-solve process islands for sequence-pair or best (range 1..16). "
         "By default, use up to four islands, capped by CPU affinity and the "
         "sequence-pair worker share: three with a single 16-worker best portfolio, "
-        "or one per candidate in its default three-candidate batch",
+        "or 2/1/1 islands in its default three-candidate batch",
     )
     add_candidate_policy_argument(ap)
     ap.add_argument(

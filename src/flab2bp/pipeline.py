@@ -681,7 +681,7 @@ def build(
     #: An unfunded four-strategy race falls back to serial strategies.
     candidate_parallelism: int | None = None,
     #: Race all four strategies for one budget instead of running them serially
-    #: for one budget each. Library callers opt in; the CLI and web UI enable it.
+    #: for one budget each. The CLI opts in with --race; the web UI enables it.
     race: bool = False,
     #: Exchange certified incumbents and cluster no-goods between the racers.
     #: Meaningless unless ``race`` is true.
