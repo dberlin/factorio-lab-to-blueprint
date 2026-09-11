@@ -73,11 +73,16 @@ def _segment(a: Cell, b: Cell) -> _Segment:
 
 def _intersection(a: _Segment, b: _Segment, budget: WorkBudget) -> _Segment | None:
     budget.charge("predicates")
-    lo = (max(a.lo[0], b.lo[0]), max(a.lo[1], b.lo[1]), max(a.lo[2], b.lo[2]))
-    hi = (min(a.hi[0], b.hi[0]), min(a.hi[1], b.hi[1]), min(a.hi[2], b.hi[2]))
-    if lo[0] > hi[0] or lo[1] > hi[1] or lo[2] > hi[2]:
+    low_x, high_x = max(a.lo[0], b.lo[0]), min(a.hi[0], b.hi[0])
+    if low_x > high_x:
         return None
-    return _Segment(lo, hi)
+    low_y, high_y = max(a.lo[1], b.lo[1]), min(a.hi[1], b.hi[1])
+    if low_y > high_y:
+        return None
+    low_z, high_z = max(a.lo[2], b.lo[2]), min(a.hi[2], b.hi[2])
+    if low_z > high_z:
+        return None
+    return _Segment((low_x, low_y, low_z), (high_x, high_y, high_z))
 
 
 def _normal(points: tuple[Cell, ...], budget: WorkBudget) -> tuple[Cell, ...]:
@@ -439,12 +444,25 @@ class _FixedIndex:
         while stack:
             budget.check()
             node = self.nodes[stack.pop()]
-            overlap = _intersection(segment, node.bounds, budget)
-            if overlap is None:
-                continue
             if node.obstacle >= 0:
-                yield self.obstacles[node.obstacle], overlap
+                overlap = _intersection(segment, node.bounds, budget)
+                if overlap is not None:
+                    yield self.obstacles[node.obstacle], overlap
             else:
+                # Internal nodes need only a disjointness test, not an
+                # allocated intersection; preserve one predicate per visit.
+                budget.charge("predicates")
+                lo, hi = segment.lo, segment.hi
+                bounds_lo, bounds_hi = node.bounds.lo, node.bounds.hi
+                if (
+                    lo[0] > bounds_hi[0]
+                    or hi[0] < bounds_lo[0]
+                    or lo[1] > bounds_hi[1]
+                    or hi[1] < bounds_lo[1]
+                    or lo[2] > bounds_hi[2]
+                    or hi[2] < bounds_lo[2]
+                ):
+                    continue
                 stack.append(node.right)
                 stack.append(node.left)
 

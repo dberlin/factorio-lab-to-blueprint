@@ -20,6 +20,7 @@ from .paths import (
     _adapter,
     _compatible,
     _FixedIndex,
+    _Geometry,
     _middle,
     _owned,
     _path_error,
@@ -376,6 +377,21 @@ def _identity_conflict(a: FixedPath, b: FixedPath, budget: WorkBudget) -> bool:
     return False
 
 
+def _overlapping_cells(
+    left: set[Cell],
+    right: set[Cell],
+    left_off_level: set[Cell],
+    right_off_level: set[Cell],
+    *,
+    same_level: bool,
+) -> set[Cell]:
+    if same_level:
+        return left & right
+    # Distinct horizontal levels cannot meet. Every contact must therefore
+    # belong to at least one off-level subset, including all riser crossings.
+    return (left_off_level & right) | (left & right_off_level)
+
+
 def select(
     problem: TemplateProblem,
     budget: WorkBudget,
@@ -423,10 +439,17 @@ def select(
     primitive_indexes = [PrimitiveIndex(d, budget) for d in ds]
     stats.primitive_occurrences = sum(index.occurrences for index in primitive_indexes)
     stats.primitive_descriptors = sum(len(index.primitives) for index in primitive_indexes)
+    fixed_owners_by_cell: dict[Cell, list[int]] = {}
+    for owner, occupied_cells in enumerate(fixed_cells):
+        for cell in occupied_cells:
+            budget.charge("predicates", 2)
+            fixed_owners_by_cell.setdefault(cell, []).append(owner)
+    budget.charge("predicates", len(fixed_owners_by_cell))
+    fixed_occupied_cells = frozenset(fixed_owners_by_cell)
     static_cuts: set[tuple[int, Cell]] = set()
-    validated_choices: dict[int, tuple[int, set[Cell]]] = {}
-    validated_pairs: dict[tuple[int, int], tuple[int, int, Cell | None]] = {}
-    path_indexes: dict[int, tuple[int, _FixedIndex]] = {}
+    validated_choices: dict[int, tuple[int, _Geometry, set[Cell], set[Cell]]] = {}
+    active_conflicts: set[tuple[int, int]] = set()
+    previous_selected: tuple[int, ...] | None = None
     neighborhood = Neighborhood(budget)
     with Cadical195(use_timer=True) as solver:
         solver.configure({"seed": 0})
@@ -477,18 +500,28 @@ def select(
             if model is None:
                 raise TransportRefusal("SOLVER_UNKNOWN", "SAT without a model")
             selected = factors.select(model)
-            geometries = [d._decode(ci, budget) for d, ci in zip(ds, selected, strict=True)]
+            geometries: list[_Geometry] = []
             occupied: list[set[Cell]] = []
+            off_level_occupied: list[set[Cell]] = []
+            selected_levels: list[int] = []
             rejected = False
-            for di, geometry in enumerate(geometries):
+            for di, (domain, choice) in enumerate(zip(ds, selected, strict=True)):
                 budget.check()
+                level = domain.levels[choice % len(domain.levels)]
+                selected_levels.append(level)
                 cached_choice = validated_choices.get(di)
-                if cached_choice is not None and cached_choice[0] == selected[di]:
-                    occupied.append(cached_choice[1])
+                if cached_choice is not None and cached_choice[0] == choice:
+                    geometries.append(cached_choice[1])
+                    occupied.append(cached_choice[2])
+                    off_level_occupied.append(cached_choice[3])
                     continue
+                geometry = domain._decode(choice, budget)
+                geometries.append(geometry)
                 sequence = list(cells(geometry.path.points))
                 budget.charge("audit_cells", len(sequence))
                 occupied.append(set(sequence))
+                budget.charge("predicates", len(occupied[-1]))
+                off_level_occupied.append({cell for cell in occupied[-1] if cell[2] != level})
                 path_error = _path_error(geometry, budget)
                 if path_error:
                     factors.exclude(di, selected[di])
@@ -503,9 +536,9 @@ def select(
                     if e in problem.owned_endpoints
                 }
                 bad_cells = (occupied[-1] - owned) & problem.blocked
-                for fixed, fixed_occupied in zip(problem.fixed_paths, fixed_cells, strict=True):
-                    for cell in occupied[-1] & fixed_occupied:
-                        if not _owned(geometry.path, fixed, cell, budget):
+                for cell in occupied[-1] & fixed_occupied_cells:
+                    for owner in fixed_owners_by_cell[cell]:
+                        if not _owned(geometry.path, problem.fixed_paths[owner], cell, budget):
                             bad_cells.add(cell)
                 canonical_error = fixed_index.error(geometry, budget)
                 if bool(canonical_error) != bool(bad_cells):
@@ -525,43 +558,60 @@ def select(
                     stats.static_cuts += 1
                     rejected = True
                 else:
-                    validated_choices[di] = selected[di], occupied[-1]
+                    validated_choices[di] = (
+                        choice,
+                        geometry,
+                        occupied[-1],
+                        off_level_occupied[-1],
+                    )
             if rejected:
                 continue
             new_cuts = 0
-            conflicts: list[tuple[int, int]] = []
-            for i, j in combinations(range(len(ds)), 2):
-                budget.check()
-                budget.charge("predicates", 2)
-                pair = i, j
-                cached_pair = validated_pairs.get(pair)
-                if cached_pair is not None and cached_pair[:2] == (selected[i], selected[j]):
-                    cell = cached_pair[2]
-                else:
+            # Domains and endpoint identities are immutable within this solve.
+            # Static-rejected rounds do not advance this pair-audit snapshot.
+            changed = [
+                previous_selected is None or choice != previous_selected[i]
+                for i, choice in enumerate(selected)
+            ]
+            budget.charge("predicates", len(selected))
+            changed_indices = [i for i, moved in enumerate(changed) if moved]
+            for i in range(len(ds)):
+                partners = (
+                    range(i + 1, len(ds)) if changed[i] else (j for j in changed_indices if j > i)
+                )
+                for j in partners:
+                    budget.charge("predicates", 2)
+                    pair = i, j
+                    same_level = selected_levels[i] == selected_levels[j]
+                    if not same_level:
+                        budget.charge("predicates", 2)
+                    overlap = _overlapping_cells(
+                        occupied[i],
+                        occupied[j],
+                        off_level_occupied[i],
+                        off_level_occupied[j],
+                        same_level=same_level,
+                    )
                     cell = next(
                         (
                             cell
-                            for cell in sorted(occupied[i] & occupied[j])
+                            for cell in sorted(overlap)
                             if not _owned(geometries[i].path, geometries[j].path, cell, budget)
                         ),
                         None,
                     )
-                    cached_index = path_indexes.get(i)
-                    if cached_index is None or cached_index[0] != selected[i]:
-                        path_index = _FixedIndex(
-                            TemplateProblem((), frozenset(), (geometries[i].path,), (), (), ()),
-                            budget,
-                        )
-                        path_indexes[i] = selected[i], path_index
-                    else:
-                        path_index = cached_index[1]
-                    if (path_index.error(geometries[j], budget) is None) != (cell is None):
+                    # Certify every conflict before it can justify a cut.
+                    # Clear pairs receive the independent complete-model audit
+                    # below, rather than repeating that audit on provisional models.
+                    if cell is not None and _compatible(geometries[i], geometries[j], budget):
                         raise AssertionError("independent selected-path collision disagreement")
-                    validated_pairs[pair] = selected[i], selected[j], cell
-                if cell is None:
-                    continue
-                budget.charge("predicates")
-                conflicts.append(pair)
+                    if cell is None:
+                        active_conflicts.discard(pair)
+                    else:
+                        budget.charge("predicates")
+                        active_conflicts.add(pair)
+            previous_selected = tuple(selected)
+            conflicts = sorted(active_conflicts)
             stats.last_conflict_pairs = len(conflicts)
             neighborhood.consider(selected, conflicts, factors)
             stats.best_conflict_pairs = neighborhood.best_conflicts

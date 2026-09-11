@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass, replace
 from fractions import Fraction
 
 from flab2bp.dsp import catalog
-from flab2bp.layout import freeform
 from flab2bp.layout import routing_domain as rd
 from flab2bp.layout.band_policy import BAND_DIMENSIONS, BandPolicy
 from flab2bp.layout.base import Placement
 from flab2bp.layout.slots import assign_sorter_slots
+from flab2bp.layout.strip_variants import CargoDomain
 from flab2bp.spec import BuildSpec
 
 from . import junctions
-from .allocation import select_topology
+from .allocation import external_roots, select_topology
+from .budget import WorkBudget
 from .construction import ConstructionRefusal, Constructor, Terminal
+from .flights import Flight
 from .inventory import Inventory, TransportDemand, prepare_inventory
 from .routing import RoutingRun, TemplateConstructor
 
@@ -76,21 +79,169 @@ def _sink_terminals(
     return sinks
 
 
-def _bank_shelves(sizes: list[tuple[int, int]], height: int) -> list[list[int]]:
-    banks: list[list[int]] = []
-    used_heights: list[int] = []
-    for i in sorted(range(len(sizes)), key=lambda i: (-sizes[i][0], -sizes[i][1], i)):
+@dataclass(frozen=True, slots=True)
+class ProliferatorBanks:
+    nodes: tuple[tuple[tuple[int, int], ...], ...]
+    bounds: tuple[int, int, int, int] | None
+
+
+def plan_proliferator_banks(inventory: Inventory, height: int) -> ProliferatorBanks:
+    """Exact relative supply-node layout, including two-cell terminal approaches."""
+    rows = max(2, (height - 8) // 6)
+    x = 0
+    groups: list[tuple[tuple[int, int], ...]] = []
+    occupied: list[tuple[int, int]] = []
+    for supply in inventory.supplies:
+        count = len(supply.coatings) // 2
+        positions = tuple(
+            (
+                x - 10 * (index // rows),
+                6 * (index % rows if (index // rows) % 2 == 0 else rows - 1 - index % rows),
+            )
+            for index in range(count)
+        )
+        groups.append(positions)
+        occupied.extend(positions)
+        if positions:
+            x -= 10 * ((count + rows - 1) // rows) + 6
+    bounds = (
+        (
+            min(x for x, _ in occupied) - 2,
+            -2,
+            2,
+            max(y for _, y in occupied) + 2,
+        )
+        if occupied
+        else None
+    )
+    return ProliferatorBanks(tuple(groups), bounds)
+
+
+def _proliferator_terminals(
+    constructor: Constructor, inventory: Inventory, height: int
+) -> tuple[dict[int, Terminal], dict[int, Terminal]]:
+    """Fold rated splitter chains into columns within the legal bank height."""
+    leaves: dict[int, Terminal] = {}
+    roots: dict[int, Terminal] = {}
+    x = min(building.x for building in constructor.canvas.buildings) - 10
+    plan = plan_proliferator_banks(inventory, height)
+    directions = ((1, 0), (0, -1), (0, 1), (-1, 0))
+    for group_index, supply in enumerate(inventory.supplies):
+        if len(supply.coatings) == 1:
+            continue
+        positions = [(x + px, 14 + py) for px, py in plan.nodes[group_index]]
+        nodes = [constructor.splitter(px, py, supply.item) for px, py in positions]
+        # Shelf placement changes recipe order. Pair physical leaf rows with
+        # physical coating rows before rating the continuation links.
+        ordered_slots = sorted(
+            range(len(supply.coatings)),
+            key=lambda slot: (positions[min(slot // 2, len(nodes) - 1)][1], slot),
+        )
+        ordered_members = sorted(
+            supply.coatings,
+            key=lambda member: (
+                constructor.canvas.buildings[inventory.coatings[member].inlet.belt].y,
+                constructor.canvas.buildings[inventory.coatings[member].inlet.belt].x,
+                member,
+            ),
+        )
+        members = [0] * len(supply.coatings)
+        for slot, member in zip(ordered_slots, ordered_members, strict=True):
+            members[slot] = member
+        remaining_rate = supply.rate
+        offset = 0
+        for index, node in enumerate(nodes):
+            px, py = positions[index]
+            incoming = (
+                (-1, 0)
+                if index == 0
+                else (
+                    (positions[index - 1][0] - px) // 10,
+                    (positions[index - 1][1] - py) // 6,
+                )
+            )
+            if index == 0:
+                roots[group_index] = constructor.dock(node, incoming, feed=True)
+            onward = (
+                (
+                    (positions[index + 1][0] - px) // 10,
+                    (positions[index + 1][1] - py) // 6,
+                )
+                if index + 1 < len(nodes)
+                else None
+            )
+            for direction in directions:
+                if direction in (incoming, onward) or offset == len(supply.coatings):
+                    continue
+                coating_index = members[offset]
+                leaves[coating_index] = constructor.dock(node, direction, feed=False)
+                remaining_rate -= inventory.coatings[coating_index].supply_rate
+                offset += 1
+            if onward is not None:
+                source = constructor.dock(node, onward, feed=False)
+                sink = constructor.dock(nodes[index + 1], (-onward[0], -onward[1]), feed=True)
+                constructor.connect(
+                    source.port,
+                    sink.port,
+                    [(px, py, 0), (*positions[index + 1], 0)],
+                    supply.item,
+                    remaining_rate,
+                    "local-proliferator-tree",
+                )
+        assert offset == len(supply.coatings) and remaining_rate == 0
+    return leaves, roots
+
+
+def _bank_shelves(
+    sizes: list[tuple[int, int]],
+    height: int,
+    width: int,
+    inventory: Inventory,
+    budget: WorkBudget,
+) -> tuple[list[list[int]], int]:
+    """Choose a shelf height using the complete boundary and supply envelope."""
+    order = sorted(range(len(sizes)), key=lambda i: (-sizes[i][0], -sizes[i][1], i))
+    for i in order:
         if sizes[i][1] > height:
             raise ConstructionRefusal(f"strip {i} exceeds the legal bank height")
-        bank_index = next(
-            (j for j, used in enumerate(used_heights) if used + sizes[i][1] <= height), len(banks)
-        )
-        if bank_index == len(banks):
-            banks.append([])
-            used_heights.append(0)
-        banks[bank_index].append(i)
-        used_heights[bank_index] += sizes[i][1]
-    return banks
+    boundary_height = max(
+        6 * (len(set(external_roots(inventory).values())) + len(inventory.supplies)),
+        3 * sum(demand.role == "output" for demand in inventory.demands),
+    )
+    selected: list[list[int]] = []
+    selected_height = height
+    best: tuple[int, int, int, int] | None = None
+    for limit in range(height, max(h for _, h in sizes) - 1, -1):
+        budget.check()
+        banks: list[list[int]] = []
+        used_heights: list[int] = []
+        bank_widths: list[int] = []
+        for i in order:
+            bank_index = next(
+                (j for j, used in enumerate(used_heights) if used + sizes[i][1] <= limit),
+                len(banks),
+            )
+            if bank_index == len(banks):
+                banks.append([])
+                used_heights.append(0)
+                bank_widths.append(sizes[i][0])
+            banks[bank_index].append(i)
+            used_heights[bank_index] += sizes[i][1]
+        # Envelope estimates guide packing, not admission. Keep the previous
+        # maximum-height construction if no conservative estimate fits.
+        if limit == height:
+            selected = banks
+        supply_bounds = plan_proliferator_banks(inventory, limit).bounds
+        supply_width = 0 if supply_bounds is None else max(0, 10 - supply_bounds[0])
+        supply_height = 0 if supply_bounds is None else 4 + supply_bounds[3]
+        used_width = sum(bank_widths) + 24 * (len(banks) - 1) + 36 + supply_width
+        used_height = max(max(used_heights), boundary_height, supply_height) + 12
+        score = (used_width * used_height, used_height, used_width, limit)
+        if used_width <= width and used_height <= height + 12 and (best is None or score < best):
+            best = score
+            selected = banks
+            selected_height = limit
+    return selected, selected_height
 
 
 def construct(
@@ -102,6 +253,22 @@ def construct(
     inventory = prepare_inventory(spec, rules, policy, budget)
     selected = select_topology(spec, inventory, session.order, budget)
     inventory, rates = (selected.inventory, selected.rates)
+    demands = list(inventory.demands)
+    for coating in inventory.coatings:
+        if coating.outlet is not None and coating.consumer is not None:
+            ordinal = len(demands)
+            demands.append(
+                TransportDemand(
+                    ordinal,
+                    coating.item,
+                    CargoDomain.REQUIRES_SPRAY.value,
+                    coating.outlet,
+                    coating.consumer,
+                    "local-coating",
+                )
+            )
+            rates[ordinal] = coating.cargo_rate
+    inventory = replace(inventory, demands=tuple(demands))
 
     def cancelled() -> bool:
         return budget.clock() >= budget.deadline
@@ -113,7 +280,6 @@ def construct(
             source_families[demand.source.belt].append(demand)
         if demand.sink:
             sink_families[demand.sink.belt].append(demand)
-    adapted = rd._adapt(spec)
     source_nodes: dict[int, list[int]] = defaultdict(list)
     source_access: dict[int, int] = {}
     strip_sources: dict[int, list[int]] = defaultdict(list)
@@ -123,9 +289,7 @@ def construct(
         source_access[belt] = len(strip_sources[endpoint.strip])
         strip_sources[endpoint.strip].append(belt)
         if len(family) > 1:
-            source = family[0].source
-            assert source is not None
-            source_nodes[source.strip].append(belt)
+            source_nodes[endpoint.strip].append(belt)
     sink_nodes: dict[int, list[int]] = defaultdict(list)
     sink_access: dict[int, int] = {}
     strip_sinks: dict[int, list[int]] = defaultdict(list)
@@ -137,24 +301,18 @@ def construct(
         if len(family) > 1:
             sink_nodes[endpoint.strip].append(belt)
     sizes: list[tuple[int, int]] = []
-    for i, strip in enumerate(inventory.strips):
+    for i, module in enumerate(inventory.modules):
         access = sum(junctions.tree_extent(len(source_families[belt])) for belt in source_nodes[i])
         access = max(
             access, sum(junctions.tree_extent(len(sink_families[belt])) for belt in sink_nodes[i])
         )
-        width, height = freeform._box(strip)
-        sizes.append((width + 8, height + 6 + access))
-    bank_height = (
-        max(
-            (
-                height
-                for height, width in BAND_DIMENSIONS
-                if policy.explicit_segments is None or width == policy.explicit_segments * 5
-            )
-        )
-        - 12
+        sizes.append((module.width + 8, module.height + 4 + access))
+    band_height, band_width = max(
+        (height, width)
+        for height, width in BAND_DIMENSIONS
+        if policy.explicit_segments is None or width == policy.explicit_segments * 5
     )
-    banks = _bank_shelves(sizes, bank_height)
+    banks, bank_height = _bank_shelves(sizes, band_height - 12, band_width, inventory, budget)
     origins: dict[int, tuple[int, int]] = {}
     bank_widths: list[int] = []
     x = 10
@@ -185,30 +343,68 @@ def construct(
     constructor.set_tracks(x_tracks, y_tracks)
     middle_x = 10 + bank_widths[0] + 12
     physical: dict[int, rd._Port] = {}
-    for index, strip in enumerate(inventory.strips):
-        group = adapted[strip.group_key]
-        ox, oy = origins[index]
-        ins, outs, _, fixed = rd._emit_strip(
+    prepared = rd._prepare_transport_inventory(
+        spec,
+        list(inventory.strips),
+        rd._Pack(
+            {
+                index: (
+                    origins[index][0] + module.origin[0],
+                    origins[index][1] + module.origin[1],
+                )
+                for index, module in enumerate(inventory.modules)
+            },
+            x,
+            bank_height,
+            "transport-replay",
+        ),
+        belt_rules=rules,
+        cancelled=cancelled,
+        coater_node_sites={
+            (coating.inlet.strip, coating.item): (
+                origins[coating.inlet.strip][0] + coating.inlet.x,
+                origins[coating.inlet.strip][1] + coating.inlet.y,
+            )
+            for coating in inventory.coatings
+            if coating.outlet is not None
+        },
+    )
+    constructor.canvas = prepared.canvas
+    coaters = (
+        rd._place_coaters(
             constructor.canvas,
-            strip,
-            ox + inventory.modules[index].origin[0],
-            oy + inventory.modules[index].origin[1],
+            spec,
+            list(inventory.strips),
+            prepared.strip_in_ports,
             constructor.belt_id,
             constructor.belt_model,
-            {item: rate * group.count for item, rate in group.outputs.items()},
-            group.inputs,
-            group.outputs,
-            owner_strip=index,
+            policy=policy,
+            cancelled=cancelled,
         )
-        if fixed:
-            raise ConstructionRefusal("fixed piler transition is outside this interface witness")
-        physical.update({p.belt: p for p in (*ins.values(), *outs.values())})
-    for demand in inventory.demands:
-        for endpoint in (demand.source, demand.sink):
-            if endpoint is not None:
-                port = physical[endpoint.belt]
-                ox, oy = origins[endpoint.strip]
-                assert (port.x, port.y, port.z) == (ox + endpoint.x, oy + endpoint.y, endpoint.z)
+        if inventory.coatings
+        else []
+    )
+    endpoints = {
+        endpoint
+        for demand in inventory.demands
+        for endpoint in (demand.source, demand.sink)
+        if endpoint is not None
+    }
+    endpoints.update(
+        endpoint
+        for coating in inventory.coatings
+        for endpoint in (coating.inlet, coating.outlet, coating.consumer)
+        if endpoint is not None
+    )
+    for endpoint in endpoints:
+        building = constructor.canvas.buildings[endpoint.belt]
+        ox, oy = origins[endpoint.strip]
+        assert (building.x, building.y, int(building.z)) == (
+            ox + endpoint.x,
+            oy + endpoint.y,
+            endpoint.z,
+        )
+        physical[endpoint.belt] = rd._Port(endpoint.belt, building.x, building.y, z=int(building.z))
     sources: dict[int, Terminal] = {}
     sinks: dict[int, Terminal] = {}
     for belt, family in source_families.items():
@@ -255,6 +451,7 @@ def construct(
     sinks = _sink_terminals(
         constructor, inventory, sink_families, physical, rates, origins, sink_access, sink_nodes
     )
+    supply_sources, supply_roots = _proliferator_terminals(constructor, inventory, bank_height)
     flight_index = 0
     external_index = 0
     output_index = 0
@@ -287,6 +484,17 @@ def construct(
         ]
         for demand in family:
             shared_external[demand.ordinal] = family
+    coating_level = max(
+        (
+            flight.exclusive_level + 1
+            for flight in constructor.pending
+            if flight.role in ("local-source", "local-sink")
+        ),
+        default=3,
+    )
+    coating_level = max(3, coating_level)
+    if inventory.coatings and coating_level >= constructor.canvas.levels:
+        raise ConstructionRefusal("coating transfers exceed the legal module altitude")
     for demand in inventory.demands:
         if cancelled():
             raise rd._PreparationDeadline
@@ -330,6 +538,29 @@ def construct(
                 source = sources[demand.ordinal]
             else:
                 source = Terminal(root, (1, 0))
+        if demand.role == "local-coating":
+            # Node rows run away from the machine band in the same order that
+            # consumer access columns run west. Their nested transfers therefore
+            # share one overflight plane without crossing another coating link.
+            sink = sinks[demand.ordinal]
+            local = Flight(
+                source,
+                sink,
+                demand.item,
+                rates[demand.ordinal],
+                coating_level,
+                sink.port.x - 2,
+                demand.role,
+            )
+            constructor.connect(
+                source.port,
+                sink.port,
+                local.points(coating_level),
+                demand.item,
+                rates[demand.ordinal],
+                demand.role,
+            )
+            continue
         constructor.flight(
             source,
             sinks[demand.ordinal],
@@ -338,6 +569,38 @@ def construct(
             3 + flight_index,
             middle_x,
             demand.role,
+        )
+        flight_index += 1
+    for group_index, supply_plan in enumerate(inventory.supplies):
+        root = constructor.belt((external_x, 10 + 6 * external_index, 0), supply_plan.item)
+        external_index += 1
+        if group_index in supply_roots:
+            constructor.flight(
+                Terminal(root, (1, 0)),
+                supply_roots[group_index],
+                supply_plan.item,
+                supply_plan.rate,
+                3 + flight_index,
+                middle_x,
+                "proliferator-feed",
+            )
+            flight_index += 1
+        else:
+            supply_sources[supply_plan.coatings[0]] = Terminal(root, (1, 0))
+    for coating_index, coating in enumerate(inventory.coatings):
+        coating_inlet = prepared.strip_in_ports[coating.inlet.strip][coating.item]
+        coater = next(coater for coater in coaters if coater.host_belt in coating_inlet.tiles)
+        approach = constructor.canvas.buildings[coater.approach_belt]
+        supply = constructor.canvas.buildings[coater.supply_belt]
+        terminal = rd._Port(coater.approach_belt, approach.x, approach.y, z=int(approach.z))
+        constructor.flight(
+            supply_sources[coating_index],
+            Terminal(terminal, (supply.x - coater.host_x, supply.y - coater.host_y)),
+            coating.proliferator,
+            coating.supply_rate,
+            3 + flight_index,
+            middle_x,
+            "proliferator",
         )
         flight_index += 1
     constructor.finish()

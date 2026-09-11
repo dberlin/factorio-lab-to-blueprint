@@ -14311,6 +14311,7 @@ def _prepare_transport_inventory(
     *,
     belt_rules: catalog.BeltAltitudeRules = _DEFAULT_BELT_RULES,
     cancelled: Callable[[], bool] | None = None,
+    coater_node_sites: Mapping[tuple[int, str], tuple[int, int]] | None = None,
 ) -> _RoutingInventory:
     """Share physical emission and directed producer allocation across routers."""
     belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
@@ -14463,7 +14464,17 @@ def _prepare_transport_inventory(
                 consumer_port = strip_in_ports[strip_index].get(item)
                 if consumer_port is None:
                     continue
-                site = _coater_node_site(canvas, (consumer_port.x, consumer_port.y))
+                site = (
+                    _coater_node_site(canvas, (consumer_port.x, consumer_port.y))
+                    if coater_node_sites is None
+                    else coater_node_sites.get((strip_index, item))
+                )
+                if (
+                    site is not None
+                    and coater_node_sites is not None
+                    and not _coater_node_site_is_clear(canvas, *site)
+                ):
+                    site = None
                 if site is None:
                     raise _Unseatable(
                         f"no free ground for the {item} Spray Coater node near "

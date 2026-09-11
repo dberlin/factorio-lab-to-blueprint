@@ -74,7 +74,11 @@ def allocate(spec: BuildSpec, inventory: Inventory, budget: WorkBudget) -> dict[
             amount = rate * strip.machines
             add(("consumer", index, item), target, amount)
             required += amount
+    coater_imports: dict[str, Fraction] = defaultdict(Fraction)
+    for coating in inventory.coatings:
+        coater_imports[coating.proliferator] += coating.supply_rate
     for item, rate in sorted(spec.external_inputs.items()):
+        rate -= coater_imports[item]
         add(source, ("import", 0, item), rate)
         supplied += rate
     for item in sorted(set(spec.outputs) | set(spec.surplus_outputs)):
@@ -156,29 +160,27 @@ def select_topology(
     spec: BuildSpec, inventory: Inventory, order: Order, budget: WorkBudget
 ) -> SelectedTopology:
     budget.check()
-    if inventory.prelinked or any(d.domain != "unsprayed" for d in inventory.demands):
-        raise TransportRefusal(
-            "UNSUPPORTED_INTERFACE", "sprayed/prelinked interfaces are not compiled"
-        )
-    original = {(d.item, d.source, d.sink) for d in inventory.demands}
+    if inventory.prelinked:
+        raise TransportRefusal("UNSUPPORTED_INTERFACE", "prelinked interfaces are not compiled")
+    original = {(d.item, d.domain, d.source, d.sink) for d in inventory.demands}
     candidates = list(inventory.demands)
     budget.charge("arcs", len(candidates))
     sources = {d.source for d in candidates if d.source is not None}
     sinks = {d.sink for d in candidates if d.sink is not None}
-    source_items = {d.source: d.item for d in candidates if d.source is not None}
-    sink_items = {d.sink: d.item for d in candidates if d.sink is not None}
+    source_items = {d.source: (d.item, d.domain) for d in candidates if d.source is not None}
+    sink_items = {d.sink: (d.item, d.domain) for d in candidates if d.sink is not None}
     for left in sorted(sources, key=lambda p: (p.strip, p.belt)):
         for right in sorted(sinks, key=lambda p: (p.strip, p.belt)):
             budget.check()
-            item = source_items[left]
+            item, domain = source_items[left]
             if (
-                item == sink_items[right]
+                (item, domain) == sink_items[right]
                 and left.strip != right.strip
-                and (item, left, right) not in original
+                and (item, domain, left, right) not in original
             ):
                 budget.charge("arcs")
                 candidates.append(
-                    TransportDemand(len(candidates), item, "unsprayed", left, right, "internal")
+                    TransportDemand(len(candidates), item, domain, left, right, "internal")
                 )
     # Seeded recipes have a net-positive return stream, not a recurring external
     # input. Preserve that physical recurrence when reallocating captured arcs:
@@ -198,7 +200,7 @@ def select_topology(
         ]
     candidates.sort(
         key=lambda d: (
-            (d.item, d.source, d.sink) not in original,
+            (d.item, d.domain, d.source, d.sink) not in original,
             d.item,
             d.source.strip if d.source else -1,
             d.source.belt if d.source else -1,
@@ -239,7 +241,7 @@ def select_topology(
             loads[roots[demand.ordinal], demand.item] += rates[demand.ordinal]
     for (_, item), load in loads.items():
         assert load <= spec.lane_capacity * spec.planning_stack(item, external=True)
-    selected = {(d.item, d.source, d.sink) for d in demands}
+    selected = {(d.item, d.domain, d.source, d.sink) for d in demands}
     return SelectedTopology(
         chosen, rates, len(candidates), len(selected - original), len(original - selected)
     )

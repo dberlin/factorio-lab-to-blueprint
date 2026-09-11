@@ -38,12 +38,6 @@ class TransportRoutingKernel:
     ) -> Placement:
         if not math.isfinite(time_budget_s) or time_budget_s <= 0:
             raise ValueError("transport-routing requires a finite positive time budget")
-        if spec.spray_lanes:
-            raise NoValidLayout(
-                "UNSUPPORTED_INTERFACE: transport-routing does not construct sprayed interfaces",
-                spec_label=spec.label,
-                budget_s=time_budget_s,
-            )
         deadline = (
             time.monotonic() + time_budget_s if absolute_deadline is None else absolute_deadline
         )

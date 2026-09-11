@@ -5146,7 +5146,12 @@ def _coater_rides_one_run(ctx: Context) -> Iterable[Finding]:
         coater = bs[coater_index]
         body_tiles = _coater_body_tiles(ctx, coater_index)
         body_belts = tuple(
-            sorted(i for i, b in ctx.of_kind(Kind.BELT) if (b.x, b.y, b.z) in body_tiles)
+            sorted(
+                i
+                for x, y, _z in body_tiles
+                for i in _belts_by_tile(ctx).get((x, y), ())
+                if (bs[i].x, bs[i].y, bs[i].z) in body_tiles
+            )
         )
         merged = tuple(i for i in body_belts if predecessor_counts.get(i, 0) >= 2)
         distinct_runs = {ctx.run_of[i] for i in body_belts if i in ctx.run_of}

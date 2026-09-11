@@ -1861,6 +1861,8 @@ def _belt_overlap_candidates(
         # A preview-only cache key would reuse flat or another anchor's cells.
         index = BeltOverlap.of(_belt_cells(boxes, spherical=True))
     cell = 8.0
+    latitude_factors: dict[float, tuple[float, float]] = {}
+    longitude_factors: dict[float, tuple[float, float]] = {}
     candidates: list[tuple[int, tuple[int, ...]]] = []
     for i, belt in enumerate(previews):
         if cancelled is not None and cancelled():
@@ -1871,7 +1873,19 @@ def _belt_overlap_candidates(
             probe = belt_probe(belt.x, belt.y, belt.z)
         else:
             radius = projection.shell_radius(belt.z)
-            direction = projection.direction(belt.x, belt.y)
+            # Projection.direction is separable in longitude and latitude.
+            # Reuse its exact trigonometric inputs across grid rows/columns;
+            # retain the multiplication order and latitude's polar clamp.
+            dx, dy = (belt.y, belt.x) if projection.rotated else (belt.x, belt.y)
+            latitude = latitude_factors.get(dy)
+            if latitude is None or dy == 0.0:
+                latitude = projection.latitude_factors(belt.x, belt.y)
+                latitude_factors[dy] = latitude
+            longitude = longitude_factors.get(dx)
+            if longitude is None or dx == 0.0:
+                longitude = projection.longitude_factors(belt.x, belt.y)
+                longitude_factors[dx] = longitude
+            direction = projection.direction_from_factors(latitude, longitude)
             probe = (
                 direction[0] * radius + direction[0] * BELT_PROBE_LIFT,
                 direction[1] * radius + direction[1] * BELT_PROBE_LIFT,
@@ -1994,6 +2008,20 @@ def _belt_run_stably_ends_in_a_building(
     )
 
 
+def _stable_belt_links(
+    previews: Sequence[Preview],
+) -> tuple[tuple[tuple[int | None, ...], ...], tuple[int | None, ...]]:
+    return (
+        _reverse_input_choices(previews),
+        tuple(_resolve(previews, preview.input) for preview in previews),
+    )
+
+
+# Preview tuples are immutable values shared by every latitude certification.
+# Keep only the most recent graph; mutable sequences must always be rebuilt.
+_cached_stable_belt_links = lru_cache(maxsize=1)(_stable_belt_links)
+
+
 def stable_belt_collisions(
     previews: Sequence[Preview],
     *,
@@ -2016,8 +2044,11 @@ def stable_belt_collisions(
     clearance alone cannot certify an asymmetric machine's elevated flank:
     longitude compression can push a belt into its upper build collider.
     """
-    choices = _reverse_input_choices(previews)
-    recorded_links = tuple(_resolve(previews, preview.input) for preview in previews)
+    choices, recorded_links = (
+        _cached_stable_belt_links(previews)
+        if isinstance(previews, tuple)
+        else _stable_belt_links(previews)
+    )
     hits: list[StableBeltCollision] = []
     candidates_by_belt = (
         _belt_overlap_candidates(previews)

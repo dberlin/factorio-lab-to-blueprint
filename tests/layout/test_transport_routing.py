@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import math
 from fractions import Fraction
+from itertools import combinations
+from time import monotonic
 
 from flab2bp.dsp import catalog, colliders
 from flab2bp.layout import validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.markers import self_loop_prime_heads
+from flab2bp.layout.transport_routing import paths, solver
+from flab2bp.layout.transport_routing.budget import WorkBudget
 from flab2bp.layout.transport_routing.construction import spherical_overflight_limit
 from flab2bp.layout.transport_routing.runtime import TransportRoutingKernel
 from flab2bp.spec import BeltTier, BuildSpec, MachineGroup, SelfLoopSeed
@@ -20,6 +24,23 @@ _BELT_RULES = catalog.BeltAltitudeRules(
     lab_level=catalog.DEFAULT_LAB_LEVEL,
     from_url=False,
 )
+
+
+def test_different_flight_levels_retain_riser_and_shared_column_contacts() -> None:
+    left = set(solver.cells(((-2, 0, 0), (-2, 0, 2), (2, 0, 2), (2, 0, 0))))
+    right = set(solver.cells(((-2, 0, 0), (-2, 0, 4), (0, 0, 4), (0, 0, 0))))
+    left_off_level = {cell for cell in left if cell[2] != 2}
+    right_off_level = {cell for cell in right if cell[2] != 4}
+    expected = {(-2, 0, 0), (-2, 0, 1), (-2, 0, 2), (0, 0, 2)}
+
+    assert (
+        solver._overlapping_cells(left, right, left_off_level, right_off_level, same_level=False)
+        == expected
+    )
+    assert (
+        solver._overlapping_cells(right, left, right_off_level, left_off_level, same_level=False)
+        == expected
+    )
 
 
 def test_overflight_clears_projected_corner_that_flat_height_misses() -> None:
@@ -117,3 +138,30 @@ def test_native_routes_upgrade_above_floor_without_exceeding_allowed_ceiling() -
     }
     assert 2002 in belt_items
     assert belt_items <= {2001, 2002}
+
+
+def test_changed_routes_clear_conflicts_without_invalidating_unchanged_routes() -> None:
+    obligations = tuple(
+        paths.Obligation(
+            index,
+            f"item-{index}",
+            Fraction(1),
+            paths.Endpoint((0, 4 * index, 0), (1, 0), 2 * index),
+            paths.Endpoint((12, destination_y, 0), (-1, 0), 2 * index + 1),
+        )
+        for index, destination_y in enumerate((8, 0, 12, 4))
+    )
+    problem = paths.TemplateProblem(obligations, frozenset(), (), (4, 8), (-4, 16), (3, 4))
+    budget = WorkBudget(monotonic() + 10)
+    selected = solver.select(problem, budget)
+    assert set(selected) == {obligation.ordinal for obligation in obligations}
+    routes = [
+        paths.FixedPath(
+            selected[obligation.ordinal],
+            obligation.source,
+            obligation.sink,
+            obligation.item,
+        )
+        for obligation in obligations
+    ]
+    assert all(paths.compatible(first, second, budget) for first, second in combinations(routes, 2))

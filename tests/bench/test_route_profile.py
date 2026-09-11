@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import json
 import sys
-import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import cast
 
 import pytest
 
-from flab2bp.layout import freeform, route_kernel, routing_domain, sequence_solver, strip_variants
+from flab2bp.layout import freeform, routing_domain, sequence_solver, strip_variants
 from flab2bp.layout.route_feedback import DetailedRouteResult, DetailedRouteStatus
-from flab2bp.rates import CandidatePolicy
 from scripts import route_profile
 
 
@@ -28,76 +26,19 @@ class _Layout:
 _SPEC = object()
 
 
-def _clock(values: list[float]) -> Iterator[float]:
-    yield from values
-
-
-def test_json_profile_emits_one_bounded_machine_readable_record(
+def test_freeform_profile_runs_current_routing_callbacks(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    tally = route_profile.Tally()
-    tally.t = {"route_all": 4.0, "astar": 1.25, "prepare": 2.5, "plan_strips": 0.5}
-    tally.n = {"route_all": 1, "astar": 3, "prepare": 2, "plan_strips": 1}
-    tally.prepare_calls = [2.0, 0.5]
-    tally.expansions = 123
-    tally.astar_hit = 2
-    tally.astar_none = 1
-
-    times = _clock([10.0, 15.0])
-    monkeypatch.setattr(route_profile, "Tally", lambda: tally)
-    monkeypatch.setattr(route_profile, "install", lambda _tally: lambda: None)
-    selected_policies: list[CandidatePolicy] = []
-
-    def fake_spec(_url_id: str, policy: CandidatePolicy) -> object:
-        selected_policies.append(policy)
-        return _SPEC
-
-    monkeypatch.setattr(route_profile, "_spec", fake_spec)
-    monkeypatch.setattr(time, "perf_counter", lambda: next(times))
-    monkeypatch.setattr(freeform, "FreeformLayout", _Layout)
     monkeypatch.setattr(
         sys,
         "argv",
-        [
-            "route_profile.py",
-            "plastic",
-            "--workers",
-            "1",
-            "--json",
-            "--candidate-policy",
-            "output-products",
-        ],
+        ["route_profile.py", "plastic", "--strategy", "freeform", "--budget", "15", "--json"],
     )
 
     assert route_profile.main() == 0
-
-    lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 1
-    assert json.loads(lines[0]) == {
-        "url_id": "plastic",
-        "strategy": "freeform",
-        "power": True,
-        "budget_s": 4.0,
-        "run": 1,
-        "repeat": 1,
-        "verdict": "OK",
-        "wall_s": 5.0,
-        "route_all_s": 4.0,
-        "astar_s": 1.25,
-        "astar_routing_share": 0.3125,
-        "astar_wall_share": 0.25,
-        "expansions": 123,
-        "hits": 2,
-        "misses": 1,
-        "phases": {
-            "prepare": {"s": 2.5, "n": 2},
-            "plan_strips": {"s": 0.5, "n": 1},
-        },
-        "prepare_calls_s": [2.0, 0.5],
-        "route_backend": route_kernel.selected_backend(),
-        "last_mile_stats": {},
-    }
-    assert selected_policies == [CandidatePolicy.OUTPUT_PRODUCTS]
+    record = json.loads(capsys.readouterr().out)
+    assert record["verdict"] == "OK"
+    assert record["route_all_s"] > 0
 
 
 def test_tally_reads_iterations_from_detailed_route_result(

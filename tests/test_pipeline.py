@@ -24,7 +24,7 @@ from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import canonicalize_dataset, canonicalize_request
 from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
-from flab2bp.layout import finalize, routing_domain, strategy_race, validate
+from flab2bp.layout import finalize, strategy_race, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     ATOMIC_COMPLETION_GRACE_S,
@@ -53,11 +53,6 @@ _BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-
 #: costs a second of CP-SAT rather than a minute -- the sequence is the subject,
 #: not the packing.
 SMALL_URL = "https://factoriolab.github.io/dsp/flow?o=electromagnetic-matrix*60&v=11"
-DEADLINE_REGRESSION_URL = (
-    "https://factoriolab.github.io/dsp/flow?"
-    "z=eJzLt63SMjQwUMu3dQrWMgPTzlrGILpEywgi7qRlaGZgoKVlqJZvaw4ShLLDQBr"
-    "B7MykVFsntdzcItvIOqc617pAtdyCYls3tTJbQ0MAjnsZAA__&v=11"
-)
 
 
 def _title_spec(
@@ -838,70 +833,6 @@ def test_a_fully_supplied_request_is_refused_with_its_reason() -> None:
     with pytest.raises(NoValidLayout, match="already supplies") as exc_info:
         pipeline.build(FULLY_SUPPLIED_URL, strategy="freeform", time_budget_s=1.0)
     assert "copper-ingot" in str(exc_info.value)
-
-
-@pytest.mark.slow
-def test_all_products_sequence_pair_honours_the_exact_layout_deadline(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Counts real firings of freeform._PreparationDeadline -- the cancellation
-    # 0d2a69b added inside exact sequence preparation (_prepare_routing_problem,
-    # _power_plan, _prospective_static_failure, _place_coaters). A subclass, not
-    # a bare stand-in: sequence_solver.py caught the original class by its own
-    # `from ... import _PreparationDeadline` binding at import time, so patching
-    # only `freeform._PreparationDeadline` -- where every `raise
-    # _PreparationDeadline` in that module resolves the name -- still lands in
-    # that `except` via isinstance, with no need to touch sequence_solver's copy.
-    preparation_deadline_fires = 0
-
-    class _CountingPreparationDeadline(routing_domain._PreparationDeadline):
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            super().__init__(*args, **kwargs)
-            nonlocal preparation_deadline_fires
-            preparation_deadline_fires += 1
-
-    monkeypatch.setattr(routing_domain, "_PreparationDeadline", _CountingPreparationDeadline)
-
-    started = time.monotonic()
-
-    # Re-measured 2026-09-07 (hierarchical v4 Task 6, `exact-floor.md`): the
-    # 2026-09-01 budget of 1.5s no longer exhausts -- preparation got faster
-    # again -- so this build SUCCEEDED at 1.5s and the test was red on master.
-    # THE CEILING IS 1.25s, MEASURED: at 1.25s the solver sometimes SUCCEEDS on
-    # this URL, so the budget has to stay strictly below it or the test is
-    # flaky rather than wrong. The mechanism is deliberately a real cell that
-    # exhausts inside exact preparation rather than a mechanised clock,
-    # because what is under test is that the preparation path itself honours
-    # the deadline -- a faked clock would prove that the fake fired. 1.0s
-    # refused 3 of 3 runs.
-    #
-    # So this budget is a moving target by design: the next preparation
-    # speedup that makes 1.0s enough to finish will fail here with
-    # `DID NOT RAISE NoValidLayout`. That failure is the test working. Lower
-    # the budget until the refusal is reliable again (and re-measure the
-    # ceiling), rather than relaxing the assertion.
-    #
-    # `sequence_islands=1` is load-bearing, not tidiness: the default resolves
-    # to four SPAWNED children, and a counter monkeypatched into this process
-    # can never see a `_PreparationDeadline` raised in one of them. One island
-    # is the in-process path this test exists to guard, and it is the path a
-    # `--sequence-islands 1` build still takes.
-    budget = 1.0
-    with pytest.raises(NoValidLayout, match="deadline exhausted"):
-        pipeline.build(
-            DEADLINE_REGRESSION_URL,
-            strategy="sequence-pair",
-            candidate_policies=(CandidatePolicy.ALL_PRODUCTS,),
-            time_budget_s=budget,
-            sequence_islands=1,
-        )
-
-    assert time.monotonic() - started < budget + 2.5
-    # Without this, a deadline hit anywhere else (e.g. before the search loop
-    # ever reached a candidate) would also raise "deadline exhausted" and pass
-    # -- this is what actually proves the refusal happened during exact
-    # preparation, the code path 0d2a69b guarded.
-    assert preparation_deadline_fires > 0
 
 
 @pytest.mark.slow

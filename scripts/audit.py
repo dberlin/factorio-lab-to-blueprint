@@ -1,10 +1,10 @@
-"""Can both strategies lay out everything, cleanly, right now?
+"""Can the production strategies lay out everything, cleanly, right now?
 
     uv run python scripts/audit.py                    # every tier, powered
     uv run python scripts/audit.py --tier mid         # up to mid
     uv run python scripts/audit.py --budget 1,4,15    # sweep the solver budget
     uv run python scripts/audit.py --strategy sequence-pair
-    uv run python scripts/audit.py --strategy all      # + the racing portfolio
+    uv run python scripts/audit.py --strategy all      # all production arms + best
     uv run python scripts/audit.py --jobs 1           # serial, for honest timing
 
 Exits non-zero if any cell is not clean, so it works as a gate.
@@ -104,12 +104,17 @@ from flab2bp.layout.base import (  # noqa: E402
 )
 from flab2bp.layout.coater_mode import coater_mode  # noqa: E402
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
-from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
 from flab2bp.layout.strategy_race import (  # noqa: E402
     RACE_COMPLETION_GRACE_S,
     RacingLayout,
 )
-from flab2bp.pipeline import _resolve_power_tower, resolve_sequence_islands  # noqa: E402
+from flab2bp.pipeline import (  # noqa: E402
+    PRODUCTION_STRATEGIES,
+    ExplicitStrategyName,
+    _new_layout,
+    _resolve_power_tower,
+    resolve_sequence_islands,
+)
 from flab2bp.rates import (  # noqa: E402
     DEFAULT_CANDIDATE_POLICIES,
     CandidatePolicy,
@@ -121,22 +126,20 @@ from flab2bp.spec import BuildSpec  # noqa: E402
 _TIER_ORDER = (Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS)
 #: The same complete policy reaches construction and final judgment.
 _StrategyFactory = Callable[[int, catalog.BeltAltitudeRules], LayoutStrategy]
-_STRATEGIES: dict[str, _StrategyFactory] = {
-    "freeform": lambda workers, rules: FreeformLayout(
+
+
+def _explicit_factory(name: ExplicitStrategyName) -> _StrategyFactory:
+    return lambda workers, rules: _new_layout(
+        name,
         band_policy=BandPolicy("portable"),
         workers=workers,
         belt_rules=rules,
-    ),
-    #: Islands, at the same count production runs, so the gate MEASURES the
-    #: default rather than a shape no user gets.  `resolve_sequence_islands`
-    #: bounds them by this cell's own CP-SAT worker share, so a wide `--jobs`
-    #: run -- which gives each cell fewer workers -- narrows the islands with it
-    #: instead of oversubscribing the box N times over.
-    "sequence-pair": lambda workers, rules: SequencePairLayout(
-        band_policy=BandPolicy("portable"),
-        belt_rules=rules,
-        islands=resolve_sequence_islands("sequence-pair", workers, None),
-    ),
+        sequence_islands=resolve_sequence_islands(name, workers, None),
+    )
+
+
+_STRATEGIES: dict[str, _StrategyFactory] = {
+    **{name: _explicit_factory(name) for name in PRODUCTION_STRATEGIES},
     "best": lambda workers, rules: RacingLayout(
         BandPolicy("portable"),
         workers=workers,
@@ -145,11 +148,11 @@ _STRATEGIES: dict[str, _StrategyFactory] = {
     ),
 }
 _DEFAULT_STRATEGIES = ("freeform", "sequence-pair")
-_ALL_STRATEGIES = ("freeform", "sequence-pair", "best")
+_ALL_STRATEGIES = (*PRODUCTION_STRATEGIES, "best")
 
 
 def strategy_names(requested: str) -> tuple[str, ...]:
-    """Resolve ``both`` to the two explicit strategies and ``all`` to all three."""
+    """Keep historical ``both``; ``all`` includes every production arm and best."""
     if requested == "both":
         return _DEFAULT_STRATEGIES
     if requested == "all":
@@ -1003,9 +1006,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--strategy",
         default="both",
-        choices=("both", "all", "freeform", "sequence-pair", "best"),
-        help="which arms to audit; both = the two explicit strategies (72 "
-        "cells), all = those plus the racing portfolio (108 cells)",
+        choices=("both", "all", *_ALL_STRATEGIES),
+        help="which arms to audit; both = historical freeform and sequence-pair; "
+        "all = every production strategy plus the racing portfolio",
     )
     ap.add_argument(
         "--jobs",

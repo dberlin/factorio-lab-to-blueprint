@@ -1154,6 +1154,18 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "shared strip-count complexity cap; not skew degrees",
     ),
     LintException(
+        "flab2bp.layout.transport_routing.composition",
+        "_bank_shelves",
+        24.0,
+        "horizontal bank clearance in grid cells; not skew degrees",
+    ),
+    LintException(
+        "flab2bp.layout.transport_routing.composition",
+        "construct",
+        24.0,
+        "horizontal bank clearance in grid cells; not skew degrees",
+    ),
+    LintException(
         "flab2bp.layout.sequence_solver",
         "<module>",
         24.0,

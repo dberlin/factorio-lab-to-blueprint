@@ -3,6 +3,7 @@
 from fractions import Fraction
 
 import pytest
+
 from flab2bp.layout.physical_flow import Arc, Model, Resource, solve
 
 
@@ -46,3 +47,21 @@ def test_zero_lower_bound_does_not_hide_missing_endpoint(source: int, sink: int)
     model = Model(1, (Arc(source, sink, Fraction(1), "ore"),), ())
     with pytest.raises((IndexError, ValueError)):
         solve(model, frozenset())
+
+
+def test_large_denominator_flow_is_certified_without_rounding_away_overload() -> None:
+    rate = Fraction(1_000_000_008, 1_000_000_007)
+    arcs = (
+        Arc(0, 1, rate, "ore"),
+        Arc(1, 0, rate, "ore", lower=rate),
+    )
+    feasible = Model(2, arcs, (Resource((0,), rate, "belt", (10,)),))
+    result = solve(feasible, frozenset({"belt"}))
+    assert result.feasible is True
+    assert result.flows[0] == rate
+
+    overloaded = Model(2, arcs, (Resource((0,), Fraction(1), "belt", (10,)),))
+    result = solve(overloaded, frozenset({"belt"}))
+    assert result.feasible is False
+    assert result.upper_bound is not None
+    assert result.upper_bound <= 1

@@ -36,8 +36,8 @@ second tool.
 **A build is a job, not a request.** `--budget` is per layout and `best` lays out every
 candidate with freeform, sequence-pair and CaDiCaL-based transport-routing, so a build can run
 for seconds to minutes. `best` selects the smallest validator-clean result, not the first to
-finish. Transport-routing currently supports unsprayed factories and explicitly refuses
-sprayed interfaces; the other strategies remain available for those candidates.
+finish. Transport-routing supports unsprayed and sprayed interfaces, including separate
+raw-material and proliferator feeds; every result must pass the same physical validation.
 `POST /api/build` returns an id immediately and the page polls `GET /api/build/<id>`. `pipeline.build` reports
 each candidate/strategy pair as it starts and settles. A projected total over 300 seconds
 warns that the job may take a while; it does not refuse or silently clamp the request.

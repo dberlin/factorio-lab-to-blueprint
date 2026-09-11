@@ -29,6 +29,12 @@ def verify_rates(spec: BuildSpec, inventory: Inventory, rates: dict[int, Fractio
     exports: dict[str, Fraction] = defaultdict(Fraction)
     out_lanes: dict[tuple[int, str], Fraction] = defaultdict(Fraction)
     in_lanes: dict[tuple[int, str], Fraction] = defaultdict(Fraction)
+    for coating in inventory.coatings:
+        assert coating.supply_rate > 0
+        assert coating.supply_rate <= spec.lane_capacity * spec.planning_stack(
+            coating.proliferator, external=True
+        )
+        imports[coating.proliferator] += coating.supply_rate
     for demand in inventory.demands:
         rate = rates[demand.ordinal]
         assert rate > 0

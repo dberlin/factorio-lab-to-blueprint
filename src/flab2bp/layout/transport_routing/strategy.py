@@ -17,7 +17,7 @@ _DEFAULT_BAND_POLICY = BandPolicy("portable")
 
 
 class TransportRoutingLayout:
-    """Construct unsprayed strip interfaces, then certify the completed placement.
+    """Construct physical strip interfaces, then certify the completed placement.
 
     Serial callers own one spawned child. The portfolio factory selects the
     construction kernel directly inside its already supervised child.
@@ -46,12 +46,6 @@ class TransportRoutingLayout:
             raise ValueError("transport-routing requires a finite positive time budget")
         started = time.monotonic()
         deadline = started + time_budget_s if absolute_deadline is None else absolute_deadline
-        if spec.spray_lanes:
-            raise NoValidLayout(
-                "UNSUPPORTED_INTERFACE: transport-routing does not construct sprayed interfaces",
-                spec_label=spec.label,
-                budget_s=time_budget_s,
-            )
         if deadline <= started:
             raise NoValidLayout(
                 "DEADLINE: transport-routing received an expired deadline",

@@ -623,6 +623,24 @@ class Projection:
         limit = math.pi / 2.0
         return math.copysign(limit, lat) if abs(lat) > limit else lat
 
+    def latitude_factors(self, x: float, y: float) -> tuple[float, float]:
+        """The cosine and sine of the paste's clamped latitude."""
+        latitude = self.latitude(x, y)
+        return math.cos(latitude), math.sin(latitude)
+
+    def longitude_factors(self, x: float, y: float) -> tuple[float, float]:
+        """The sine and negative cosine of the paste's longitude."""
+        dx, _ = self._transition(x, y)
+        longitude = dx * self.longitude_step
+        return math.sin(longitude), -math.cos(longitude)
+
+    @staticmethod
+    def direction_from_factors(
+        latitude: tuple[float, float], longitude: tuple[float, float]
+    ) -> Vec3:
+        """Compose ``GetDir`` without changing its floating-point products."""
+        return latitude[0] * longitude[0], latitude[1], latitude[0] * longitude[1]
+
     def direction(self, x: float, y: float) -> Vec3:
         """``GetDir(longitudeRad, latitudeRad)``, ``BlueprintUtils.cs:342``."""
         dx, _ = self._transition(x, y)

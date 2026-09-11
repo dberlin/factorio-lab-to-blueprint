@@ -432,6 +432,13 @@ class _ProjectionCache:
             )
 
         @cache
+        def coater_geometry(
+            coaters: tuple[tuple[int, colliders.Placed], ...],
+            projection: planet.Projection,
+        ) -> _ProjectedCoaterGeometry:
+            return _ProjectedCoaterGeometry.of(coaters, projection, cancelled=self.cancelled)
+
+        @cache
         def addon_splitter_failure(
             coaters: tuple[tuple[int, colliders.Placed], ...],
             splitters: tuple[tuple[int, colliders.Placed], ...],
@@ -443,6 +450,9 @@ class _ProjectionCache:
                 splitters,
                 projection,
                 cancelled=self.cancelled,
+                _coater_geometry=(
+                    coater_geometry(coaters, projection) if coaters and splitters else None
+                ),
             )
 
         self._sorter_failure = sorter_failure
@@ -1732,12 +1742,83 @@ def _coater_splitter_kd_range(
             )
 
 
+@dataclass(frozen=True, slots=True)
+class _CoaterSplitterMetric:
+    projection: planet.Projection
+    column_lower_bound: float
+    row_lower_bound: float
+
+    @classmethod
+    def of(cls, projection: planet.Projection) -> _CoaterSplitterMetric:
+        latitude_step = planet.latitude_rad_per_grid(projection.segment)
+        poleward = min(
+            math.cos(min(abs(grid), planet.pole_grid_idx(projection.segment)) * latitude_step)
+            for grid in (projection.band.grid_lo, projection.band.grid_hi)
+        )
+        column_lower_bound = (
+            projection.radius
+            * poleward
+            * planet.longitude_rad_per_grid(projection.band.area_segments)
+            * 0.9
+        )
+        return cls(projection, column_lower_bound, projection.radius * latitude_step * 0.9)
+
+    def coordinates(self, building: colliders.Placed) -> _CoaterSplitterCoordinates:
+        longitude, latitude = (
+            (building.y, building.x) if self.projection.rotated else (building.x, building.y)
+        )
+        return (
+            (longitude % self.projection.band.columns) * self.column_lower_bound,
+            latitude * self.row_lower_bound,
+            building.z * 4.0 / 3.0,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _ProjectedCoaterGeometry:
+    """Invariant broad-phase geometry for one immutable coater set and projection."""
+
+    metric: _CoaterSplitterMetric
+    coaters: tuple[tuple[_CoaterSplitterCoordinates, float], ...]
+
+    @classmethod
+    def of(
+        cls,
+        coaters: Sequence[tuple[int, colliders.Placed]],
+        projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> _ProjectedCoaterGeometry:
+        metric = _CoaterSplitterMetric.of(projection)
+        entries: list[tuple[_CoaterSplitterCoordinates, float]] = []
+        for _index, coater in coaters:
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            lateral_step = (1, 0) if round(coater.yaw) % 180 == 0 else (0, 1)
+            lateral_arc = math.dist(
+                projection.position(coater.x, coater.y, coater.z),
+                projection.position(
+                    coater.x + lateral_step[0],
+                    coater.y + lateral_step[1],
+                    coater.z,
+                ),
+            )
+            entries.append(
+                (
+                    metric.coordinates(coater),
+                    planet.collider_radius(coater.model_index) + lateral_arc,
+                )
+            )
+        return cls(metric, tuple(entries))
+
+
 def _projected_coater_splitter_candidates(
     coaters: Sequence[tuple[int, colliders.Placed]],
     splitters: Sequence[tuple[int, colliders.Placed]],
     projection: planet.Projection,
     *,
     cancelled: Callable[[], bool] | None = None,
+    _coater_geometry: _ProjectedCoaterGeometry | None = None,
 ) -> tuple[tuple[tuple[int, colliders.Placed], ...], ...]:
     """Conservative coater-to-Splitter candidates in exact input order.
 
@@ -1767,45 +1848,11 @@ def _projected_coater_splitter_candidates(
     if not splitters:
         return tuple(() for _coater in coaters)
 
-    latitude_step = planet.latitude_rad_per_grid(projection.segment)
-    poleward = min(
-        math.cos(
-            min(
-                abs(grid),
-                planet.pole_grid_idx(projection.segment),
-            )
-            * latitude_step
-        )
-        for grid in (
-            projection.band.grid_lo,
-            projection.band.grid_hi,
-        )
+    geometry = (
+        _ProjectedCoaterGeometry.of(coaters, projection, cancelled=cancelled)
+        if _coater_geometry is None
+        else _coater_geometry
     )
-    column_lower_bound = (
-        projection.radius
-        * poleward
-        * planet.longitude_rad_per_grid(projection.band.area_segments)
-        * 0.9
-    )
-    row_lower_bound = projection.radius * latitude_step * 0.9
-
-    def transformed(building: colliders.Placed) -> tuple[float, float]:
-        return (building.y, building.x) if projection.rotated else (building.x, building.y)
-
-    coater_bounds: list[float] = []
-    for _index, coater in coaters:
-        if cancelled is not None and cancelled():
-            raise ProjectionCancelled
-        lateral_step = (1, 0) if round(coater.yaw) % 180 == 0 else (0, 1)
-        lateral_arc = math.dist(
-            projection.position(coater.x, coater.y, coater.z),
-            projection.position(
-                coater.x + lateral_step[0],
-                coater.y + lateral_step[1],
-                coater.z,
-            ),
-        )
-        coater_bounds.append(planet.collider_radius(coater.model_index) + lateral_arc)
     splitter_bound = 0.0
     for _index, splitter in splitters:
         if cancelled is not None and cancelled():
@@ -1815,13 +1862,7 @@ def _projected_coater_splitter_candidates(
             planet.collider_radius(splitter.model_index),
         )
 
-    def coordinates(building: colliders.Placed) -> _CoaterSplitterCoordinates:
-        longitude, latitude = transformed(building)
-        return (
-            (longitude % projection.band.columns) * column_lower_bound,
-            latitude * row_lower_bound,
-            building.z * 4.0 / 3.0,
-        )
+    coordinates = geometry.metric.coordinates
 
     points: list[_CoaterSplitterKdPoint] = []
     for position, splitter_entry in enumerate(splitters):
@@ -1841,12 +1882,11 @@ def _projected_coater_splitter_candidates(
             cancelled=cancelled,
         )
     )
-    longitude_period = projection.band.columns * column_lower_bound
+    longitude_period = projection.band.columns * geometry.metric.column_lower_bound
     candidates: list[tuple[tuple[int, colliders.Placed], ...]] = []
-    for coater_entry, coater_bound in zip(coaters, coater_bounds, strict=True):
+    for centre, coater_bound in geometry.coaters:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        centre = coordinates(coater_entry[1])
         radius = coater_bound + splitter_bound
         radius2 = math.nextafter(radius * radius, math.inf)
         found: set[int] = set()
@@ -1882,6 +1922,7 @@ def _projected_addon_splitter_failure(
     projection: planet.Projection,
     *,
     cancelled: Callable[[], bool] | None = None,
+    _coater_geometry: _ProjectedCoaterGeometry | None = None,
 ) -> ProjectionFailure | None:
     """Authoritative coater/splitter keepout from the broke2 in-game refusal."""
     candidates = (
@@ -1889,6 +1930,7 @@ def _projected_addon_splitter_failure(
             coaters,
             splitters,
             projection,
+            _coater_geometry=_coater_geometry,
         )
         if cancelled is None
         else _projected_coater_splitter_candidates(
@@ -1896,6 +1938,7 @@ def _projected_addon_splitter_failure(
             splitters,
             projection,
             cancelled=cancelled,
+            _coater_geometry=_coater_geometry,
         )
     )
     for coater, peers in zip(coaters, candidates, strict=True):

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
+from math import lcm
 from typing import Literal
 
 from ortools.linear_solver import pywraplp
@@ -151,13 +152,27 @@ def solve(
         return Result(None, required, None, (), tuple(prices))
 
     floats = tuple(variable.solution_value() for variable in variables)
+    constrained = frozenset(limits)
+    lattice = 0
     for denominator in (1_000_000, 1_000_000_000):
         # Transport chains repeat native values; equal floats reconstruct identically.
         rational_values = {
             value: Fraction(value).limit_denominator(denominator) for value in set(floats)
         }
         values = tuple(rational_values[value] for value in floats)
-        flows = _certify_primal(model, active, edges, values, frozenset(limits), required)
+        flows = _certify_primal(model, active, edges, values, constrained, required)
+        if flows is not None:
+            return Result(True, required, required, flows, tuple(prices))
+        # Independent bounded-denominator approximations can break conservation
+        # on larger-denominator inputs. The residual bounds provide another
+        # rational reconstruction grid, not permission to round a constraint.
+        if not lattice:
+            denominators = {edge.capacity.denominator for edge in edges}
+            denominators.update(limit.denominator for limit in limits.values())
+            lattice = lcm(*denominators)
+        lattice_values = {value: Fraction(round(value * lattice), lattice) for value in set(values)}
+        recovered = tuple(lattice_values[value] for value in values)
+        flows = _certify_primal(model, active, edges, recovered, constrained, required)
         if flows is not None:
             return Result(True, required, required, flows, tuple(prices))
 

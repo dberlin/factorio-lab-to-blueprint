@@ -2,6 +2,7 @@
 
     uv run python scripts/route_profile.py universe-matrix --budget 4
     uv run python scripts/route_profile.py quantum-chip --cprofile
+    uv run python scripts/route_profile.py plastic --strategy transport-routing --cprofile
 
 Two instruments, deliberately, because each lies in a way the other does not:
 
@@ -14,9 +15,12 @@ Two instruments, deliberately, because each lies in a way the other does not:
   rip-up rounds.  A shim per call is nothing against a search; the inner loop
   is untouched, so the seconds are real.
 
-Nothing here changes what the router does.  The wrappers are installed on the
-module object and the deadline is the caller's, so the run under measurement is
-the run the audit makes.
+Native transport profiling runs the production worker kernel in this process,
+not its public supervisor: otherwise cProfile sees only a parent waiting for its
+child. Native rows are labeled ``native-worker-kernel`` and keep the requested
+deadline; use a bounded subprocess when an external hard wall is needed.
+``--profile-out`` retains raw function attribution, including under ``--json``.
+Other strategies retain their in-process routing instrumentation.
 """
 
 from __future__ import annotations
@@ -54,6 +58,8 @@ from flab2bp.layout import (  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
 from flab2bp.layout.base import NoValidLayout, Placement  # noqa: E402
 from flab2bp.layout.route_feedback import Cell, DetailedRouteResult  # noqa: E402
+from flab2bp.layout.route_primitives import RoutePrimitives  # noqa: E402
+from flab2bp.pipeline import PRODUCTION_STRATEGIES  # noqa: E402
 from flab2bp.rates import CandidatePolicy, build_candidates  # noqa: E402
 from flab2bp.spec import BuildSpec  # noqa: E402
 
@@ -74,6 +80,18 @@ class _HeightRow(TypedDict):
 
 
 def _strategy(name: str, *, belt_rules: catalog.BeltAltitudeRules) -> _Strategy:
+    if name == "transport-routing":
+        # Profile the actual worker kernel, not the public supervisor waiting
+        # on a spawned process. Run this script in its own bounded subprocess.
+        from flab2bp.layout.transport_routing.runtime import TransportRoutingKernel
+
+        def native(*, workers: int) -> TransportRoutingKernel:
+            del workers
+            return TransportRoutingKernel(band_policy=BandPolicy("portable"), belt_rules=belt_rules)
+
+        return native
+    if name not in PRODUCTION_STRATEGIES:
+        raise ValueError(f"unknown strategy: {name}")
     if name == "freeform":
 
         def freeform_layout(*, workers: int) -> freeform.FreeformLayout:
@@ -272,6 +290,9 @@ def install(tally: Tally) -> Callable[[], None]:
         source_hints: Mapping[int, Cell] | None = None,
         sink_hints: Mapping[int, Cell] | None = None,
         failure_details: dict[int, routing_domain._CommitFailure] | None = None,
+        primitives: RoutePrimitives | None = None,
+        source_taps: Mapping[int, Cell] | None = None,
+        deadline: float | None = None,
     ) -> tuple[int, ...]:
         t0 = time.perf_counter()
         out = orig_commit(
@@ -285,6 +306,9 @@ def install(tally: Tally) -> Callable[[], None]:
             source_hints=source_hints,
             sink_hints=sink_hints,
             failure_details=failure_details,
+            primitives=primitives,
+            source_taps=source_taps,
+            deadline=deadline,
         )
         tally.add("commit_paths", time.perf_counter() - t0)
         return out
@@ -329,6 +353,7 @@ def install(tally: Tally) -> Callable[[], None]:
         belt_prefab: tuple[int, int] | None = None,
         tentative_ok: bool = False,
         owned_guard: Mapping[Cell, Cell] | None = None,
+        primitives: RoutePrimitives | None = None,
     ) -> set[Cell]:
         t0 = time.perf_counter()
         out = orig_merge(
@@ -340,6 +365,7 @@ def install(tally: Tally) -> Callable[[], None]:
             belt_prefab=belt_prefab,
             tentative_ok=tentative_ok,
             owned_guard=owned_guard,
+            primitives=primitives,
         )
         tally.add("merge_frontier", time.perf_counter() - t0)
         return out
@@ -553,11 +579,14 @@ def main() -> int:
     )
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--cprofile", action="store_true")
+    ap.add_argument("--profile-out", type=Path, help="retain raw cProfile data (enables profiling)")
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--heights", action="store_true")
-    ap.add_argument("--strategy", default="freeform")
+    ap.add_argument("--strategy", choices=PRODUCTION_STRATEGIES, default="freeform")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
+    if args.heights and args.strategy == "transport-routing":
+        ap.error("--heights applies only to freeform and sequence-pair")
 
     if args.heights:
         return heights(
@@ -573,7 +602,7 @@ def main() -> int:
     for run in range(args.repeat):
         tally = Tally()
         restore = install(tally)
-        prof = cProfile.Profile() if args.cprofile else None
+        prof = cProfile.Profile() if args.cprofile or args.profile_out else None
         t0 = time.perf_counter()
         verdict = "OK"
         placement = None
@@ -590,6 +619,15 @@ def main() -> int:
                 prof.disable()
             restore()
         wall = time.perf_counter() - t0
+        profile_path = None
+        if prof is not None and args.profile_out is not None:
+            profile_path = args.profile_out
+            if args.repeat > 1:
+                profile_path = profile_path.with_name(
+                    f"{profile_path.stem}-{run + 1}{profile_path.suffix}"
+                )
+            profile_path.parent.mkdir(parents=True, exist_ok=True)
+            prof.dump_stats(str(profile_path))
         routing = tally.t.get("route_all", 0.0)
         inner = tally.t.get("astar", 0.0)
         if args.json:
@@ -598,6 +636,16 @@ def main() -> int:
                     {
                         "url_id": args.url_id,
                         "strategy": args.strategy,
+                        "candidate_policy": args.candidate_policy.value,
+                        "profile_scope": (
+                            "native-worker-kernel"
+                            if args.strategy == "transport-routing"
+                            else "in-process-layout"
+                        ),
+                        "profile_path": str(profile_path) if profile_path else None,
+                        "area": None if placement is None else placement.area,
+                        "buildings": None if placement is None else len(placement.buildings),
+                        "stats": {} if placement is None else placement.stats,
                         "power": True,
                         "budget_s": args.budget,
                         "run": run + 1,
