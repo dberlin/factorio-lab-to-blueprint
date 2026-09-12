@@ -49,7 +49,7 @@ cdef extern from *:
         std::vector<int> goals;
     };
     struct Goal { int x, y, z; double toll; };
-    struct GoalSegment { int lo, hi, y, z; double toll; };
+    struct GoalSegment { int lo, hi, y, y_hi, z; double toll; };
     struct Entry { long double lower; int near; Index label; int horizontal = 0; };
     struct Later {
         bool operator()(const Entry& a, const Entry& b) const {
@@ -415,7 +415,7 @@ cdef extern from *:
                 // prices; they must never enter an ordering comparator.
                 for (const Goal& single : goals) {
                     check();
-                    goal_segments.push_back({single.x, single.x, single.y, single.z, single.toll});
+                    goal_segments.push_back({single.x, single.x, single.y, single.y, single.z, single.toll});
                 }
                 return;
             }
@@ -437,8 +437,32 @@ cdef extern from *:
                         continue;
                     }
                 }
-                goal_segments.push_back({goal.x, goal.x, goal.y, goal.z, goal.toll});
+                goal_segments.push_back({goal.x, goal.x, goal.y, goal.y, goal.z, goal.toll});
             }
+            // Adjacent rows with identical X runs form an exact rectangle:
+            // no hole, level change or unequal terminal toll is filled.
+            std::sort(goal_segments.begin(), goal_segments.end(), [this](const GoalSegment& a, const GoalSegment& b) {
+                check();
+                if (a.z != b.z) return a.z < b.z;
+                if (a.lo != b.lo) return a.lo < b.lo;
+                if (a.hi != b.hi) return a.hi < b.hi;
+                if (a.toll != b.toll) return a.toll < b.toll;
+                return a.y < b.y;
+            });
+            std::size_t count = 0;
+            for (const GoalSegment& goal : goal_segments) {
+                check();
+                if (count) {
+                    auto& last = goal_segments[count - 1];
+                    if (last.z == goal.z && last.lo == goal.lo && last.hi == goal.hi
+                        && last.toll == goal.toll && goal.y <= last.y_hi + 1) {
+                        last.y_hi = std::max(last.y_hi, goal.y_hi);
+                        continue;
+                    }
+                }
+                goal_segments[count++] = goal;
+            }
+            goal_segments.resize(count);
         }
         long double lower(const Label& label) {
             if (reverse_reach) return 0.0;
@@ -453,15 +477,15 @@ cdef extern from *:
                     if (!cached) cached = prepare_distance_profile(goal.z);
                     profile = cached.get();
                 }
-                int y_distance = std::abs(label.y - goal.y);
-                auto visit = [&](int lo, int hi) {
+                int y_distance = std::max({0, goal.y - label.y, label.y - goal.y_hi});
+                auto visit = [&](int lo, int hi, int y_distance) {
                     auto distance_x = [&](int x) { return x < lo ? lo - x : x > hi ? x - hi : 0; };
                     auto consider = [&](int x) {
                         int d = distance_x(x) + y_distance;
                         long double distance = profile ? profile->costs[std::size_t(d) * nz + label.z]
                             : xy_price * d + z_price * std::abs(label.z - goal.z);
                         long double value = label.value(x) + distance;
-                        bool at_goal = lo <= x && x <= hi && label.y == goal.y && label.z == goal.z;
+                        bool at_goal = lo <= x && x <= hi && y_distance == 0 && label.z == goal.z;
                         if (backwards) {
                             if (!at_goal) value += label.toll;
                             if (charge_occupied_cells) value += goal.toll;
@@ -499,8 +523,15 @@ cdef extern from *:
                 // those suffixes admit the nearest-point goal-run minimum.
                 int nearest = std::max({0, goal.lo - label.hi, label.lo - goal.hi}) + y_distance;
                 if (profile && nearest < profile->monotone_from[label.z])
-                    for (int x = goal.lo; x <= goal.hi; ++x) { check(); visit(x, x); }
-                else visit(goal.lo, goal.hi);
+                    for (int y = goal.y; y <= goal.y_hi; ++y) {
+                        int distance = std::abs(label.y - y);
+                        for (int x = goal.lo; x <= goal.hi; ++x) { check(); visit(x, x, distance); }
+                    }
+                // A negative entry toll can favor a different goal over the
+                // zero-entry goal itself. Keep the original row minima there.
+                else if (nearest == 0 && goal.y != goal.y_hi && (backwards ? label.toll : goal.toll) < 0)
+                    for (int y = goal.y; y <= goal.y_hi; ++y) { check(); visit(goal.lo, goal.hi, std::abs(label.y - y)); }
+                else visit(goal.lo, goal.hi, y_distance);
             }
             return result;
         }
@@ -510,7 +541,7 @@ cdef extern from *:
             for (const GoalSegment& goal : goal_segments) {
                 check();
                 result = std::min(result, std::max({0, goal.lo - label.hi, label.lo - goal.hi})
-                    + std::abs(label.y - goal.y) + std::abs(label.z - goal.z));
+                    + std::max({0, goal.y - label.y, label.y - goal.y_hi}) + std::abs(label.z - goal.z));
             }
             return result;
         }
