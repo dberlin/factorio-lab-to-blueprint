@@ -77,7 +77,8 @@ cdef extern from *:
         std::vector<std::vector<Move>> topology;
         std::vector<long double> costs;
         std::vector<std::vector<int>> corners;
-        std::vector<unsigned char> monotone;
+        // Costs are nondecreasing from this distance onward, per source level.
+        std::vector<int> monotone_from;
         bool matches(const std::vector<std::vector<Move>>& candidate, int distance, int goal) const {
             if (extent < distance || goal_level != goal || topology.size() != candidate.size()) return false;
             for (std::size_t z = 0; z < topology.size(); ++z) {
@@ -344,7 +345,7 @@ cdef extern from *:
             profile->topology = distance_topology;
             profile->costs.resize(std::size_t(extent + 1) * nz, infinity);
             profile->corners.resize(nz);
-            profile->monotone.resize(nz, 1);
+            profile->monotone_from.resize(nz, 0);
             std::vector<std::vector<Move>> incoming(nz);
             for (int z = 0; z < nz; ++z) for (const Move& move : distance_topology[z]) {
                 check();
@@ -388,7 +389,7 @@ cdef extern from *:
                     check();
                     if (profile->costs[std::size_t(d) * nz + z]
                         < profile->costs[std::size_t(d - 1) * nz + z])
-                        profile->monotone[z] = 0;
+                        profile->monotone_from[z] = d;
                 }
                 for (int d = 1; d < extent; ++d) {
                     check();
@@ -493,9 +494,11 @@ cdef extern from *:
                         }
                     }
                 };
-                // Directed fallback profiles need not be monotone. In those
-                // rows preserve the original per-goal bound without merging.
-                if (profile && !profile->monotone[label.z])
+                // A directed profile may decrease near the goal but be
+                // monotone over every distance this label can reach. Only
+                // those suffixes admit the nearest-point goal-run minimum.
+                int nearest = std::max({0, goal.lo - label.hi, label.lo - goal.hi}) + y_distance;
+                if (profile && nearest < profile->monotone_from[label.z])
                     for (int x = goal.lo; x <= goal.hi; ++x) { check(); visit(x, x); }
                 else visit(goal.lo, goal.hi);
             }
@@ -862,7 +865,7 @@ cdef extern from *:
             for (const auto& profile : distance_profiles) if (profile) {
                 answer.memory_bytes += Index(profile->costs.capacity() * sizeof(long double)
                     + profile->corners.capacity() * sizeof(std::vector<int>)
-                    + profile->monotone.capacity() * sizeof(unsigned char)
+                    + profile->monotone_from.capacity() * sizeof(int)
                     + profile->topology.capacity() * sizeof(std::vector<Move>));
                 for (const auto& corners : profile->corners)
                     answer.memory_bytes += Index(corners.capacity() * sizeof(int));
