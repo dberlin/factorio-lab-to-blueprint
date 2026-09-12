@@ -1274,7 +1274,12 @@ def assign_belt_slots(
                 )
             used.add(slot)
             changes[field] = slot
-        out.append(replace(b, **changes) if changes else b)  # type: ignore[arg-type]
+        # Binding and slot claims above remain authoritative even for records
+        # whose provisional slot fields already have the computed values.
+        if any(getattr(b, field) != value for field, value in changes.items()):
+            out.append(replace(b, **changes))  # type: ignore[arg-type]
+        else:
+            out.append(b)
     return tuple(out)
 
 

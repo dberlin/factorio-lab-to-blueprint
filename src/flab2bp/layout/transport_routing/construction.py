@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 from flab2bp.dsp import catalog
+from flab2bp.dsp.rules import BELT_INPUT_SLOTS
 from flab2bp.layout import junction
 from flab2bp.layout import routing_domain as rd
 from flab2bp.layout.base import PlacedBuilding
@@ -66,7 +67,9 @@ class Constructor:
         self.links: list[ConstructedLink] = []
         self.junctions: list[int] = []
 
-    def belt(self, cell: Cell, item: str) -> rd._Port:
+    def belt(
+        self, cell: Cell, item: str, *, output_obj: int | None = None, output_to_slot: int = 0
+    ) -> rd._Port:
         if not self.canvas.free(cell):
             raise ConstructionRefusal(f"fixed belt cell is occupied: {item} at {cell}")
         x, y, z = cell
@@ -80,6 +83,8 @@ class Constructor:
                 width=1,
                 height=1,
                 carries_item=item,
+                output_obj=output_obj,
+                output_to_slot=output_to_slot,
             ),
             level=z,
         )
@@ -99,11 +104,27 @@ class Constructor:
         assert cells[-1] == (sink.x, sink.y, sink.z)
         if self.canvas.buildings[source.belt].output_obj is not None:
             raise ConstructionRefusal(f"source {source.belt} needs a physical splitter")
-        indices = [source.belt]
-        indices.extend(self.belt(cell, item).belt for cell in cells[1:-1])
-        indices.append(sink.belt)
-        for left, right in zip(indices, indices[1:], strict=False):
-            self.canvas.buildings[left] = rd._relink(self.canvas.buildings[left], output_obj=right)
+        # Intermediate belts are fresh tail appends. Their final successor is
+        # known before construction, so neither the immutable record nor its
+        # mutable reverse-link index needs a second replacement pass.
+        first = len(self.canvas.buildings)
+        middle_count = len(cells) - 2
+        for offset, cell in enumerate(cells[1:-1]):
+            fresh_successor = offset + 1 < middle_count
+            successor = first + offset + 1 if fresh_successor else sink.belt
+            # A fresh successor has no port draw or other incoming claim.
+            # This is provisional record data: final slot assignment still
+            # recomputes every claim and replaces any stale initial value.
+            self.belt(
+                cell,
+                item,
+                output_obj=successor,
+                output_to_slot=BELT_INPUT_SLOTS[0] if fresh_successor else 0,
+            )
+        self.canvas.buildings[source.belt] = rd._relink(
+            self.canvas.buildings[source.belt],
+            output_obj=first if middle_count > 0 else sink.belt,
+        )
         self.links.append(ConstructedLink(item, source.belt, sink.belt, rate, cells, role))
 
     def splitter(self, x: int, y: int, item: str) -> int:
