@@ -7390,6 +7390,12 @@ def _route_all(
             # This proposal family is not an exhaustive geometric search.
             return None
 
+    def _ordinary_query_deadline() -> float | None:
+        if deadline is None:
+            return None
+        now = time.monotonic()
+        return now + (deadline - now) / 8
+
     def _search(
         starts: list[Cell],
         goals: set[Cell],
@@ -7405,6 +7411,7 @@ def _route_all(
         forbidden: Collection[Cell] = (),
         ordinary_only: bool = False,
         admit_proposal: Callable[[tuple[Cell, ...], float | None], bool] | None = None,
+        ordinary_deadline: float | None = None,
     ) -> _PathSearchResult:
         """Admit source geometry for every normal, repair and cluster search.
 
@@ -7422,12 +7429,10 @@ def _route_all(
             0 if ordinary_only else min(_MAX_EXPANSIONS + 1, max(0, search_budget["left"]) // 2)
         )
         allowance = min(_MAX_EXPANSIONS + 1, max(0, search_budget["left"] - connector_reserve))
-        ordinary_deadline = None
-        if deadline is not None:
-            now = time.monotonic()
-            if now >= deadline:
-                return _PathSearchResult(None, RouteFailureKind.BUDGET, (), 0)
-            ordinary_deadline = now + (deadline - now) / 8
+        if _expired(deadline):
+            return _PathSearchResult(None, RouteFailureKind.BUDGET, (), 0)
+        if ordinary_deadline is None:
+            ordinary_deadline = _ordinary_query_deadline()
         ordinary = None
         capped_ordinary = None
         ordinary_remaining = allowance
@@ -7934,6 +7939,131 @@ def _route_all(
                 _stake(index, found.path, hints=_selected_hints(found.path, offers))
             return found
 
+        def _grouped_overcap_alternative(
+            index: int,
+            starts: list[Cell],
+            goals: set[Cell],
+            offers: tuple[dict[Cell, Cell], dict[Cell, Cell], dict[Cell, Cell]],
+            victims: set[int],
+            dependents: Mapping[int, Collection[int]],
+            remaining: int,
+            query_deadline: float | None,
+            query_ports: frozenset[Cell],
+        ) -> _PathSearchResult | None:
+            nonlocal deadline, expansions
+            if remaining <= 0 or budget["left"] <= 0 or _expired(query_deadline):
+                return None
+            saved_deadline = deadline
+            saved_ports = canvas.routing_ports
+            if query_deadline is not None:
+                deadline = query_deadline if deadline is None else min(deadline, query_deadline)
+            try:
+                canvas.routing_ports = query_ports
+                closures: dict[int, set[int]] = {}
+                for hurt in paths:
+                    if _expired(deadline):
+                        return None
+                    closures[hurt] = _dependency_closure({hurt}, dependents) - {index}
+                mandatory_by_tap: dict[Cell | None, frozenset[int]] = {}
+                signatures: dict[frozenset[int], frozenset[int]] = {}
+                groups: dict[frozenset[int], list[Cell]] = {}
+                distances: dict[frozenset[int], int] = {}
+                forbidden_before = frozenset(rejected_path_cells.get(index, ()))
+                owned = owned_source_starts.get(index, ())
+                released = source_access_walls.get(index, ())
+                for cell in starts:
+                    if _expired(deadline):
+                        return None
+                    tap = offers[2].get(cell)
+                    mandatory = mandatory_by_tap.get(tap)
+                    if mandatory is None:
+                        guards = set() if tap is None else _source_tap_guard_victims(index, tap)
+                        mandatory = frozenset(
+                            (_dependency_closure(guards, dependents) | victims) - {index}
+                        )
+                        mandatory_by_tap[tap] = mandatory
+                    signature = signatures.get(mandatory)
+                    if signature is None:
+                        excluded: set[int] = set()
+                        for hurt, closure in closures.items():
+                            if _expired(deadline):
+                                return None
+                            if len(mandatory | closure) > _REPAIR_MAX_VICTIMS:
+                                excluded.add(hurt)
+                        signature = frozenset(excluded)
+                        signatures[mandatory] = signature
+                    groups.setdefault(signature, []).append(cell)
+                    # Rank only starts admitted by the same physical exceptions
+                    # as _astar, but retain every first-wins offer in its group.
+                    if (
+                        0 <= cell[2] < canvas.levels
+                        and cell not in forbidden_before
+                        and (
+                            canvas.free(cell)
+                            or (cell in owned and canvas.free_owned_guard(cell))
+                            or (cell in released and canvas.blocked.get(cell) == _TENTATIVE)
+                        )
+                    ):
+                        for goal in goals:
+                            distance = (
+                                abs(cell[0] - goal[0])
+                                + abs(cell[1] - goal[1])
+                                + abs(cell[2] - goal[2])
+                            )
+                            if signature not in distances or distance < distances[signature]:
+                                distances[signature] = distance
+                if _expired(deadline):
+                    return None
+                ordered = sorted(
+                    (signature for signature in groups if signature in distances),
+                    key=lambda signature: (len(signature), distances[signature]),
+                )
+                logical = {"left": min(remaining, budget["left"])}
+                for signature in ordered:
+                    if logical["left"] <= 0 or budget["left"] <= 0 or _expired(deadline):
+                        break
+                    # Only returned path cells overwrite their current owner.
+                    # Compatible provider hints and excused tap guards stay open.
+                    forbidden = forbidden_before | frozenset(
+                        cell for cell, hurt in owner.items() if hurt in signature
+                    )
+                    before = logical["left"]
+                    try:
+                        found = _search(
+                            groups[signature],
+                            goals,
+                            offers[2],
+                            history,
+                            1.0,
+                            logical,
+                            None,
+                            open_grid,
+                            owned_starts=owned,
+                            released_starts=released,
+                            forbidden=forbidden,
+                            ordinary_deadline=query_deadline,
+                        )
+                    except _PreparationDeadline as error:
+                        error.net_index = index
+                        raise
+                    finally:
+                        budget["left"] -= before - logical["left"]
+                    expansions += found.expansions
+                    round_expansions[index] = round_expansions.get(index, 0) + found.expansions
+                    if found.path is None:
+                        continue
+                    contacts = {owner[cell] for cell in found.path if cell in owner}
+                    tap = offers[2].get(found.path[0])
+                    if tap is not None:
+                        contacts.update(_source_tap_guard_victims(index, tap))
+                    joint = (_dependency_closure(contacts, dependents) | victims) - {index}
+                    if len(joint) <= _REPAIR_MAX_VICTIMS:
+                        return found
+                return None
+            finally:
+                deadline = saved_deadline
+                canvas.routing_ports = saved_ports
+
         still: list[int] = []
         for index in stranded:
             victims: set[int] = set()
@@ -8016,6 +8146,9 @@ def _route_all(
                                     if _net_id(sibling) in blocked_sources
                                 )
                             else:
+                                query_deadline = _ordinary_query_deadline()
+                                query_allowance = min(_MAX_EXPANSIONS, budget["left"])
+                                query_ports = canvas.routing_ports
                                 through = _search(
                                     starts,
                                     goals,
@@ -8028,6 +8161,7 @@ def _route_all(
                                     owned_starts=owned_source_starts.get(index, ()),
                                     released_starts=source_access_walls.get(index, ()),
                                     forbidden=rejected_path_cells.get(index, ()),
+                                    ordinary_deadline=query_deadline,
                                 )
                                 canvas.routing_ports = frozenset()
                                 expansions += through.expansions
@@ -8055,6 +8189,36 @@ def _route_all(
                                             _source_tap_guard_victims(index, selected_tap)
                                         )
                                     discovered.discard(index)
+                                    joint = (
+                                        _dependency_closure(discovered, dependents) | victims
+                                    ) - {index}
+                                    if len(joint) > _REPAIR_MAX_VICTIMS:
+                                        alternative = _grouped_overcap_alternative(
+                                            index,
+                                            starts,
+                                            goals,
+                                            through_offers,
+                                            victims,
+                                            dependents,
+                                            query_allowance - through.expansions,
+                                            query_deadline,
+                                            query_ports,
+                                        )
+                                        if alternative is not None:
+                                            assert alternative.path is not None
+                                            through_path = alternative.path
+                                            candidate_path = through_path
+                                            discovered = {
+                                                owner[cell]
+                                                for cell in through_path
+                                                if cell in owner
+                                            }
+                                            selected_tap = through_offers[2].get(through_path[0])
+                                            if selected_tap is not None:
+                                                discovered.update(
+                                                    _source_tap_guard_victims(index, selected_tap)
+                                                )
+                                            discovered.discard(index)
                                     if not discovered:
                                         if _preserves_source_frontier(
                                             index, through_path, through_offers
