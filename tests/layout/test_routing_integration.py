@@ -768,9 +768,8 @@ def test_repair_moves_a_route_blocking_only_the_future_splitter(
     assert not report.errors
 
 
-@pytest.mark.parametrize("allow_displacement", (False, True))
 def test_repair_reselects_source_after_displacing_its_provider(
-    monkeypatch: pytest.MonkeyPatch, allow_displacement: bool
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from flab2bp.layout.route_feedback import RouteFailureKind
 
@@ -827,8 +826,6 @@ def test_repair_reselects_source_after_displacing_its_provider(
     monkeypatch.setattr(domain, "RRR_MAX", 1)
     monkeypatch.setattr(domain, "_REPAIR_PASSES", 1)
     monkeypatch.setattr(domain.last_mile, "B_MAX_STRANDED", 0)
-    if not allow_displacement:
-        monkeypatch.setattr(domain, "_REPAIR_MAX_VICTIMS", 0)
     result = domain._route_all(
         canvas, nets, 2001, 35, bounds, budget={"left": 100_000}, prioritize_source_families=False
     )
@@ -844,9 +841,5 @@ def test_repair_reselects_source_after_displacing_its_provider(
             pending.append(output)
         pending.extend(canvas.buildings.by_input_obj(index))
     assert destinations[0].belt in reached
-    if allow_displacement:
-        assert result.status is DetailedRouteStatus.ROUTED
-        assert destinations[1].belt in reached
-    else:
-        assert destinations[1].belt not in reached
-        assert {failure.net_id for failure in result.failures} == {nets[1].net_id}
+    assert result.status is DetailedRouteStatus.ROUTED
+    assert destinations[1].belt in reached

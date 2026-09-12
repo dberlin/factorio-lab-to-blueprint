@@ -130,6 +130,7 @@ from flab2bp.indexed import BeltOverlap
 
 if TYPE_CHECKING:
     from flab2bp.dsp import planet
+    from flab2bp.dsp._geometry_kernel import ProjectedBeltInputs
     from flab2bp.indexed.belt_overlap import Cell
 
 __all__ = [
@@ -1856,6 +1857,8 @@ def _belt_overlap_candidates(
     *,
     projection: planet.Projection | None = None,
     cancelled: Callable[[], bool] | None = None,
+    _target_indices: tuple[int, ...] | None = None,
+    _packed: ProjectedBeltInputs | None = None,
 ) -> Iterator[tuple[int, tuple[int, ...]]]:
     """Raw belt/collider probe hits after flag excusals, before graph rescue."""
     from flab2bp.dsp.planet import ProjectionCancelled
@@ -1863,11 +1866,15 @@ def _belt_overlap_candidates(
     compiled_scan = geometry_kernel._compiled_projected_belt_scan
     compiled_probe = geometry_kernel._compiled_belt_probe
     if projection is not None and compiled_scan is not None and compiled_probe is not None:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         # Pack only real targets, once for this anchor. A belt-heavy scene must
         # not allocate an empty boxes/cells container for every excused preview.
         projected_boxes: list[list[Box]] = []
         target_indices: list[int] = []
-        for i, preview in enumerate(previews):
+        target_candidates = range(len(previews)) if _target_indices is None else _target_indices
+        for i in target_candidates:
+            preview = previews[i]
             if cancelled is not None and cancelled():
                 raise ProjectionCancelled
             if preview.is_belt or preview.is_inserter or preview.is_belt_addon:
@@ -1894,7 +1901,11 @@ def _belt_overlap_candidates(
         )
         start = 0
         while start < len(previews):
-            start, candidates = prepared.scan(previews, start, cancelled)
+            start, candidates = (
+                prepared.scan(previews, start, cancelled)
+                if _packed is None
+                else prepared.scan(previews, start, cancelled, _packed=_packed)
+            )
             if candidates:
                 yield start - 1, candidates
         return
@@ -2121,10 +2132,26 @@ class StableBeltCollisionQuery:
     are rebuilt for every projection.
     """
 
-    __slots__ = ("_previews", "_choices", "_recorded_links", "_findings")
+    __slots__ = (
+        "_previews",
+        "_choices",
+        "_recorded_links",
+        "_findings",
+        "_target_indices",
+        "_packed",
+    )
 
     def __init__(self, previews: tuple[Preview, ...]) -> None:
         self._previews = previews
+        # Preview is frozen and the tuple is owned by this query. Only its
+        # immutable flag predicate is cached; catalog boxes and projected
+        # poses are still resolved afresh for every anchor and catalog context.
+        self._target_indices = tuple(
+            i
+            for i, preview in enumerate(previews)
+            if not (preview.is_belt or preview.is_inserter or preview.is_belt_addon)
+        )
+        self._packed: ProjectedBeltInputs | None = None
         self._choices = _reverse_input_choices(previews)
         self._recorded_links = tuple(_resolve(previews, preview.input) for preview in previews)
         self._findings: dict[tuple[int, int], StableBeltCollision | None] = {}
@@ -2149,10 +2176,20 @@ class StableBeltCollisionQuery:
         cancelled: Callable[[], bool] | None = None,
     ) -> Iterator[StableBeltCollision]:
         previews = self._previews
+        if projection is not None and self._packed is None:
+            prepare = geometry_kernel._compiled_belt_inputs
+            if prepare is not None:
+                self._packed = prepare(previews, cancelled=cancelled)
         candidates_by_belt = (
             _belt_overlap_candidates(previews)
             if projection is None and cancelled is None
-            else _belt_overlap_candidates(previews, projection=projection, cancelled=cancelled)
+            else _belt_overlap_candidates(
+                previews,
+                projection=projection,
+                cancelled=cancelled,
+                _target_indices=self._target_indices,
+                _packed=self._packed,
+            )
         )
         for belt, candidates in candidates_by_belt:
             if _belt_run_stably_ends_in_a_building(previews, self._choices, belt):

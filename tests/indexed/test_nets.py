@@ -192,3 +192,31 @@ def test_replacing_phase_endpoints_preserves_old_queries_and_payload_identity() 
     assert old.payloads_in_role((4, 0, 0), "dst")[0] is first
     assert new.payloads_in_role((0, 0, 0), "src")[0] is replacement
     assert old.ids() == new.ids() == (net_id,)
+
+
+def test_role_rows_preserve_duplicates_and_live_payload_state_across_phases() -> None:
+    first = {"served": False}
+    second = {"served": True}
+    cell = (3, 4, 0)
+    rows = [
+        (7, "gear", "input", cell, "src", first),
+        (2, "gear", "input", cell, "src", second),
+        (7, "gear", "input", cell, "src", first),
+    ]
+    old = Nets.of(iter(rows))
+    assert old.payloads_in_role(cell, "src") == (first, second, first)
+
+    first["served"] = True
+    rows.pop(0)
+    fresh = Nets.of(iter(rows))
+    assert all(payload["served"] for payload in old.payloads_in_role(cell, "src"))
+    assert tuple(id(payload) for payload in old.payloads_in_role(cell, "src")) == (
+        id(first),
+        id(second),
+        id(first),
+    )
+    assert tuple(id(payload) for payload in fresh.payloads_in_role(cell, "src")) == (
+        id(second),
+        id(first),
+    )
+    assert old.payloads_in_role(cell, "dst") == ()

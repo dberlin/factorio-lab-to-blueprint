@@ -15194,6 +15194,27 @@ class TestDetailedRoutingDiagnostics:
         assert (0, 1, 0) in repair
         assert provenance[0, 1, 0] == (0, 0, 0)
 
+    def test_repair_frontier_keeps_admitted_alternative_at_shared_dock(self) -> None:
+        canvas = _Canvas()
+        paths = {0: ((0, 0, 0),), 1: ((2, 0, 0),)}
+        provenance: dict[Cell, Cell] = {}
+        choices: dict[Cell, set[Cell]] = {}
+
+        frontier = routing_domain._merge_frontier(
+            canvas,
+            paths,
+            (0, 1),
+            lambda _x, _y, _level: True,
+            provenance=provenance,
+            source_choices=choices,
+            admit_tap=lambda tap: tap != (0, 0, 0),
+        )
+
+        assert (1, 0, 0) in frontier
+        assert provenance[1, 0, 0] == (2, 0, 0)
+        assert choices[1, 0, 0] == {(2, 0, 0)}
+        assert (-1, 0, 0) not in frontier
+
     @pytest.mark.parametrize("rate, shared_allowed", [(Fraction(10), True), (Fraction(11), False)])
     def test_source_frontier_reserves_flow_before_and_after_merges(
         self, rate: Fraction, shared_allowed: bool

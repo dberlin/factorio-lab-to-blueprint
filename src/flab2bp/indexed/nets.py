@@ -135,6 +135,7 @@ class Nets[Id: Hashable]:
             ids.append(net_id)
         self._table = table
         self._ids = tuple(dict.fromkeys(ids))
+        self._role_payloads: dict[tuple[Cell, str], tuple[object, ...]] = {}
 
     @classmethod
     def of(cls, rows: Iterable[tuple[Id, str, str, Cell, str, Any]]) -> Nets[Id]:
@@ -172,6 +173,15 @@ class Nets[Id: Hashable]:
         return tuple(record.cell_role for record in records)
 
     def payloads_in_role(self, cell: Cell, role: str) -> tuple[Any, ...]:
-        """The payloads occupying a cell-role, in preparation order."""
-        records = sorted(self._table.by.cell_role[(cell, role)], key=lambda r: r.position)
-        return tuple(record.payload for record in records)
+        """Live payloads in frozen row order; reuse only existing role memberships."""
+        key = (cell, role)
+        cached = self._role_payloads.get(key)
+        if cached is not None:
+            return cached
+        records = sorted(self._table.by.cell_role[key], key=lambda r: r.position)
+        payloads = tuple(record.payload for record in records)
+        # Missing coordinates must not grow this query-phase cache. Payloads
+        # retain their original identities; no mutable routing verdict is saved.
+        if payloads:
+            self._role_payloads[key] = payloads
+        return payloads

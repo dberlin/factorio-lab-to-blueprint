@@ -16,7 +16,11 @@ from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from flab2bp.dsp._geometry_kernel import ProjectedBeltProbe, ProjectedBeltScan
+    from flab2bp.dsp._geometry_kernel import (
+        ProjectedBeltInputs,
+        ProjectedBeltProbe,
+        ProjectedBeltScan,
+    )
     from flab2bp.dsp.colliders import Box, Vec3
 
 BackendName = Literal["python", "cython"]
@@ -88,6 +92,14 @@ except ImportError:
     _compiled_projected_belt_scan = None
 if _backend == "python":
     _compiled_projected_belt_scan = None
+
+_compiled_belt_inputs: type[ProjectedBeltInputs] | None
+try:
+    from flab2bp.dsp._geometry_kernel import ProjectedBeltInputs as _compiled_belt_inputs
+except ImportError:
+    _compiled_belt_inputs = None
+if _backend == "python":
+    _compiled_belt_inputs = None
 
 
 def compiled_available() -> bool:
