@@ -467,10 +467,16 @@ cdef extern from *:
                         } else if (!at_goal) value += goal.toll;
                         result = std::min(result, value);
                     };
+                    // A point interval has one candidate, including at every
+                    // profile kink. Re-evaluating it cannot improve the bound.
+                    consider(label.lo);
+                    if (label.lo == label.hi) return;
                     int near_lo = std::clamp(lo, label.lo, label.hi);
                     int near_hi = std::clamp(hi, label.lo, label.hi);
-                    consider(label.lo); consider(near_lo); consider(label.hi);
-                    if (near_hi != near_lo) consider(near_hi);
+                    if (label.lo < near_lo && near_lo < label.hi) consider(near_lo);
+                    consider(label.hi);
+                    if (near_hi != near_lo && label.lo < near_hi && near_hi < label.hi)
+                        consider(near_hi);
                     if (profile) {
                         const auto& corners = profile->corners[label.z];
                         int first = std::min(distance_x(near_lo), distance_x(near_hi)) + y_distance;
@@ -480,8 +486,10 @@ cdef extern from *:
                             check();
                             int delta = *at - y_distance;
                             int left = lo - delta, right = hi + delta;
-                            if (label.lo <= left && left <= label.hi) consider(left);
-                            if (label.lo <= right && right <= label.hi) consider(right);
+                            if (label.lo < left && left < label.hi && left != near_lo && left != near_hi)
+                                consider(left);
+                            if (label.lo < right && right < label.hi && right != near_lo && right != near_hi
+                                && right != left) consider(right);
                         }
                     }
                 };
