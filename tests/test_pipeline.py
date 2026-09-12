@@ -30,6 +30,7 @@ from flab2bp.layout.base import (
     ATOMIC_COMPLETION_GRACE_S,
     AreaFrame,
     NoValidLayout,
+    PlacedBuilding,
     Placement,
     PlacementCompletion,
 )
@@ -2339,6 +2340,103 @@ def test_hierarchy_can_win_best_after_normal_certification(
         "laid-out",
     ]
     assert codec.decode(built.blueprint).buildings
+
+
+def test_raced_full_reports_keep_invalid_artifacts_and_select_the_valid_alternative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = BuildSpec(groups=(), label="no-proliferator")
+    belt = PlacedBuilding(item_id=2001, model_index=35, x=0, y=0)
+    invalid = dataclasses.replace(_finished(1, 1), buildings=(belt, belt))
+    valid = _finished(2, 3)
+    invalid_judgement = strategy_race._PlacementJudgement.judge(
+        invalid, spec, belt_rules=_BELT_RULES
+    )
+    valid_judgement = strategy_race._PlacementJudgement.judge(valid, spec, belt_rules=_BELT_RULES)
+    outcomes = (
+        strategy_race._StrategyRaceOutcome(
+            "freeform", "invalid", placement=invalid, judgement=invalid_judgement
+        ),
+        strategy_race._StrategyRaceOutcome(
+            "sequence-pair", "completed", placement=valid, judgement=valid_judgement
+        ),
+        strategy_race._StrategyRaceOutcome("transport-routing", "refused", refusal_reason="none"),
+        strategy_race._StrategyRaceOutcome("hierarchical", "refused", refusal_reason="none"),
+    )
+    monkeypatch.setattr(
+        pipeline, "_build_candidates_canonical", lambda *_a, **_k: BuildSpecSet(candidates=(spec,))
+    )
+    monkeypatch.setattr(strategy_race, "run_strategy_race", lambda *_a, **_k: outcomes)
+    built = pipeline.build(
+        SMALL_URL,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        workers=4,
+        race=True,
+    )
+
+    assert built.strategy == "sequence-pair" and built.report.ok
+    assert [(a.strategy, a.ok) for a in built.attempts] == [
+        ("freeform", False),
+        ("sequence-pair", True),
+    ]
+    assert built.attempts[0].report is invalid_judgement.report
+    assert built.attempts[1].report is valid_judgement.report
+    assert "geom.belt_single_occupancy" in {
+        finding.check for finding in built.attempts[0].report.errors
+    }
+    assert len(codec.decode(built.attempts[0].blueprint).buildings) == 2
+    assert [failure.strategy for failure in built.refused] == ["transport-routing", "hierarchical"]
+
+
+@pytest.mark.parametrize("incomplete", (False, True))
+def test_a_raced_report_cannot_authorize_changed_or_unfinished_geometry(
+    monkeypatch: pytest.MonkeyPatch, incomplete: bool
+) -> None:
+    spec = BuildSpec(groups=(), label="no-proliferator")
+    original = _finished(1, 1)
+    judgement = strategy_race._PlacementJudgement.judge(original, spec, belt_rules=_BELT_RULES)
+    tower_info = catalog.building(2201)
+    tower = PlacedBuilding(
+        item_id=2201,
+        model_index=tower_info.model_index,
+        width=tower_info.width,
+        height=tower_info.height,
+        x=0,
+        y=0,
+    )
+    changed = dataclasses.replace(
+        original,
+        buildings=(tower, tower),
+        completion=None if incomplete else original.completion,
+    )
+    outcomes = (
+        strategy_race._StrategyRaceOutcome(
+            "freeform", "completed", placement=changed, judgement=judgement
+        ),
+        strategy_race._StrategyRaceOutcome("sequence-pair", "completed", placement=_finished(2, 3)),
+        strategy_race._StrategyRaceOutcome("transport-routing", "refused", refusal_reason="none"),
+        strategy_race._StrategyRaceOutcome("hierarchical", "refused", refusal_reason="none"),
+    )
+    monkeypatch.setattr(
+        pipeline, "_build_candidates_canonical", lambda *_a, **_k: BuildSpecSet(candidates=(spec,))
+    )
+    monkeypatch.setattr(strategy_race, "run_strategy_race", lambda *_a, **_k: outcomes)
+    built = pipeline.build(
+        SMALL_URL,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        workers=4,
+        race=True,
+    )
+
+    assert built.strategy == "sequence-pair" and built.report.ok
+    bad_attempts = [a for a in built.attempts if a.strategy == "freeform"]
+    if bad_attempts:
+        assert not bad_attempts[0].ok
+        assert bad_attempts[0].report is not judgement.report
+        assert "geom.overlap" in {finding.check for finding in bad_attempts[0].report.errors}
+    else:
+        assert incomplete
+        assert any(f.strategy == "freeform" for f in built.refused)
 
 
 def test_all_arms_are_announced_before_the_race_rather_than_after_it(

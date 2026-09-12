@@ -8685,12 +8685,16 @@ def _route_all(
 
     priority: set[int] = set()
     coverage_first = len(nets) >= _SINGLE_ROUND_NETS
-    round_limit = 1 if coverage_first else RRR_MAX
+    round_limit = 1 if coverage_first and settle is None else RRR_MAX
     search_failures: dict[int, _PathSearchResult] = {}
     search_blockers: dict[int, tuple[NetId, ...]] = {}
     round_failures: dict[int, NetFailure] = {}
     try:
         for it in range(round_limit):
+            # Coverage is the first pass, not a permanent restriction on the
+            # graph. Later composition rounds negotiate with connector paths
+            # and the remaining shared quota, under the same deadline.
+            coverage_pass = coverage_first and it == 0
             iterations = it + 1
             round_expansions.clear()
             for index in list(paths):
@@ -8724,7 +8728,7 @@ def _route_all(
                     return _budget_result(paths, current_failures)
                 starts, goals, route_offers = _ends(i)
                 allowance = budget["left"] // (len(order) - position)
-                net_budget = {"left": allowance} if coverage_first else budget
+                net_budget = {"left": allowance} if coverage_pass else budget
                 try:
                     searched = _search_route(
                         i,
@@ -8734,10 +8738,10 @@ def _route_all(
                         pressure,
                         net_budget,
                         blame,
-                        ordinary_only=coverage_first,
+                        ordinary_only=coverage_pass,
                     )
                 finally:
-                    if coverage_first:
+                    if coverage_pass:
                         budget["left"] -= allowance - net_budget["left"]
                 search_expansions = searched.expansions
                 if searched.path is None and not searched.wall:
@@ -13238,6 +13242,10 @@ class _CompositionProjection:
     The fixed canvas is immutable input. Every query includes ALL selected new
     objects, so rip-up can restore a frame and a later extent expansion cannot
     reuse a frame verdict established for a smaller selection.
+
+    ``final_extent`` restricts infill to the selected buildings' actual extent:
+    unused routing capacity must not authorize a tower that needs future belts
+    to make its projected power spacing legal.
     """
 
     def __init__(
@@ -13250,6 +13258,7 @@ class _CompositionProjection:
         cancelled: Callable[[], bool] | None = None,
         power_sites: Sequence[tuple[int, int]] = (),
         tower: catalog.Building | None = None,
+        final_extent: bool = False,
     ) -> None:
         self.canvas_prefix_count = len(buildings)
         if tower is None:
@@ -13264,6 +13273,7 @@ class _CompositionProjection:
         self.capacity = capacity
         self.policy = policy
         self.belt_rules = belt_rules
+        self.final_extent = final_extent
         self.levels = math.floor(belt_rules.max_z) + 1
         self.cancelled: Callable[[], bool] = lambda: (
             (cancelled is not None and cancelled()) or _expired(_JUNCTION_QUERY_DEADLINE.get())
@@ -13305,6 +13315,9 @@ class _CompositionProjection:
         ] = {}
         self._base_power_verdicts: dict[
             tuple[planet.Band, int, float, int, bool, float, float], bool
+        ] = {}
+        self._power_indices: dict[
+            tuple[_JunctionProjectionFrame, planet.Projection], finalize._ProjectedPowerIndex
         ] = {}
         self._selection_root = _SelectionPrefix(
             None, None, _SelectionExtent(None, None, self._bounds)
@@ -13355,7 +13368,11 @@ class _CompositionProjection:
             ):
                 return False
             frames = _cached_junction_projection_frames(
-                self._cache, bounds, self.capacity, self.policy, cancelled=self.cancelled
+                self._cache,
+                bounds,
+                bounds if self.final_extent else self.capacity,
+                self.policy,
+                cancelled=self.cancelled,
             )
         except finalize.ProjectionCancelled:
             raise _PreparationDeadline from None
@@ -13634,10 +13651,26 @@ class _CompositionProjection:
         if info.power_node.is_power_node:
             candidate = (index, materialized, info.power_node)
             for projection in frame.projections:
-                for peer, node, properties in self._power:
+                if self.cancelled():
+                    raise _PreparationDeadline
+                power_key = (frame, projection)
+                power_index = self._power_indices.get(power_key)
+                if power_index is None:
+                    materialized_nodes: list[tuple[int, PlacedBuilding, rules.PowerNode]] = []
+                    for peer, node, properties in self._power:
+                        if self.cancelled():
+                            raise _PreparationDeadline
+                        materialized_nodes.append(
+                            (peer, self._materialize(node, frame), properties)
+                        )
+                    power_index = finalize._ProjectedPowerIndex(
+                        tuple(materialized_nodes), projection, cancelled=self.cancelled
+                    )
+                    self._power_indices[power_key] = power_index
+                for peer_node in power_index.peers(candidate):
                     if (
                         self._projection_cache.power_failure(
-                            ((peer, self._materialize(node, frame), properties), candidate),
+                            (peer_node, candidate),
                             projection,
                         )
                         is not None
@@ -14789,7 +14822,12 @@ def plan_power_infill(
     min_x, min_y, max_x, max_y = limit
     blocked_columns = {(bx, by) for (bx, by, _level) in canvas.blocked}
     projection = _CompositionProjection(
-        canvas.buildings, limit, policy, belt_rules=canvas.belt_rules, cancelled=cancelled
+        canvas.buildings,
+        limit,
+        policy,
+        belt_rules=canvas.belt_rules,
+        cancelled=cancelled,
+        final_extent=True,
     )
 
     def free_site(x: int, y: int) -> bool:

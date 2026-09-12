@@ -555,11 +555,11 @@ def select(
     if checkpoint is not None:
         checkpoint("preparation")
     ds = domains(problem, budget)
+    fixed_index = _FixedIndex(problem, budget)
     if not ds:
         return {}
     if any(d.count == 0 for d in ds):
         raise TransportRefusal("TEMPLATE_FAMILY_EXHAUSTED", "empty complete candidate domain")
-    fixed_index = _FixedIndex(problem, budget)
     representatives = [
         FixedPath((), d.obligation.source, d.obligation.sink, d.obligation.item) for d in ds
     ]
@@ -715,6 +715,14 @@ def select(
                     if e in problem.owned_endpoints
                 }
                 bad_cells = (occupied[-1] - owned) & problem.blocked
+                if problem.bounds is not None:
+                    min_x, min_y, max_x, max_y = problem.bounds
+                    budget.charge("predicates", len(occupied[-1]))
+                    bad_cells.update(
+                        cell
+                        for cell in occupied[-1]
+                        if not (min_x <= cell[0] <= max_x and min_y <= cell[1] <= max_y)
+                    )
                 for cell in occupied[-1] & fixed_occupied_cells:
                     for owner in fixed_owners_by_cell[cell]:
                         if not _owned(geometry.path, problem.fixed_paths[owner], cell, budget):

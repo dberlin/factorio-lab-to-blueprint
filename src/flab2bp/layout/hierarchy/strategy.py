@@ -69,17 +69,14 @@ plan proposed and each is spelled out separately below:
   under 25 s (``0.4 * budget < 10`` there), so every build in ``[12.5, 25)``
   also gets a smaller reserve now (``0.4 * budget`` instead of the old flat
   10 s) even though the new floor itself is not what is binding for it.
-* ``_pool_width() = max(1, min(_POOL_CAP, (workers or _available_cpu_count())
-  // 4))`` with ``_POOL_CAP = 32``, and each child is constructed with
-  ``_BLOCK_WORKERS = 4`` CP-SAT search workers.  v1 divided a hardcoded
-  fallback of 16 rather than the box's real affinity set: on a 128-core box
-  that made the pool 4 wide regardless of what the box could actually run,
-  turning an 18-block, 2-arm round (36 jobs) into 9 waves instead of 2 (v2
-  Task 3; see ``docs/superpowers/evidence/2026-09-07-hierarchical-v1/gate.md``
-  §8).  ``_POOL_CAP`` keeps a nearly-idle box from spawning dozens of
-  CP-SAT-holding processes for a build with few blocks -- each is already
-  ``_BLOCK_WORKERS`` threads deep, so the pool count itself does not need to
-  chase the affinity set past a point.
+* ``_pool_width() = max(1, min(_POOL_CAP, workers or _available_cpu_count()))``
+  with ``_POOL_CAP = 32``. Independent shapes get workers before any one
+  child's CP-SAT search does: a round divides the aggregate share by its
+  concurrent shape count, capped at ``_BLOCK_WORKERS = 4`` per child.
+  Reserving four workers per block made an eight-worker portfolio arm only
+  two jobs wide, refusing re-cut rounds with useful shapes still unattempted.
+  The pool remains capped for interpreter memory, and a round with few
+  eligible shapes can still give each child multiple search workers.
 * The per-JOB deadline is ``min(parent_deadline, job_start + block_budget)``,
   computed inside :func:`_solve_block` at job start rather than by the round.
 * ``MAX_RESPLIT_ATTEMPTS = 4`` is counted PER BLOCK, not as a global round
@@ -211,19 +208,17 @@ MAX_RECUT_ROUNDS = 2
 #: floor the router needs to turn a trunk out of a block at all.
 DEFAULT_GAP = 2
 
-#: CP-SAT search workers one block's freeform arm gets.  Blocks run
-#: concurrently, so this is a per-block share rather than the box's width, and
-#: it is the divisor the pool width is derived from.
+#: Preferred ceiling on one block's CP-SAT search workers. The seed widens
+#: independent progress only when this profile cannot fund every wave's floor.
 _BLOCK_WORKERS = 4
 #: Ceiling on the pool itself, independent of how wide the box's affinity set
 #: is.  What it bounds is the PROCESS COUNT AND PEAK MEMORY OF A WIDE ROUND:
 #: ``ProcessPoolExecutor`` spawns per submit, so the pool width only becomes
 #: real processes once a round actually has that many jobs to give out -- an
-#: 80-block, 2-arm round on a 512-core box would otherwise hold 128 spawned
-#: interpreters, each carrying a whole placer with ``_BLOCK_WORKERS`` CP-SAT
-#: threads and its own copy of the spec.  The cap therefore costs nothing when
-#: a round has fewer jobs than this to give out; ``_pool_width`` still floors
-#: the box's own affinity set below it.
+#: 80-block, 2-arm round on a 512-core box would otherwise hold 512 spawned
+#: interpreters, each carrying a whole placer and its own copy of the spec.
+#: The cap costs nothing when a round has fewer jobs than this to give out;
+#: ``_pool_width`` still respects the aggregate share below it.
 _POOL_CAP = 32
 
 BlockStrategyName = Literal["freeform", "sequence-pair", "best"]
@@ -242,7 +237,7 @@ BlockStrategyName = Literal["freeform", "sequence-pair", "best"]
 #     1 arm             the solver's name, one of `BlockStrategyName`.
 #     2 budget_s        the round's per-block wall, in seconds.
 #     3 belt_rules      the parent's complete researched save policy.
-#     4 workers         `_BLOCK_WORKERS` CP-SAT search workers for THIS block.
+#     4 workers         this round's per-block share, at most `_BLOCK_WORKERS`.
 #     5 parent_deadline absolute `time.monotonic()` deadline, or None.  The
 #                       WORKER combines it: `min(parent, start + budget_s)`.
 #
@@ -523,6 +518,7 @@ class _RoundPlan:
 
     budget_s: float
     waves: int
+    width: int
     active: _GroupedWork
     remembered: _GroupedWork
     keys_by_slot: tuple[tuple[_WorkKey, ...], ...]
@@ -596,6 +592,7 @@ def _plan_round(
     return _RoundPlan(
         budget,
         actual_waves,
+        width,
         tuple(active),
         tuple(remembered),
         tuple(keys_by_slot),
@@ -671,9 +668,12 @@ class HierarchicalLayout:
         # starts processes lazily, on the first `submit()` -- so a build that
         # refuses before ever funding a round (the check just below) spawns
         # nothing at all.
-        width = self._pool_width()
+        capacity = self._pool_width()
+        aggregate_workers = self.workers or _available_cpu_count()
+        block_workers = min(_BLOCK_WORKERS, aggregate_workers)
+        width = max(1, min(capacity, aggregate_workers // block_workers))
         try:
-            executor = self._executor_factory(width)
+            executor = self._executor_factory(capacity)
         except Exception as exc:  # noqa: BLE001 - a pool that cannot even be built is a refusal
             # `ProcessPoolExecutor.__init__` does not spawn a worker, but it DOES
             # build the multiprocessing queues a worker will use -- pipes plus a
@@ -724,15 +724,29 @@ class HierarchicalLayout:
                 # a block count the NEXT round will have grown.  `rounds_left`
                 # is this round plus the re-cuts still permitted.
                 rounds_left = 1 + allowed_recuts - recut_rounds
-                plan = _plan_round(
-                    entries,
-                    todo,
-                    arms_by_slot,
-                    nogood=nogood,
-                    width=width,
-                    remaining=remaining,
-                    rounds_left=rounds_left,
-                )
+                while True:
+                    plan = _plan_round(
+                        entries,
+                        todo,
+                        arms_by_slot,
+                        nogood=nogood,
+                        width=width,
+                        remaining=remaining,
+                        rounds_left=rounds_left,
+                    )
+                    if (
+                        recut_rounds
+                        or remaining >= plan.waves * BLOCK_BUDGET_MIN_S
+                        or block_workers == 1
+                    ):
+                        break
+                    # Preserve the established child search when it can fund
+                    # all seed waves. Otherwise buy independent progress rather
+                    # than strand blocks behind unused per-child capacity.
+                    block_workers -= 1
+                    width = max(1, min(capacity, aggregate_workers // block_workers))
+                # Keep this profile through recuts: a timed no-good belongs to
+                # the search that produced it, not a differently threaded child.
                 block_budget = plan.budget_s
                 if (
                     plan.waves
@@ -989,17 +1003,12 @@ class HierarchicalLayout:
         return chosen
 
     def _pool_width(self) -> int:
-        """Jobs run at once.  One job is a whole placer holding CP-SAT workers,
-        so the worker budget divides by what a job is given, not by the block
-        count -- a narrower pool than the budget funds would only add waves.
+        """Independent jobs the aggregate share can run, capped for memory.
 
-        The fallback when no ``workers`` was named is the box's own affinity
-        set (:func:`_available_cpu_count`), not a hardcoded guess: a guess
-        narrower than the box is waves the box had room to avoid, and one
-        wider than the box would oversubscribe it.  ``_POOL_CAP`` still bounds
-        the result on a very wide box -- see its own docstring.
+        This is capacity, not a fixed reservation. Seed funding selects the
+        actual width and retains that child search profile through recuts.
         """
-        return max(1, min(_POOL_CAP, (self.workers or _available_cpu_count()) // _BLOCK_WORKERS))
+        return max(1, min(_POOL_CAP, self.workers or _available_cpu_count()))
 
     def _solve_round(
         self,
@@ -1061,7 +1070,13 @@ class HierarchicalLayout:
         ready = deque(keys_by_shape)
         pending: dict[Future[tuple[dict[str, object], Placement | None]], _WorkKey] = {}
         solved_slots: set[int] = set()
-        width = self._pool_width()
+        width = min(plan.width, len(keys_by_shape))
+        # Use the funded width, not this round's remaining shapes. Otherwise
+        # recuts change the search behind timed no-goods and retained geometry.
+        workers = max(
+            1,
+            min(_BLOCK_WORKERS, (self.workers or _available_cpu_count()) // plan.width),
+        )
 
         def finish(key: _WorkKey, result: tuple[dict[str, object], Placement | None]) -> None:
             outcome_by_key[key] = result
@@ -1094,7 +1109,7 @@ class HierarchicalLayout:
                     key[1],
                     block_budget,
                     self.belt_rules,
-                    min(_BLOCK_WORKERS, self.workers or _BLOCK_WORKERS),
+                    workers,
                     # Each worker clips at job start, not at round start.
                     deadline,
                 )

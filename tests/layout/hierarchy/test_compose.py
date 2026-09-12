@@ -2065,6 +2065,42 @@ def test_composed_infill_selects_projected_legal_site_without_losing_power():
     finalize.finalize_placement(placement, BandPolicy("portable"))
 
 
+def test_composed_infill_does_not_borrow_unused_canvas_for_power_spacing() -> None:
+    from flab2bp.layout import validate
+
+    bounds = (0, 0, 360, 139)
+    capacity = (-8, -8, 368, 147)
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    canvas = routing_domain._Canvas(limit=capacity)
+    for building in (
+        *_projection_extent_poles(bounds),
+        PlacedBuilding(tower.item_id, tower.model_index, 80, 15),
+        junction.make_splitter(92, 16),
+    ):
+        canvas.add(building)
+    # Both sites cover the splitter and pass flat spacing. The first only
+    # clears projected spacing in a larger footprint that is never emitted.
+    choices = {(83, 15), (84, 15)}
+    canvas.keep_out.update(
+        (x, y)
+        for x in range(capacity[0], capacity[2] + 1)
+        for y in range(capacity[1], capacity[3] + 1)
+        if (x, y) not in choices
+    )
+
+    sites, uncovered = routing_domain.plan_power_infill(canvas, policy=BandPolicy("portable"))
+    assert uncovered == ()
+    routing_domain._place_power(canvas, sites)
+    placement = Placement(buildings=tuple(canvas.buildings))
+    report = validate.validate(
+        placement,
+        only=("power.coverage", "power.connectivity", "game.power_too_close"),
+        expect_power=True,
+    )
+    assert report.ok, report.findings
+    finalize.finalize_placement(placement, BandPolicy("portable"))
+
+
 def test_projection_refusal_attributes_only_witnessed_route_owners() -> None:
     tower = catalog.building(catalog.TESLA_TOWER_ID)
     placement = Placement(

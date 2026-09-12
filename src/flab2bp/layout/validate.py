@@ -638,7 +638,7 @@ class Context:
 
         There is no recipe id to look up and there never was: DSP has no recipe
         for a MODE, so ``catalog.recipe_id`` raises for one and
-        ``pipeline._id_map`` carries no entry.  What identifies the machine is
+        ``validate.id_map`` carries no entry.  What identifies the machine is
         the pair the placement does carry -- which building it is, and which
         mode its parameter block selects.
 

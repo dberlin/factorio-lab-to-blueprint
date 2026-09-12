@@ -273,7 +273,7 @@ def test_interrupted_side_cleanup_publishes_no_partial_lineage(
             _building(catalog.TESLA_TOWER_ID, 10, 10),
         )
     )
-    real_certify = finalize._certify
+    real_certify = validate.certify
     interrupted = False
     certified_roots: list[int] = []
 
@@ -1125,6 +1125,114 @@ def test_projected_power_failure_exact_probe_skips_distant_pairs(
 
     assert failure is None
     assert probes == 0
+
+
+def _first_candidate_power_failure(
+    candidate: tuple[int, PlacedBuilding, rules.PowerNode],
+    peers: Sequence[tuple[int, PlacedBuilding, rules.PowerNode]],
+    projection: planet.Projection,
+) -> finalize.ProjectionFailure | None:
+    """The prospective-site consumer's original ordered, all-static-peer scan."""
+    for peer in peers:
+        failure = finalize.projected_power_failure((peer, candidate), projection)
+        if failure is not None:
+            return failure
+    return None
+
+
+def test_projected_power_index_preserves_first_failure_across_spatial_boundary() -> None:
+    tower = catalog.building(catalog.TESLA_TOWER_ID).power_node
+    band = next(band for band in planet.bands() if band.area_segments == 200)
+    projection = planet.Projection(band, 0, colliders.PLANET_SEGMENT, colliders.PLANET_RADIUS)
+    candidate = (100, _building(catalog.TESLA_TOWER_ID, 0, 0, z=Fraction(20)), tower)
+    nodes = (
+        (2, _building(catalog.TESLA_TOWER_ID, 0, 0), tower),
+        (71, _building(catalog.TESLA_TOWER_ID, 1, 0, z=Fraction(20)), tower),
+        (3, _building(catalog.TESLA_TOWER_ID, -1, 0, z=Fraction(20)), tower),
+    )
+    # The raised peers straddle longitude zero (and its world-x bucket edge).
+    # Their input order is neither spatial nor building-index order; the ground
+    # peer is colocated in the flat plane but must not win the exact 3D scan.
+    expected = _first_candidate_power_failure(candidate, nodes, projection)
+    assert expected is not None
+    assert expected.buildings == (71, 100)
+    index = finalize._ProjectedPowerIndex(nodes, projection)
+
+    assert _first_candidate_power_failure(candidate, index.peers(candidate), projection) == expected
+
+
+def test_projected_power_index_keeps_rotation_and_latitude_contexts_separate() -> None:
+    tower = catalog.building(catalog.TESLA_TOWER_ID).power_node
+    candidate = (100, _building(catalog.TESLA_TOWER_ID, 0, 0), tower)
+    nodes = ((41, _building(catalog.TESLA_TOWER_ID, 0, 11), tower),)
+    bands = {band.area_segments: band for band in planet.bands()}
+    polar = planet.Projection(bands[4], -250, colliders.PLANET_SEGMENT, colliders.PLANET_RADIUS)
+    projections = (
+        polar,
+        replace(polar, quadrant=1),
+        replace(polar, band=bands[200], anchor_row=0, quadrant=1),
+    )
+    indexes = tuple(finalize._ProjectedPowerIndex(nodes, projection) for projection in projections)
+    cache = finalize._ProjectionCache(finalize._ProjectionCounters())
+    # The same flat separation becomes longitude at the pole only when turned.
+    # Query again after the other contexts to catch shared mutable projection data.
+    for context in (0, 1, 2, 1, 0):
+        projection = projections[context]
+        expected = _first_candidate_power_failure(candidate, nodes, projection)
+        assert (expected is not None) == (context == 1)
+        assert (
+            _first_candidate_power_failure(candidate, indexes[context].peers(candidate), projection)
+            == expected
+        )
+        assert cache.power_failure((nodes[0], candidate), projection) == expected
+
+
+def test_projected_power_index_accepts_candidate_with_larger_gate() -> None:
+    tower = catalog.building(catalog.TESLA_TOWER_ID).power_node
+    wind = catalog.building(2203).power_node
+    candidate = (100, _building(2203, 0, 0), wind)
+    nodes = (
+        (7, _building(catalog.TESLA_TOWER_ID, 6, 0), tower),
+        (41, _building(catalog.TESLA_TOWER_ID, 1, 1), tower),
+    )
+    assert wind.gate_sqr > tower.gate_sqr
+    for projection in (_broke2_projection(), replace(_broke2_projection(), quadrant=1)):
+        expected = _first_candidate_power_failure(candidate, nodes, projection)
+        assert expected is not None
+        assert expected.buildings == (41, 100)
+        index = finalize._ProjectedPowerIndex(nodes, projection)
+
+        assert (
+            _first_candidate_power_failure(candidate, index.peers(candidate), projection)
+            == expected
+        )
+
+
+def test_projected_power_index_handles_empty_nodes_and_cancellation() -> None:
+    candidate = _diagonal_tesla_pair()[0]
+    projection = _broke2_projection()
+    assert (
+        _first_candidate_power_failure(
+            candidate, finalize._ProjectedPowerIndex((), projection).peers(candidate), projection
+        )
+        is None
+    )
+    with pytest.raises(finalize.ProjectionCancelled):
+        finalize._ProjectedPowerIndex((candidate,), projection, cancelled=lambda: True)
+
+    stopped = False
+
+    def cancelled() -> bool:
+        return stopped
+
+    indexes = (
+        finalize._ProjectedPowerIndex((), projection, cancelled=cancelled),
+        finalize._ProjectedPowerIndex((candidate,), projection, cancelled=cancelled),
+    )
+    stopped = True
+    for index in indexes:
+        with pytest.raises(finalize.ProjectionCancelled):
+            index.peers(candidate)
 
 
 @pytest.mark.parametrize(
@@ -2326,13 +2434,13 @@ def test_projection_refusal_preserves_order_deduplicates_and_formats_evidence() 
 
 def test_projection_collects_simultaneous_rule_category_failures() -> None:
     placement = Placement(
-        buildings=[
+        buildings=(
             *_extent(20, 5),
             _building(2302, 2, 2),
             _building(2302, 2, 2),
             _building(catalog.TESLA_TOWER_ID, 12, 2),
             _building(catalog.TESLA_TOWER_ID, 12, 2),
-        ]
+        )
     )
     with pytest.raises(finalize.ProjectionRefusal) as caught:
         finalize.finalize_placement(placement, BandPolicy("200"))
@@ -2465,44 +2573,6 @@ def test_projection_counters_count_only_observed_rule_loop_work(
     assert counters.power_pairs == sum(power_work)
     assert counters.sorters == sum(sorter_work)
     assert counters.collider_pairs == sum(collider_work)
-
-
-def test_projection_cache_computes_power_candidates_once_per_latitude(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    node = rules.PowerNode(
-        is_power_node=True,
-        is_accumulator=False,
-        wind_forced_power=False,
-        geothermal=False,
-    )
-    nodes = (
-        (0, _building(catalog.TESLA_TOWER_ID, 0, 0), node),
-        (1, _building(catalog.TESLA_TOWER_ID, 10, 0), node),
-    )
-    projection = _broke2_projection()
-    original = finalize._projected_power_candidates
-    calls = 0
-
-    def counted_candidates(
-        candidate_nodes: tuple[tuple[int, PlacedBuilding, rules.PowerNode], ...],
-        candidate_projection: planet.Projection,
-        *,
-        cancelled: Callable[[], bool] | None = None,
-    ) -> tuple[tuple[tuple[float, float, float], ...], tuple[tuple[int, int], ...]]:
-        nonlocal calls
-        calls += 1
-        return original(
-            candidate_nodes,
-            candidate_projection,
-            cancelled=cancelled,
-        )
-
-    monkeypatch.setattr(finalize, "_projected_power_candidates", counted_candidates)
-    cache = finalize._ProjectionCache(finalize._ProjectionCounters())
-
-    assert cache.power_failure(nodes, projection) is None
-    assert calls == 1
 
 
 @pytest.mark.parametrize(
@@ -3401,7 +3471,7 @@ def test_frame_certificate_rejects_quantum_chemical_left_overhead_not_middle() -
 
 def _carried_belt_graph() -> Placement:
     return Placement(
-        buildings=[
+        buildings=(
             replace(_belt(0, 0, output=1), carries_item="iron-ore"),
             replace(_belt(1, 0, output=None), carries_item="iron-ore"),
             replace(_belt(2, 2, output=3), carries_item="iron-ingot"),
@@ -3411,7 +3481,7 @@ def _carried_belt_graph() -> Placement:
             replace(_belt(0, 2, output=None), carries_item="iron-ore"),
             replace(_belt(5, 0, output=None), carries_item="gear", parameters=(1,)),
             replace(_building(min(catalog.SORTER_IDS), 1, 1), input_obj=0, output_obj=1),
-        ]
+        )
     )
 
 

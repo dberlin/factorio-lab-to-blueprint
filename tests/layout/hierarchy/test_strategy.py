@@ -13,7 +13,7 @@ from collections.abc import Callable
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from fractions import Fraction
-from typing import NoReturn
+from typing import NoReturn, cast
 
 import pytest
 
@@ -73,20 +73,6 @@ def _refuse_first_shape_then_real(
     if sub.machine_count == 2 and len(sub.groups) == 1:  # the unsplit ingot block
         return ({"verdict": "REFUSED: forced", "ok": False, "strategy": args[1]}, None)
     return _REAL_SOLVE_BLOCK(args)
-
-
-def test_pool_width_comes_from_the_affinity_set(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No `workers` named -> the pool is sized from the box, capped at 32."""
-    monkeypatch.setattr(strategy, "_available_cpu_count", lambda: 128)
-    layout = HierarchicalLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy.parse("portable"))
-    assert layout._pool_width() == 32
-    # An explicit `workers` still wins over the affinity set.
-    layout = HierarchicalLayout(
-        belt_rules=_BELT_RULES,
-        band_policy=BandPolicy.parse("portable"),
-        workers=16,
-    )
-    assert layout._pool_width() == 4
 
 
 def test_a_fifteen_second_build_funds_one_round(
@@ -294,6 +280,108 @@ class _InlinePool(Executor):
         except Exception as exc:
             future.set_exception(exc)
         return future
+
+
+@pytest.mark.parametrize(
+    ("workers", "affinity", "round_shapes"),
+    [
+        (1, 32, (2, 1)),
+        (2, 32, (4, 1)),
+        (3, 32, (6, 1)),
+        (8, 32, (16, 3, 16)),
+        (None, 3, (6, 1)),
+        (128, 128, (64, 2)),
+    ],
+)
+def test_independent_blocks_progress_within_aggregate_worker_share(
+    chain_spec: BuildSpec,
+    monkeypatch: pytest.MonkeyPatch,
+    workers: int | None,
+    affinity: int,
+    round_shapes: tuple[int, ...],
+) -> None:
+    """Queued waves finish on time without oversubscribing small shares or re-cuts."""
+    aggregate = workers or affinity
+    monkeypatch.setattr(strategy, "_available_cpu_count", lambda: affinity)
+    layout = HierarchicalLayout(
+        belt_rules=_BELT_RULES,
+        band_policy=BandPolicy.parse("portable"),
+        workers=workers,
+        block_strategy="freeform",
+    )
+
+    class _Clock:
+        now = 0.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+    clock = _Clock()
+    monkeypatch.setattr(strategy, "time", clock)
+    placed = Placement(buildings=())
+
+    def solve(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        return ({"verdict": "OK", "ok": True}, placed)
+
+    monkeypatch.setattr(strategy, "_solve_block", solve)
+
+    class _WavePool(Executor):
+        def __init__(self) -> None:
+            self.queued: list[Callable[[], None]] = []
+            self.active_workers = 0
+
+        def submit[Result, **Params](
+            self, fn: Callable[Params, Result], /, *args: Params.args, **kwargs: Params.kwargs
+        ) -> Future[Result]:
+            job = cast(strategy._BlockJob, args[0])
+            self.active_workers += job[4]
+            assert self.active_workers <= aggregate
+            assert len(self.queued) < 32
+            future: Future[Result] = Future()
+            self.queued.append(lambda: future.set_result(fn(*args, **kwargs)))
+            return future
+
+        def complete_wave(self, *args: object, **kwargs: object) -> None:
+            clock.now += strategy.BLOCK_BUDGET_MIN_S
+            for complete in self.queued:
+                complete()
+            self.queued.clear()
+            self.active_workers = 0
+
+    pool = _WavePool()
+    monkeypatch.setattr(strategy, "wait", pool.complete_wave)
+    for shape_count in round_shapes:
+        entries = [
+            _Entry([Unit(count, chain_spec.groups[0], count)])
+            for count in range(1, shape_count + 1)
+        ]
+        todo = list(range(shape_count))
+        # Enough wall for the independent jobs this share can run, not for
+        # artificially serial waves caused by four threads reserved per job.
+        parallel_jobs = min(aggregate, 32, shape_count)
+        remaining = (shape_count + parallel_jobs - 1) // parallel_jobs * strategy.BLOCK_BUDGET_MIN_S
+        deadline = clock.now + remaining
+        nogood = strategy._ShapeNoGood()
+        plan = strategy._plan_round(
+            entries,
+            todo,
+            [layout._arms()] * shape_count,
+            nogood=nogood,
+            width=layout._pool_width(),
+            remaining=remaining,
+            rounds_left=1,
+        )
+        layout._solve_round(
+            chain_spec,
+            entries,
+            todo,
+            pool=pool,
+            plan=plan,
+            deadline=deadline,
+            nogood=nogood,
+        )
+        assert all(entry.placement is placed for entry in entries)
+        assert clock.now <= deadline
 
 
 def test_successful_primary_suppresses_unused_alternate_and_shares_shape(

@@ -179,25 +179,18 @@ class TemplateConstructor(ReusingConstructor):
         ys = [cell[1] for cell in extent]
         x_tracks = tuple(sorted(set(self.x_tracks) | {min(xs) - 8, max(xs) + 8}))
         y_tracks = tuple(sorted(set(self.y_tracks) | {min(ys) - 8, max(ys) + 8}))
-        self.problem = TemplateProblem(
-            tuple(
-                Obligation(
-                    index,
-                    flight.item,
-                    flight.rate,
-                    self.endpoint(flight.source.port, flight.source.outward),
-                    self.endpoint(flight.sink.port, flight.sink.outward),
-                )
-                for index, flight in global_flights
-            ),
-            frozenset(blocked),
-            fixed_paths,
-            x_tracks,
-            y_tracks,
-            tuple(range(3, self.canvas.levels)),
+        obligations: tuple[Obligation, ...] = tuple(
+            Obligation(
+                index,
+                flight.item,
+                flight.rate,
+                self.endpoint(flight.source.port, flight.source.outward),
+                self.endpoint(flight.sink.port, flight.sink.outward),
+            )
+            for index, flight in global_flights
         )
         attachment_paths: tuple[Obligation | FixedPath, ...] = (
-            *self.problem.obligations,
+            *obligations,
             *fixed_paths,
         )
         endpoints = tuple(
@@ -236,13 +229,14 @@ class TemplateConstructor(ReusingConstructor):
             budget.charge("predicates", len(keepout))
             blocked.update(keepout)
         self.problem = TemplateProblem(
-            self.problem.obligations,
-            frozenset(blocked),
-            fixed_paths,
-            x_tracks,
-            y_tracks,
-            self.problem.levels,
-            endpoints,
+            obligations=obligations,
+            blocked=frozenset(blocked),
+            fixed_paths=fixed_paths,
+            x_tracks=x_tracks,
+            y_tracks=y_tracks,
+            levels=tuple(range(3, self.canvas.levels)),
+            owned_endpoints=endpoints,
+            bounds=self.canvas.limit,
         )
         self.selected_points = select(
             self.problem, budget, self.session.solve_stats, self.session.checkpoint

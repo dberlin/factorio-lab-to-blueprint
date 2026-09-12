@@ -185,6 +185,11 @@ _DETERMINISTIC_PACK_STRIPS = 15
 _DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE = 0.02
 
 
+def packing_workers(strip_count: int, available: int) -> int:
+    """Worker demand for an actual strip count or a conservative lower bound."""
+    return 1 if strip_count >= _DETERMINISTIC_PACK_STRIPS else available
+
+
 def _deterministic_pack_work(strip_count: int) -> float:
     """Deterministic CP-SAT units a pack of ``strip_count`` strips may spend."""
     scale = max(1, strip_count) / _DETERMINISTIC_PACK_STRIPS
@@ -5693,7 +5698,7 @@ class FreeformLayout:
                         width_bound=width_bound,
                         time_budget_s=remaining,
                         direct_candidates=net_candidates,
-                        workers=(1 if len(strips) >= _DETERMINISTIC_PACK_STRIPS else self.workers),
+                        workers=packing_workers(len(strips), self.workers),
                         deterministic=len(strips) >= _DETERMINISTIC_PACK_STRIPS,
                         seed=seed,
                         arrangement=arrangement,

@@ -16,10 +16,14 @@ from flab2bp.layout.base import (
     AreaFrame,
     LayoutAttemptFailure,
     NoValidLayout,
+    PlacedBuilding,
+    Placement,
+    PlacementCompletion,
     ProjectionFailureRecord,
 )
 from flab2bp.rates.candidates import CandidatePolicy
 from flab2bp.rates.machine_choice import MachineRank
+from flab2bp.spec import BuildSpec, BuildSpecSet
 
 _BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
 
@@ -573,6 +577,50 @@ def test_cli_rejects_a_non_positive_workers_count(
 
     assert exc_info.value.code == 2
     assert "--workers must be a positive integer" in capsys.readouterr().err
+
+
+def test_cli_refuses_a_raced_invalid_report_without_losing_its_findings(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    spec = BuildSpec(groups=(), label="no-proliferator")
+    belt = PlacedBuilding(item_id=2001, model_index=35, x=0, y=0)
+    placement = Placement(
+        buildings=(belt, belt),
+        frame=AreaFrame(1, 1, 4, (4,), False),
+        completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+    )
+    judgement = strategy_race._PlacementJudgement.judge(placement, spec, belt_rules=_BELT_RULES)
+    outcomes = (
+        strategy_race._StrategyRaceOutcome(
+            "freeform", "invalid", placement=placement, judgement=judgement
+        ),
+        strategy_race._StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="none"),
+        strategy_race._StrategyRaceOutcome("transport-routing", "refused", refusal_reason="none"),
+        strategy_race._StrategyRaceOutcome("hierarchical", "refused", refusal_reason="none"),
+    )
+    monkeypatch.setattr(
+        pipeline, "_build_candidates_canonical", lambda *_a, **_k: BuildSpecSet(candidates=(spec,))
+    )
+    monkeypatch.setattr(strategy_race, "run_strategy_race", lambda *_a, **_k: outcomes)
+
+    assert (
+        cli.main(
+            [
+                "https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11",
+                "--race",
+                "--workers",
+                "4",
+                "--candidate-policy",
+                "no-proliferator",
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "geom.belt_single_occupancy" in captured.err
+    assert "VALIDATION ERRORS" in captured.err
 
 
 def test_hierarchical_gets_the_spawn_pool_completion_grace() -> None:

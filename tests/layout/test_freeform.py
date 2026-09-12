@@ -10166,9 +10166,7 @@ class TestNoFloatEntersCapacityDecisions:
 
 def _id_map_for(spec: BuildSpec) -> validate.IdMap:
     """The same bridge the pipeline builds, so tests judge what shipping judges."""
-    from flab2bp.pipeline import _id_map
-
-    return _id_map(spec)
+    return validate.id_map(spec)
 
 
 def _full_report(p: Placement, spec: BuildSpec) -> validate.Report:

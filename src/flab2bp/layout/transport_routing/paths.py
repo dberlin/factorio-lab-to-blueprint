@@ -56,6 +56,8 @@ class TemplateProblem:
     levels: tuple[int, ...]
     # Compiler-verified actual attachment records, never inferred from coordinates.
     owned_endpoints: tuple[Endpoint, ...] = ()
+    # Inclusive XY routing envelope; None preserves unbounded callers.
+    bounds: tuple[int, int, int, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,11 +326,11 @@ def domains(problem: TemplateProblem, budget: WorkBudget) -> tuple[Domain, ...]:
         for sa in range(5):
             for ta in range(5):
                 start, finish = _adapter(obligation.source, sa), _adapter(obligation.sink, ta)
-                a, b = (*start[-1][:2], 0), (*finish[-1][:2], 0)
+                source_tip, sink_tip = (*start[-1][:2], 0), (*finish[-1][:2], 0)
                 adapter_length = (2, 4, 6, 4, 4)[sa] + (2, 4, 6, 4, 4)[ta]
                 for shape in shapes:
                     budget.check()
-                    middle = _middle(a, b, shape)
+                    middle = _middle(source_tip, sink_tip, shape)
                     lengths.append(
                         adapter_length
                         + sum(
@@ -374,6 +376,7 @@ class _FixedIndex:
         self.nodes: list[_Node] = []
         self.ports: dict[int, list[int]] = {}
         self.owned_endpoints: frozenset[Endpoint] = frozenset(problem.owned_endpoints)
+        self.bounds: tuple[int, int, int, int] | None = problem.bounds
         rows: dict[tuple[int, int], list[int]] = {}
         for x, y, z in problem.blocked:
             budget.check()
@@ -469,6 +472,12 @@ class _FixedIndex:
     def error(
         self, geometry: _Geometry, budget: WorkBudget, *, ignore_owner: int | None = None
     ) -> str | None:
+        if self.bounds is not None and geometry.bounds is not None:
+            budget.charge("predicates")
+            min_x, min_y, max_x, max_y = self.bounds
+            lo, hi = geometry.bounds.lo, geometry.bounds.hi
+            if lo[0] < min_x or lo[1] < min_y or hi[0] > max_x or hi[1] > max_y:
+                return f"path outside routing bounds {self.bounds}"
         for endpoint in (geometry.path.source, geometry.path.sink):
             for owner in self.ports.get(endpoint.port_id, ()):
                 budget.check()
@@ -507,8 +516,8 @@ class _FixedIndex:
                     and _owned(geometry.path, self.fixed[obstacle.owner].path, overlap.lo, budget)
                 ):
                     continue
-                owner = (
+                collision_owner = (
                     "body reservation" if obstacle.owner is None else f"fixed path {obstacle.owner}"
                 )
-                return f"{owner} collision at {overlap.lo}"
+                return f"{collision_owner} collision at {overlap.lo}"
         return None

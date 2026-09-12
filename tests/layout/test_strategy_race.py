@@ -24,10 +24,12 @@ from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout import process_resources
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
+    AreaFrame,
     LayoutStrategy,
     NoValidLayout,
     PlacedBuilding,
     Placement,
+    PlacementCompletion,
     PlacementStats,
     ProjectionFailureRecord,
 )
@@ -68,6 +70,7 @@ from flab2bp.layout.strategy_race import (
     _install_race_channels,
     _JoinCancellable,
     _ordered,
+    _PlacementJudgement,
     _pool_submit,
     _run_race_leg,
     _StrategyRaceOutcome,
@@ -126,6 +129,98 @@ def test_the_request_carries_no_queue() -> None:
 )
 def test_outcomes_round_trip_through_pickle(outcome: _StrategyRaceOutcome) -> None:
     assert pickle.loads(pickle.dumps(outcome)) == outcome
+
+
+def test_full_judgement_survives_pickle_only_for_its_exact_result_and_request() -> None:
+    spec = BuildSpec(groups=())
+    placement = Placement(
+        buildings=(),
+        frame=AreaFrame(1, 1, 4, (4,), False),
+        completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+    )
+    judgement = _PlacementJudgement.judge(placement, spec, belt_rules=_BELT_RULES)
+    outcome = pickle.loads(
+        pickle.dumps(
+            _StrategyRaceOutcome("freeform", "completed", placement=placement, judgement=judgement)
+        )
+    )
+    assert outcome.placement is not None and outcome.judgement is not None
+    report = outcome.judgement.report_for(outcome.placement, spec, belt_rules=_BELT_RULES)
+    assert report is not None and report.ok
+    assert {"geom.overlap", "flow.conservation"} <= set(report.checks_run)
+    assert (
+        outcome.judgement.report_for(
+            replace(outcome.placement, frame=AreaFrame(2, 1, 4, (4,), False)),
+            spec,
+            belt_rules=_BELT_RULES,
+        )
+        is None
+    )
+    assert (
+        outcome.judgement.report_for(
+            replace(outcome.placement, completion=None), spec, belt_rules=_BELT_RULES
+        )
+        is None
+    )
+    unfinished = replace(placement, completion=None)
+    unfinished_judgement = _PlacementJudgement.judge(unfinished, spec, belt_rules=_BELT_RULES)
+    assert unfinished_judgement.report_for(unfinished, spec, belt_rules=_BELT_RULES) is None
+    assert (
+        outcome.judgement.report_for(
+            outcome.placement,
+            spec,
+            belt_rules=replace(_BELT_RULES, max_z=Fraction(0)),
+        )
+        is None
+    )
+    # Frozen models still contain mutable rate dictionaries. Identity alone
+    # must not authorize a report after its original request has been changed.
+    spec.outputs["iron-ingot"] = Fraction(1)
+    assert judgement.report_for(placement, spec, belt_rules=_BELT_RULES) is None
+
+
+def test_race_settlement_judges_the_returned_geometry_not_a_published_incumbent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published = Placement(
+        buildings=(),
+        frame=AreaFrame(1, 1, 4, (4,), False),
+        completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+        stats=PlacementStats(belt_tiles=0.0),
+    )
+    belt = PlacedBuilding(item_id=2001, model_index=35, x=0, y=0)
+    returned = replace(published, buildings=(belt, belt), stats=PlacementStats(belt_tiles=2.0))
+
+    class ChangedLayout:
+        def __init__(self, publish: Callable[[Placement], None]) -> None:
+            self.publish = publish
+
+        def lay_out(self, *_args: object, **_kwargs: object) -> Placement:
+            self.publish(published)
+            return returned
+
+    monkeypatch.setattr(
+        strategy_race_module,
+        "_build_layout",
+        lambda _request, *, publish_incumbent, **_kwargs: ChangedLayout(publish_incumbent),
+    )
+    inbox: queue.Queue[object] = queue.Queue()
+    outbox: queue.Queue[object] = queue.Queue()
+    _install_race_channels(inbox, outbox)
+    try:
+        outcome = _run_race_leg(replace(_request(), spec=BuildSpec(groups=()), settle=True))
+    finally:
+        strategy_race_module._RACE_CHANNELS = None
+
+    assert outcome.published_incumbents == 1
+    assert outcome.status == "invalid"
+    assert outcome.placement is returned and outcome.judgement is not None
+    report = outcome.judgement.report_for(returned, BuildSpec(groups=()), belt_rules=_BELT_RULES)
+    assert report is not None
+    assert "geom.belt_single_occupancy" in {finding.check for finding in report.errors}
+    assert strategy_race_module._raced_result(outcome, "", 30.0) is returned
+    with pytest.raises(NoValidLayout):
+        RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)._merge((outcome,))
 
 
 def test_race_leg_records_its_own_process_profile(
@@ -672,6 +767,48 @@ def _stub_submit(results: dict[str, object]) -> RaceSubmit:
         return futures, _NoopExecutor()
 
     return submit
+
+
+@pytest.mark.parametrize("group_count", [14, 15])
+def test_large_freeform_releases_unusable_workers_to_hierarchy(group_count: int) -> None:
+    spec = two_stage_spec()
+    spec = spec.model_copy(update={"groups": tuple(spec.groups[0] for _ in range(group_count))})
+    allocations: dict[str, int] = {}
+
+    def submit(
+        requests: tuple[_StrategyRaceRequest, ...],
+        channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
+    ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
+        futures: dict[Future[_StrategyRaceOutcome], str] = {}
+        for request in requests:
+            allocations[request.strategy] = request.workers
+            future: Future[_StrategyRaceOutcome] = Future()
+            future.set_result(
+                _StrategyRaceOutcome(request.strategy, "refused", refusal_reason="fixture")
+            )
+            futures[future] = request.strategy
+        return futures, _NoopExecutor()
+
+    run_strategy_race(
+        spec,
+        time_budget_s=1,
+        band_policy=BandPolicy("portable"),
+        belt_rules=_BELT_RULES,
+        workers=32,
+        share=False,
+        submit=submit,
+    )
+
+    assert sum(allocations.values()) == 32
+    assert allocations["sequence-pair"] == 6
+    assert allocations["transport-routing"] == 1
+    if group_count == 15:
+        assert allocations["freeform"] == 1
+        assert allocations["hierarchical"] == 24
+    else:
+        assert allocations["freeform"] == 17
+        assert allocations["hierarchical"] == 8
 
 
 def _race(
@@ -1874,16 +2011,7 @@ def test_a_completed_arm_with_no_placement_is_not_a_winner() -> None:
 
 
 def test_an_invalid_arm_never_wins_however_small_its_placement_is() -> None:
-    """A placement that failed the validator is not a smaller answer, it is none.
-
-    `invalid` is in the outcome's `Literal` and nothing emits it yet, so the only
-    thing standing between a validator-rejected placement and the audit's `best`
-    cell is the `status == "completed"` half of the winner filter.  Loosen that
-    to `placement is not None` and this 100-tile reject beats a real refusal and
-    is returned as the race's answer -- which is the whole failure mode
-    `NoValidLayout` exists to prevent, arriving through the one path that skips
-    it.  The island merge raises on `invalid` for the same reason.
-    """
+    """Invalid geometry is retained for reporting, never selected by the audit."""
     layout = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)
 
     with pytest.raises(NoValidLayout):

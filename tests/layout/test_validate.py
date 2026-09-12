@@ -2661,7 +2661,7 @@ def exchanger(x: int, y: int, *, parameters: tuple[int, ...] = CHARGE) -> Placed
     )
 
 
-#: What ``pipeline._id_map`` builds for a mode-driven spec.  ``recipes`` is
+#: What ``validate.id_map`` builds for a mode-driven spec.  ``recipes`` is
 #: EMPTY, and that is not an oversight: ``catalog.recipe_id`` raises for a mode,
 #: so there is no id for the map to carry and no id for the placement to hold.
 MODE_DRIVEN_IDS = IdMap(

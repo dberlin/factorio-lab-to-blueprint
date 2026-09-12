@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from fractions import Fraction
 from itertools import combinations
 from time import monotonic
 
+import pytest
 from pysat.solvers import Cadical195
 
 from flab2bp.dsp import catalog, colliders
@@ -19,7 +21,7 @@ from flab2bp.layout.routing_domain import spherical_overflight_limit
 from flab2bp.layout.slots import assign_sorter_slots
 from flab2bp.layout.transport_routing import paths, solver
 from flab2bp.layout.transport_routing.allocation import select_topology
-from flab2bp.layout.transport_routing.budget import WorkBudget
+from flab2bp.layout.transport_routing.budget import TransportRefusal, WorkBudget
 from flab2bp.layout.transport_routing.cnf import FactorCNF
 from flab2bp.layout.transport_routing.construction import Terminal, path_through
 from flab2bp.layout.transport_routing.flights import Flight, occupied_cells
@@ -321,6 +323,151 @@ def test_changed_routes_clear_conflicts_without_invalidating_unchanged_routes() 
         for obligation in obligations
     ]
     assert all(paths.compatible(first, second, budget) for first, second in combinations(routes, 2))
+
+
+def test_template_bounds_include_all_four_edges() -> None:
+    boundary = paths.FixedPath(
+        ((0, 0, 0), (12, 0, 0), (12, 4, 0), (0, 4, 0)),
+        paths.Endpoint((0, 0, 0), (1, 0), 0),
+        paths.Endpoint((0, 4, 0), (1, 0), 1),
+        "iron-ingot",
+    )
+    problem = paths.TemplateProblem((), frozenset(), (), (), (), (3,), bounds=(0, 0, 12, 4))
+    budget = WorkBudget(monotonic() + 10)
+    index = paths._FixedIndex(problem, budget)
+    assert index.error(paths._geometry(boundary, budget), budget) is None
+    assert solver.select(replace(problem, fixed_paths=(boundary,)), budget) == {}
+
+
+@pytest.mark.parametrize("obstacle", [None, (0, 0, 0)], ids=["empty-index", "disjoint-index"])
+def test_template_bounds_reject_wholly_outside_geometry(obstacle: paths.Cell | None) -> None:
+    outside = paths.FixedPath(
+        ((20, 1, 0), (32, 1, 0)),
+        paths.Endpoint((20, 1, 0), (1, 0), 0),
+        paths.Endpoint((32, 1, 0), (-1, 0), 1),
+        "iron-ingot",
+    )
+    problem = paths.TemplateProblem(
+        (),
+        frozenset(() if obstacle is None else (obstacle,)),
+        (),
+        (),
+        (),
+        (3,),
+        bounds=(0, 0, 12, 4),
+    )
+    budget = WorkBudget(monotonic() + 10)
+    geometry = paths._geometry(outside, budget)
+    assert paths._FixedIndex(replace(problem, bounds=None), budget).error(geometry, budget) is None
+    assert paths._FixedIndex(problem, budget).error(geometry, budget) is not None
+    # Fixed-only problems must still validate their immutable geometry.
+    with pytest.raises(TransportRefusal):
+        solver.select(replace(problem, fixed_paths=(outside,)), budget)
+
+
+def test_template_bounds_do_not_exempt_compiler_owned_endpoints() -> None:
+    source = paths.Endpoint((-1, 1, 0), (1, 0), 0)
+    route = paths.FixedPath(
+        (source.cell, (2, 1, 0)),
+        source,
+        paths.Endpoint((2, 1, 0), (-1, 0), 1),
+        "iron-ingot",
+    )
+    problem = paths.TemplateProblem(
+        (),
+        frozenset((source.cell,)),
+        (),
+        (),
+        (),
+        (3,),
+        (source,),
+        bounds=(0, 0, 12, 4),
+    )
+    budget = WorkBudget(monotonic() + 10)
+    geometry = paths._geometry(route, budget)
+    assert paths._FixedIndex(replace(problem, bounds=None), budget).error(geometry, budget) is None
+    assert paths._FixedIndex(problem, budget).error(geometry, budget) is not None
+    with pytest.raises(TransportRefusal):
+        solver.select(replace(problem, fixed_paths=(route,)), budget)
+
+
+def test_template_bounds_select_complete_compatible_inside_detour() -> None:
+    obligation = paths.Obligation(
+        0,
+        "iron-ingot",
+        Fraction(1),
+        paths.Endpoint((0, 1, 0), (1, 0), 0),
+        paths.Endpoint((12, 1, 0), (-1, 0), 1),
+    )
+    fixed = paths.FixedPath(
+        ((0, 0, 0), (2, 0, 0)),
+        paths.Endpoint((0, 0, 0), (1, 0), 2),
+        paths.Endpoint((2, 0, 0), (-1, 0), 3),
+        "copper-ingot",
+    )
+    # The wall denies every direct crossing. The clear y=-1 track is shorter
+    # than y=4, but only the latter fits the unchanged inclusive envelope.
+    problem = paths.TemplateProblem(
+        (obligation,),
+        frozenset((6, y, z) for y in range(4) for z in range(4)),
+        (fixed,),
+        (),
+        (-1, 4),
+        (3,),
+        bounds=(0, 0, 12, 4),
+    )
+    budget = WorkBudget(monotonic() + 10)
+    selected = solver.select(problem, budget)
+    assert set(selected) == {0}
+    points = selected[0]
+    assert (points[0], points[-1]) == (obligation.source.cell, obligation.sink.cell)
+    occupied = occupied_cells(path_through(list(points)))
+    assert all(0 <= x <= 12 and 0 <= y <= 4 for x, y, _ in occupied)
+    assert (6, 4, 3) in occupied
+    assert occupied.isdisjoint(problem.blocked)
+    route = paths.FixedPath(points, obligation.source, obligation.sink, obligation.item)
+    assert paths.compatible(route, fixed, budget)
+
+
+def test_constructor_routes_around_wall_without_leaving_canvas_limit() -> None:
+    constructor = TemplateConstructor(
+        BuildSpec(groups=()), _BELT_RULES, RoutingRun(WorkBudget(monotonic() + 15))
+    )
+    constructor.canvas.limit = (0, 0, 12, 4)
+    constructor.set_tracks((), (-1, 4))
+    constructor.canvas.guard.update(
+        (6, y, z) for y in range(4) for z in range(constructor.canvas.levels)
+    )
+    source = constructor.belt((0, 1, 0), "iron-ingot")
+    sink = constructor.belt((12, 1, 0), "iron-ingot")
+    constructor.flight(
+        Terminal(source, (1, 0)),
+        Terminal(sink, (-1, 0)),
+        "iron-ingot",
+        Fraction(1),
+        3,
+        0,
+        "internal",
+    )
+    # finish() selects and calls the real connect() emitter: an outside route
+    # used to pass selection, then fail the emitter's original canvas limit.
+    constructor.finish()
+    occupied = occupied_cells(path_through(list(constructor.selected_points[0])))
+    assert all(0 <= x <= 12 and 0 <= y <= 4 for x, y, _ in occupied)
+    assert any(x == 6 and y == 4 for x, y, _ in occupied)
+    current = source.belt
+    visited: set[int] = set()
+    while True:
+        assert current not in visited
+        visited.add(current)
+        building = constructor.canvas.buildings[current]
+        assert building.carries_item == "iron-ingot"
+        assert 0 <= building.x <= 12 and 0 <= building.y <= 4
+        if current == sink.belt:
+            break
+        onward = building.output_obj
+        assert onward is not None
+        current = onward
 
 
 def test_foreign_flight_avoids_unused_splitter_dock_while_used_docks_remain_live() -> None:

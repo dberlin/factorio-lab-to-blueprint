@@ -261,9 +261,9 @@ def _new_layout(
     )
 
 
-#: One settled pair: its strategy, 1-based index, solve start, optional race
-#: finish, completion grace, and result. The race finish excludes time spent
-#: waiting for peer candidates or earlier settlement from this pair's wall.
+#: One settled pair: strategy, index, solve start, optional race finish,
+#: completion grace, result and optional child judgement. Race finish excludes
+#: waiting for peer candidates or earlier settlements from this pair's wall.
 _Resolved = tuple[
     ExplicitStrategyName,
     int,
@@ -271,6 +271,7 @@ _Resolved = tuple[
     float | None,
     float,
     Placement | NoValidLayout,
+    strategy_race._PlacementJudgement | None,
 ]
 _CandidateRace = tuple[float, float, tuple[strategy_race._StrategyRaceOutcome, ...]]
 
@@ -485,35 +486,6 @@ def _machine_rank_note(spec: BuildSpec) -> str:
         for move in spec.machine_moves
     )
     return f"; machines up-to: {moved}"
-
-
-def _id_map(spec: BuildSpec) -> validate.IdMap:
-    """Bridge FactorioLab string ids to the DSP numeric ids a Placement uses.
-
-    Built from the spec rather than the whole catalog so an unmappable recipe
-    elsewhere in the dataset cannot break a build that does not use it.
-    """
-    recipes: dict[str, int] = {}
-    items: dict[str, int] = {}
-    known = catalog.known_recipe_ids()
-    for g in spec.groups:
-        if g.recipe_id in known:
-            recipes[g.recipe_id] = catalog.recipe_id(g.recipe_id)
-        # The MACHINE is an item too, and spec.machine_counts needs it to match
-        # a group against the buildings actually placed. Omitting it made every
-        # group read as "spec demands 0" while the placement was correct.
-        machine = catalog.get_item_id(g.machine_item_id)
-        if machine is not None:
-            items[g.machine_item_id] = machine
-        for item in (*g.inputs_per_machine, *g.outputs_per_machine):
-            got = catalog.get_item_id(item)
-            if got is not None:
-                items[item] = got
-    for item in (*spec.external_inputs, *spec.outputs, *spec.surplus_outputs):
-        got = catalog.get_item_id(item)
-        if got is not None:
-            items[item] = got
-    return validate.IdMap(recipes=recipes, items=items)
 
 
 def _projection_records(
@@ -951,6 +923,7 @@ def build(
                 None,
                 _serial_completion_grace(sname, islands),
                 result,
+                None,
             )
 
     def _run_race(candidate: BuildSpec, candidate_workers: int) -> _CandidateRace:
@@ -1062,6 +1035,7 @@ def build(
                     race_finished,
                     strategy_race.RACE_COMPLETION_GRACE_S,
                     strategy_race._raced_result(by_strategy[sname], spec.label, time_budget_s),
+                    by_strategy[sname].judgement,
                 )
                 for offset, sname in enumerate(wanted)
             ]
@@ -1075,6 +1049,7 @@ def build(
             result_finished,
             completion_grace_s,
             result,
+            judgement,
         ) in solved:
             if isinstance(result, NoValidLayout):
                 # One strategy failing a candidate is not a failed build -- the
@@ -1236,18 +1211,29 @@ def build(
                     placement,
                     completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
                 )
-            # Pass the spec AND the id map. Without them the nine
-            # spec-dependent checks are skipped, and a build that never ran its
-            # throughput or proliferator checks reads as clean.
-            phase_started = time.monotonic()
-            report = validate.judge_placement(
-                placement,
-                spec,
-                ids=_id_map(spec),
-                expect_power=True,
-                belt_rules=belt_rules,
+            # Only the exact completed result under the same request can use a
+            # raced child's full report. Parent transforms, serial builds and
+            # stale/missing handoffs still run the same complete judgement here.
+            report = (
+                None
+                if judgement is None
+                else judgement.report_for(placement, spec, belt_rules=belt_rules)
             )
-            pipeline_validation_time_s = time.monotonic() - phase_started
+            if report is None:
+                phase_started = time.monotonic()
+                report = validate.judge_placement(
+                    placement,
+                    spec,
+                    ids=validate.id_map(spec),
+                    expect_power=True,
+                    belt_rules=belt_rules,
+                )
+                pipeline_validation_time_s = time.monotonic() - phase_started
+            else:
+                assert judgement is not None
+                # This span was already paid inside the child's process/race
+                # wall; record its phase cost without charging it a second time.
+                pipeline_validation_time_s = judgement.validation_time_s
             marked = markers.mark_external_belts(placement, spec)
             labelled = replace(
                 marked,

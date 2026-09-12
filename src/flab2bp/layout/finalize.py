@@ -384,6 +384,9 @@ class _ProjectionCache:
     _coater_indices: dict[tuple[int, planet.Band, int, float, bool], _ProjectedCoaterIndex] = field(
         init=False, default_factory=dict, repr=False
     )
+    _power_positions: dict[tuple[PlacedBuilding, planet.Projection], tuple[float, float, float]] = (
+        field(init=False, default_factory=dict, repr=False)
+    )
 
     def belt_failure(
         self, query: colliders.StableBeltCollisionQuery, projection: planet.Projection
@@ -578,12 +581,39 @@ class _ProjectionCache:
             self.counters.static_result_cache_hits += 1
         return failure
 
+    def _power_position(
+        self, building: PlacedBuilding, projection: planet.Projection
+    ) -> tuple[float, float, float]:
+        self._poll_cancellation()
+        key = (building, projection)
+        position = self._power_positions.get(key)
+        if position is None:
+            position = projection.position(*_building_centre(building))
+            self._poll_cancellation()
+            self._power_positions[key] = position
+        return position
+
     def power_failure(
         self,
         nodes: tuple[tuple[int, PlacedBuilding, rules.PowerNode], ...],
         projection: planet.Projection,
     ) -> ProjectionFailure | None:
         self._poll_cancellation()
+        if len(nodes) == 2 and projected_power_failure is _NATIVE_PROJECTED_POWER_FAILURE:
+            left, right = nodes
+            # Selected-site pairs share nodes across many combinations. Reuse
+            # their exact projected centres and reject only when neither
+            # authoritative spacing gate can be reached. Close pairs still
+            # take the existing predicate, result-cache and counter path.
+            distance2 = (
+                math.dist(
+                    self._power_position(left[1], projection),
+                    self._power_position(right[1], projection),
+                )
+                ** 2
+            )
+            if distance2 >= max(left[2].gate_sqr, right[2].gate_sqr):
+                return None
         misses = self._power_misses
         failure = self._power_failure(nodes, projection)
         if self._power_misses == misses:
@@ -899,6 +929,94 @@ def _power_pair_condition(
     if condition is None and lo <= left_building.item_id < hi:
         condition = rules.power_node_condition(right_node, left_node, distance2)
     return condition
+
+
+@dataclass(frozen=True, slots=True)
+class _ProjectedPowerIndex:
+    """Conservative peers for one immutable inventory and exact projection."""
+
+    nodes: tuple[tuple[int, PlacedBuilding, rules.PowerNode], ...]
+    projection: planet.Projection
+    cancelled: Callable[[], bool] | None = field(
+        default=None, kw_only=True, repr=False, compare=False
+    )
+    _cell_size: float = field(init=False, repr=False, compare=False)
+    _grid: dict[tuple[int, int, int], tuple[int, ...]] = field(
+        init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        cancelled = self.cancelled
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        max_gate_sqr = 0.0
+        for _index, _building, node in self.nodes:
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            max_gate_sqr = max(max_gate_sqr, node.gate_sqr)
+        cell_size = math.sqrt(max_gate_sqr) if max_gate_sqr > 0.0 else 1.0
+        buckets: dict[tuple[int, int, int], list[int]] = {}
+        for position, (_index, building, _node) in enumerate(self.nodes):
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            x, y, z = self.projection.position(*_building_centre(building))
+            cell = (
+                math.floor(x / cell_size),
+                math.floor(y / cell_size),
+                math.floor(z / cell_size),
+            )
+            buckets.setdefault(cell, []).append(position)
+        grid: dict[tuple[int, int, int], tuple[int, ...]] = {}
+        for cell, positions in buckets.items():
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            grid[cell] = tuple(positions)
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        object.__setattr__(self, "_cell_size", cell_size)
+        object.__setattr__(self, "_grid", grid)
+
+    def peers(
+        self, candidate: tuple[int, PlacedBuilding, rules.PowerNode]
+    ) -> tuple[tuple[int, PlacedBuilding, rules.PowerNode], ...]:
+        cancelled = self.cancelled
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        if not self.nodes:
+            return ()
+        _index, building, node = candidate
+        x, y, z = self.projection.position(*_building_centre(building))
+        cell = (
+            math.floor(x / self._cell_size),
+            math.floor(y / self._cell_size),
+            math.floor(z / self._cell_size),
+        )
+        # Every refusal requires distance² below one node's gate. The query
+        # may have a wider gate than every static node, so expand its cell
+        # neighbourhood rather than assuming only the 26 adjacent buckets.
+        radius = max(self._cell_size, math.sqrt(node.gate_sqr))
+        reach = math.ceil(radius / self._cell_size)
+        positions: list[int] = []
+        for dx in range(-reach, reach + 1):
+            for dy in range(-reach, reach + 1):
+                for dz in range(-reach, reach + 1):
+                    if cancelled is not None and cancelled():
+                        raise ProjectionCancelled
+                    for position in self._grid.get((cell[0] + dx, cell[1] + dy, cell[2] + dz), ()):
+                        if cancelled is not None and cancelled():
+                            raise ProjectionCancelled
+                        positions.append(position)
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        positions.sort()
+        peers: list[tuple[int, PlacedBuilding, rules.PowerNode]] = []
+        for position in positions:
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            peers.append(self.nodes[position])
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        return tuple(peers)
 
 
 def _projected_power_candidates(

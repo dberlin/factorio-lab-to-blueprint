@@ -46,8 +46,15 @@ Raced builds allocate an aggregate CPU budget (by default at most 16 affinity CP
 across the widest candidate batch that can fund four workers per candidate. Each
 candidate gives hierarchical one quarter of its share (at least one worker), keeps
 one worker for transport-routing, and divides the rest between freeform and sequence-pair.
-A single 16-worker portfolio uses 8/3/1/4 workers in that order. If four workers cannot
-be funded, `best` runs the strategies serially within the aggregate worker budget.
+A single 16-worker portfolio starts at 8/3/1/4 workers in that order. When the
+request's machine groups already guarantee at least 15 strips, Freeform's existing
+single-worker packing rule reduces its share to one and transfers the unused
+workers to hierarchy (1/3/1/11 at 16 total; 1/6/1/24 at 32). Smaller requests keep
+the base allocation. If four workers cannot be funded, `best` runs the strategies
+serially within the aggregate worker budget.
+Completed race children perform full validation. The parent reuses that judgment
+only for the identical placement, complete request and belt rules; changed geometry
+or a missing judgment is validated again. Every retained alternative is still encoded.
 
 Detailed routing and relaxed global congestion routing use the native geometric interval
 engine (`route_backend: geometric`), without an A* fallback. Routing budget and `expansions`
@@ -59,6 +66,14 @@ A bounded reverse interval probe can identify a sealed destination pocket withou
 exhausting the larger source region. Its prepared cells and interval work consume the
 same allowance as forward search. Exhaustion reports distinguish the source-reachable
 component from the goal-reaching component; interrupted probes supply neither proof.
+
+Constructive transport selection enforces the emitter's inclusive XY canvas envelope
+for both selected routes and immutable fixed paths, including owned endpoints.
+Out-of-envelope routes are rejected before emission; bounds are not widened to fit
+a selected route. Standalone template problems remain unbounded unless bounds are supplied.
+Power infill indexes fixed power-node centres per exact projection and frame before
+checking prospective sites. The index conservatively narrows static peers; original
+power-spacing predicates, candidate order, selected-node checks and final validation remain.
 
 **A refusal is a result.** A spec that cannot be laid out reports why each strategy and
 candidate gave up. An invalid build withholds the blueprint and lists the validation errors,
@@ -128,6 +143,9 @@ The `hierarchical` strategy automatically competes in `best` and can also be sel
 It prioritizes a feasible factory: it tries one eligible
 solver per unresolved block shape and runs an alternate only if that shape remains unresolved. Divisible
 refused blocks are cut before another parent-widening round, within the existing budget.
+The initial block schedule reduces workers per block only when needed to fund its
+independent waves; that worker profile stays fixed across re-cuts. Final composition
+may negotiate further routing rounds within the same deadline and expansion allowance.
 This can trade density for lower latency; it does not promise the smallest layout.
 The `best` portfolio's smallest-validator-clean-result selection is unchanged.
 

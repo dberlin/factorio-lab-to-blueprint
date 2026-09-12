@@ -40,14 +40,20 @@ budget of at most 16 CPUs from its process affinity set. The widest candidate ba
 whose shares can fund all four strategies. Each candidate gives hierarchical one quarter
 of its share (rounded down, with at least one worker). Of the remaining share, Freeform
 gets three quarters rounded down minus one (at least one); transport-routing gets one;
-SequencePair gets the remainder. A single 16-worker candidate gets 8/3/1/4 workers in
-portfolio order; three candidates share 6/5/5 workers, funding 2/1/1 SequencePair islands.
+SequencePair gets the remainder. A single 16-worker candidate starts at 8/3/1/4 workers
+in portfolio order; three candidates share 6/5/5 workers, funding 2/1/1 SequencePair islands.
+If machine-group count already guarantees at least 15 strips, Freeform's deterministic
+packing can use only one worker. Its unused share moves to hierarchy, giving 1/3/1/11
+at 16 total or 1/6/1/24 at 32. This does not change the aggregate budget or island count.
 If even one four-worker portfolio cannot fit, the strategies run serially within the
 aggregate worker budget instead. Only explicitly selected hierarchical may size its
 pool from uncapped CPU affinity when no worker count is supplied.
 Uploaded or fetched flows remain a single pinned candidate. Explicit strategies run
 serially across candidates. Transport-routing owns a supervised single worker and supports
 unsprayed and sprayed interfaces; every portfolio strategy faces the same certification.
+Completed race children perform the same full validation before returning their result.
+The parent reuses a judgment only for its exact placement, complete request and belt
+rules; otherwise it validates again. Encoding still runs for every retained alternative.
 
 ## Latitude bands
 

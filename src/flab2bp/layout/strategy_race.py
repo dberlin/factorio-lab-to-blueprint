@@ -37,6 +37,7 @@ from flab2bp.layout import process_resources
 if TYPE_CHECKING:
     from multiprocessing.connection import _ConnectionBase
 
+    from flab2bp.layout import validate
     from flab2bp.layout.freeform import FreeformLayout
     from flab2bp.layout.hierarchy.strategy import HierarchicalLayout
     from flab2bp.layout.sequence_solver import SequencePairLayout
@@ -55,6 +56,7 @@ from flab2bp.layout.base import (
     LayoutAttemptFailure,
     NoValidLayout,
     Placement,
+    PlacementCompletion,
     ProjectionFailureRecord,
 )
 from flab2bp.layout.compact_seed import CompactSeedConfig
@@ -352,6 +354,64 @@ class _StrategyRaceRequest:
     #: queue itself: a ``multiprocessing.Queue`` cannot be pickled as a task
     #: argument (see ``_pool_submit``'s ``initargs`` instead, ``:399-401``).
     trace: bool = False
+    #: Only portfolio races transfer pipeline settlement into the child. The
+    #: serial transport wrapper also uses this request and still settles in
+    #: its parent.
+    settle: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _PlacementJudgement:
+    """Full pipeline proof bound to one immutable result and resolved request.
+
+    Pickle preserves the shared placement reference inside its race outcome.
+    Replacement geometry, a changed frame, or unfinished completion cannot
+    borrow this report. The spec snapshot is a value, not a model reference:
+    frozen BuildSpecs still contain mutable rate dictionaries.
+    """
+
+    placement: Placement
+    spec_json: str
+    belt_rules: catalog.BeltAltitudeRules
+    report: validate.Report
+    validation_time_s: float
+
+    @classmethod
+    def judge(
+        cls,
+        placement: Placement,
+        spec: BuildSpec,
+        *,
+        belt_rules: catalog.BeltAltitudeRules,
+    ) -> _PlacementJudgement:
+        from flab2bp.layout import validate
+
+        started = time.monotonic()
+        spec_json = spec.model_dump_json()
+        report = validate.judge_placement(
+            placement,
+            spec,
+            ids=validate.id_map(spec),
+            expect_power=True,
+            belt_rules=belt_rules,
+        )
+        return cls(placement, spec_json, belt_rules, report, time.monotonic() - started)
+
+    def report_for(
+        self,
+        placement: Placement,
+        spec: BuildSpec,
+        *,
+        belt_rules: catalog.BeltAltitudeRules,
+    ) -> validate.Report | None:
+        if (
+            placement is self.placement
+            and placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
+            and belt_rules == self.belt_rules
+            and spec.model_dump_json() == self.spec_json
+        ):
+            return self.report
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -386,6 +446,7 @@ class _StrategyRaceOutcome:
     process_peak_rss_kib: int = 0
     refusal_stats: dict[str, float | str] = field(default_factory=dict)
     refusal_attempt_failures: tuple[LayoutAttemptFailure, ...] = ()
+    judgement: _PlacementJudgement | None = None
 
     @classmethod
     def refused(
@@ -428,12 +489,11 @@ def _raced_result(
 ) -> Placement | NoValidLayout:
     """Reduce one arm's outcome to the two shapes a serial solve returns.
 
-    Only ``completed`` carries geometry.  ``refused``, ``terminated`` and
-    ``crashed`` all become a refusal, so the reason reaches ``Build.refused``
-    instead of being lost: a terminated arm has no placement at all, and
-    admitting it as an ``Attempt`` would put a hole into the selection below.
+    Completed and invalid results both retain geometry and full reports for the
+    pipeline's alternatives. Refused, terminated and crashed arms have no
+    encodable attempt, so their reasons reach ``Build.refused`` instead.
     """
-    if outcome.status == "completed" and outcome.placement is not None:
+    if outcome.status in ("completed", "invalid") and outcome.placement is not None:
         outcome.placement.stats.update(
             {
                 "process_wall_time_s": outcome.process_wall_time_s,
@@ -584,7 +644,6 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
     search: the parent started the clock, and spawn, interpreter start and
     unpickling the spec all happened after it did.
     """
-    from flab2bp.layout import validate
     from flab2bp.layout.base import NoValidLayout
 
     channels = _channels_for(request.strategy) if request.share else None
@@ -612,6 +671,8 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
     consumed = 0
     published_no_goods = 0
 
+    published_judgement: _PlacementJudgement | None = None
+
     def _drain() -> None:
         """The leg's ONE poll of its queue, routing both message kinds.
 
@@ -637,22 +698,16 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
         return best_external
 
     def publish(placement: Placement) -> None:
-        nonlocal published
+        nonlocal published, published_judgement
         if channels is None:
             return
-        # The PARENT's standard of proof, run in the child.  Freeform's in-sweep
-        # report and sequence-pair's `validate.certify` are not it, and a bound
-        # the parent will reject would prune the other arm on a promise nobody
-        # keeps.  One extra validation per PUBLISHED incumbent, off the parent's
-        # critical path.
-        report = validate.judge_placement(
-            placement,
-            request.spec,
-            ids=validate.id_map(request.spec),
-            expect_power=True,
-            belt_rules=request.belt_rules,
+        # Ordinary strategy certification is not this handoff. Prove the
+        # parent's exact policy before publishing a bound, retaining only the
+        # latest report in case this very placement is the returned incumbent.
+        published_judgement = _PlacementJudgement.judge(
+            placement, request.spec, belt_rules=request.belt_rules
         )
-        if not report.ok:
+        if not published_judgement.report.ok:
             return
         # Subscript and not `.get(..., 0)`: both producers guarantee the stat on
         # a certified placement, and a silent zero would publish an
@@ -698,10 +753,32 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
             dropped_messages=(0 if channels is None else channels.dropped) + inbox.dropped,
         )
     else:
+        judgement = None
+        if request.settle and placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED:
+            judgement = published_judgement
+            if (
+                judgement is None
+                or judgement.report_for(placement, request.spec, belt_rules=request.belt_rules)
+                is None
+            ):
+                judgement = _PlacementJudgement.judge(
+                    placement, request.spec, belt_rules=request.belt_rules
+                )
+        invalid = judgement is not None and not judgement.report.ok
         outcome = _StrategyRaceOutcome(
             request.strategy,
-            "completed",
+            "invalid" if invalid else "completed",
             placement=placement,
+            judgement=judgement,
+            refusal_reason=(
+                "; ".join(
+                    f"{finding.check}: {finding.message}" for finding in judgement.report.errors
+                )
+                if invalid and judgement is not None
+                else None
+            ),
+            refusal_spec_label=request.spec.label if invalid else "",
+            refusal_budget_s=request.time_budget_s if invalid else 0.0,
             published_incumbents=published,
             consumed_incumbents=consumed,
             published_no_goods=published_no_goods,
@@ -886,6 +963,8 @@ def run_strategy_race(
     A validator-clean result does not stop its competitors: the pipeline keeps
     the smallest valid result, with its existing deterministic tie-breaks.
     """
+    from flab2bp.layout.freeform import packing_workers
+
     if time_budget_s <= 0:
         raise ValueError("racing requires a positive time budget")
     # Mirrors the guard `SequencePairLayout.__init__` runs at construction
@@ -902,6 +981,12 @@ def run_strategy_race(
     freeform_workers, sequence_workers, transport_workers, hierarchy_workers = race_worker_split(
         _available_cores() if workers is None else workers
     )
+    # Every positive machine group produces at least one strip. Large Freeform
+    # packs are single-worker, so fund hierarchy with only the share we can prove
+    # Freeform cannot use; smaller requests retain the base allocation.
+    freeform_demand = packing_workers(len(spec.groups), freeform_workers)
+    hierarchy_workers += freeform_workers - freeform_demand
+    freeform_workers = freeform_demand
     workers_by_strategy = {
         "freeform": freeform_workers,
         "sequence-pair": sequence_workers,
@@ -923,6 +1008,7 @@ def run_strategy_race(
             compact_seed_config=compact_seed_config or CompactSeedConfig(),
             share=share and name in ("freeform", "sequence-pair"),
             trace=trace_queue is not None,
+            settle=True,
         )
         for name in RACE_STRATEGIES
     )

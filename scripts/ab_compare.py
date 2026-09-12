@@ -91,7 +91,6 @@ from flab2bp.layout.base import (  # noqa: E402
 )
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
-from flab2bp.pipeline import _id_map  # noqa: E402
 from flab2bp.rates import (  # noqa: E402
     DEFAULT_CANDIDATE_POLICIES,
     CandidatePolicy,
@@ -233,7 +232,7 @@ def collect(
         try:
             specs[entry.url_id] = specs_for(entry, candidate_policies)
             rules_by_url[entry.url_id] = belt_rules_for_url(entry.url)
-            ids_by_url[entry.url_id] = tuple(_id_map(spec) for spec in specs[entry.url_id])
+            ids_by_url[entry.url_id] = tuple(validate.id_map(spec) for spec in specs[entry.url_id])
         except Exception as exc:  # noqa: BLE001 - a bad URL must not kill the sweep
             spec_errors[entry.url_id] = f"spec: {type(exc).__name__}: {exc}"
             print(f"  spec error {entry.url_id}: {exc}", file=sys.stderr)
