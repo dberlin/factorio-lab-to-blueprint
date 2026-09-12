@@ -10,8 +10,8 @@ from time import monotonic
 from pysat.solvers import Cadical195
 
 from flab2bp.dsp import catalog, colliders
-from flab2bp.layout import routing_domain as rd
 from flab2bp.layout import finalize, junction, validate
+from flab2bp.layout import routing_domain as rd
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import Placement
 from flab2bp.layout.markers import self_loop_prime_heads
@@ -26,7 +26,7 @@ from flab2bp.layout.transport_routing.flights import Flight, occupied_cells
 from flab2bp.layout.transport_routing.inventory import prepare_inventory
 from flab2bp.layout.transport_routing.routing import RoutingRun, TemplateConstructor
 from flab2bp.layout.transport_routing.runtime import TransportRoutingKernel
-from flab2bp.spec import BeltTier, BuildSpec, MachineGroup, ProliferatorMode, SelfLoopSeed
+from flab2bp.spec import BeltTier, BuildSpec, MachineGroup, SelfLoopSeed
 
 _BELT_RULES = catalog.BeltAltitudeRules(
     max_z=catalog.belt_max_z(catalog.DEFAULT_LAB_LEVEL),
@@ -139,7 +139,7 @@ def test_static_rejections_preserve_legal_heights_of_partial_adapter_rows() -> N
         paths.TemplateProblem((obligation,), frozenset(), (), (), (), (3, 4)),
         budget,
     )
-    with Cadical195() as sat:
+    with Cadical195(use_timer=False) as sat:
         factors = FactorCNF(domains, sat.add_clause, budget)
         # Both heights of XY row zero are blocked; only the upper height of row
         # one is blocked. Compressing a full row must not drop that distinction.

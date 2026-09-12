@@ -3,14 +3,15 @@ from __future__ import annotations
 import sys
 from dataclasses import replace
 from fractions import Fraction
+from time import monotonic
 
 import pytest
 
 from flab2bp.dsp import catalog, splitter_ports
-from flab2bp.layout.base import PlacedBuilding
-from flab2bp.layout.route_primitives import RoutePrimitives
 from flab2bp.layout import global_router, junction, routing_domain
+from flab2bp.layout.base import PlacedBuilding
 from flab2bp.layout.route_feedback import FeedbackState, NetId, NetRole, RouteFailureKind
+from flab2bp.layout.route_primitives import RoutePrimitives
 
 Cell = tuple[int, int, int]
 
@@ -143,9 +144,7 @@ def test_reverse_search_preserves_forward_ramp_clearance(blocked_via: bool) -> N
     canvas.blocked[(1, 0, 1)] = 0
     if blocked_via:
         canvas.blocked[(1, 0, 0)] = 0
-    result = routing_domain._astar(
-        canvas, [(0, 0, 0)], {(2, 0, 1)}, {}, 1.0, (0, 0, 2, 0)
-    )
+    result = routing_domain._astar(canvas, [(0, 0, 0)], {(2, 0, 1)}, {}, 1.0, (0, 0, 2, 0))
     if blocked_via:
         assert result.path is None
         assert result.kind is RouteFailureKind.SEALED_POCKET
@@ -157,14 +156,10 @@ def test_reverse_search_keeps_entry_ring_exception_at_source_only() -> None:
     canvas = _canvas(1, False)
     canvas.limit = (-1, 0, 1, 0)
     canvas.blocked[(0, 0, 1)] = 0
-    result = routing_domain._astar(
-        canvas, [(-1, 0, 0)], {(1, 0, 1)}, {}, 1.0, (0, 0, 1, 0)
-    )
+    result = routing_domain._astar(canvas, [(-1, 0, 0)], {(1, 0, 1)}, {}, 1.0, (0, 0, 1, 0))
     assert result.path == ((-1, 0, 0), (0, 0, 0), (1, 0, 1))
     canvas.blocked[(-1, 0, 0)] = 0
-    refused = routing_domain._astar(
-        canvas, [(-1, 0, 0)], {(1, 0, 1)}, {}, 1.0, (0, 0, 1, 0)
-    )
+    refused = routing_domain._astar(canvas, [(-1, 0, 0)], {(1, 0, 1)}, {}, 1.0, (0, 0, 1, 0))
     assert refused.path is None
 
 
@@ -277,7 +272,8 @@ def test_scheduler_restores_source_after_contextual_ordinary_refusal(
 
 @pytest.mark.parametrize("allowance", [100, 133], ids=["shared-quota-cap", "per-search-cap"])
 def test_capped_empty_graph_retry_preserves_quota_for_next_net(
-    monkeypatch: pytest.MonkeyPatch, allowance: int,
+    monkeypatch: pytest.MonkeyPatch,
+    allowance: int,
 ) -> None:
     monkeypatch.setattr(routing_domain, "_MAX_EXPANSIONS", 65)
     canvas = _canvas(0, False)
@@ -311,7 +307,7 @@ def test_capped_ordinary_search_still_uses_new_connector_edges(
     start, goal = (0, 1, 0), (0, 1, 1)
     ordinary = routing_domain._astar(canvas, [start], {goal}, history, 1.0, bounds, grid=grid)
     assert ordinary.kind is RouteFailureKind.BUDGET
-    assert ordinary.expansions == 3
+    assert ordinary.expansions == routing_domain._MAX_EXPANSIONS
     result = search([start], {goal}, {}, history, 1.0, {"left": 20}, {}, grid)
     assert result.path == (start, goal)
     (connector,) = primitives.on_path(result.path)
@@ -338,9 +334,10 @@ def test_scheduler_subdeadline_returns_to_live_parent(monkeypatch: pytest.Monkey
     canvas = _canvas(0, False)
     bounds = (0, 0, 70, 0)
     grid = routing_domain._make_grid(canvas, bounds, (-3, -3, 73, 3), {})
-    search, _primitives = _scheduler(canvas, bounds, deadline=80.0)
-    ticks = iter((0.0, 0.0, 11.0))
-    monkeypatch.setattr(routing_domain.time, "monotonic", lambda: next(ticks, 11.0))
+    now = monotonic()
+    search, _primitives = _scheduler(canvas, bounds, deadline=now + 80.0)
+    ticks = iter((now, now, now + 11.0))
+    monkeypatch.setattr(routing_domain.time, "monotonic", lambda: next(ticks, now + 11.0))
     ledger = {"left": 400_002}
     result = search([(0, 0, 0)], {(70, 0, 0)}, {}, {}, 1.0, ledger, {}, grid)
     assert result.path == tuple((x, 0, 0) for x in range(71))
@@ -401,7 +398,8 @@ def test_small_remaining_quota_routes_before_connector_work_expires(
     canvas = _canvas(0, False)
     bounds = (0, 0, 2, 0)
     grid = routing_domain._make_grid(canvas, bounds, (-3, -3, 5, 3), {})
-    clock = [0.0]
+    clock = [monotonic()]
+    deadline = clock[0] + 1.0
     original = RoutePrimitives.edges
 
     def charged(self, *args, **kwargs):
@@ -410,7 +408,7 @@ def test_small_remaining_quota_routes_before_connector_work_expires(
 
     monkeypatch.setattr(routing_domain.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(RoutePrimitives, "edges", charged)
-    search, _primitives = _scheduler(canvas, bounds, deadline=1.0)
+    search, _primitives = _scheduler(canvas, bounds, deadline=deadline)
     ledger = {"left": 128}
     result = search([(0, 0, 0)], {(2, 0, 0)}, {}, {}, 1.0, ledger, {}, grid)
     assert result.path == ((0, 0, 0), (1, 0, 0), (2, 0, 0))

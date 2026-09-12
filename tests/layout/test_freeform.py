@@ -17028,7 +17028,7 @@ class TestTheMergeFrontierWithdrawsSitesAJunctionCannotHold:
                 (5,),
                 lambda x, y, level: (x, y, level) == (0, 0, 0),
                 belt_prefab=(2001, 35),
-                source_belts={5: source},
+                source_feeds={5: source},
             )
 
         assert frontier() == {(0, -1, 0), (0, 1, 0)}
@@ -17365,21 +17365,48 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         lanes = (neighbor_item, self.ITEM) if reverse else (self.ITEM, neighbor_item)
         staged_strip = replace(strips[0], in_above=tuple((item,) for item in lanes), in_below=())
         staged_ports = [{**ports[0], neighbor_item: neighbor}]
-        before = tuple(canvas.buildings)
+        for lane in staged_ports[0].values():
+            for left, right in itertools.pairwise(lane.tiles):
+                canvas.buildings[left] = replace(canvas.buildings[left], output_obj=right)
 
-        with pytest.raises(routing_domain._Unseatable):
-            routing_domain._place_coaters(
-                canvas,
-                spec,
-                [staged_strip],
-                staged_ports,
-                2001,
-                35,
-                policy=BandPolicy("portable"),
-            )
+        supplies = routing_domain._place_coaters(
+            canvas,
+            spec,
+            [staged_strip],
+            staged_ports,
+            2001,
+            35,
+            policy=BandPolicy("portable"),
+        )
 
-        assert tuple(canvas.buildings) == before
-        assert canvas.belt_ban == {}
+        # Both lane orders must find the legal outward-facing supplies rather
+        # than running a new supply under the neighboring staged coater.
+        assert {canvas.buildings[supply.host_belt].carries_item for supply in supplies} == {
+            self.ITEM,
+            neighbor_item,
+        }
+        for supply in supplies:
+            approach = canvas.buildings[supply.approach_belt]
+            host_item = canvas.buildings[supply.host_belt].carries_item
+            assert approach.y < 0 if host_item == self.ITEM else approach.y > 1
+        report = validate.validate(
+            Placement(tuple(canvas.buildings)),
+            only={
+                "geom.collide",
+                "geom.overlap",
+                "geom.belt_single_occupancy",
+                "game.belt_crossing",
+                "game.belt_collide",
+                "game.addon_supply",
+                "game.addon_facing",
+                "game.addon_corner",
+                "prolif.coater_rides_one_run",
+                "belt.continuity",
+                "belt.link_adjacent",
+                "belt.acyclic",
+            },
+        )
+        assert not report.errors
 
     def test_a_lane_too_short_to_seat_a_coater_is_refused(self) -> None:
         """One tile: ``_coater_seats`` has no tile with a lane tile either side."""
@@ -20430,8 +20457,17 @@ def test_a_hostile_cluster_solution_never_raises_and_never_routes(
 
     monkeypatch.setattr(last_mile_module, "solve_cluster", hostile)
     canvas, nets, bounds = _one_stranded_net_fixture()
-    before = tuple(canvas.buildings)
+    reference, reference_nets, _ = _one_stranded_net_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
+    with monkeypatch.context() as context:
+        context.setattr(last_mile_module, "B_MAX_STRANDED", 0)
+        routing_domain._route_all(
+            reference,
+            reference_nets,
+            belt_id,
+            catalog.building(belt_id).model_index,
+            bounds,
+        )
     result = routing_domain._route_all(
         canvas,
         nets,
@@ -20442,7 +20478,28 @@ def test_a_hostile_cluster_solution_never_raises_and_never_routes(
 
     assert result.status is not DetailedRouteStatus.ROUTED
     assert result.exhaustive is False
-    assert tuple(canvas.buildings) == before
+    # Refusing the proposed pack preserves the independently routed incumbent;
+    # it must neither discard that valid service nor leak any hostile path.
+    assert tuple(canvas.buildings) == tuple(reference.buildings)
+    assert routing_domain._leads_back(canvas, nets[0].source.belt, {nets[0].dst.belt})
+    assert not routing_domain._leads_back(canvas, nets[1].source.belt, {nets[1].dst.belt})
+    for building in canvas.buildings:
+        assert (building.x, building.y) not in canvas.solid
+        if building.output_obj is not None:
+            assert building.carries_item == canvas.buildings[building.output_obj].carries_item
+    report = validate.validate(
+        Placement(tuple(canvas.buildings)),
+        only={
+            "geom.collide",
+            "geom.overlap",
+            "geom.belt_single_occupancy",
+            "game.belt_collide",
+            "belt.continuity",
+            "belt.link_adjacent",
+            "belt.acyclic",
+        },
+    )
+    assert not report.errors
 
 
 def test_too_many_stranded_nets_never_reach_the_cluster_search(
@@ -20696,7 +20753,6 @@ def test_rejected_commit_never_returns_a_routed_pack(
 ) -> None:
     """Rejecting a real candidate must leave its consumer unconnected."""
     canvas, nets, bounds = _joint_only_fixture()
-    before = tuple(canvas.buildings)
     belt_id = catalog.item_id("conveyor-belt-1")
     original = routing_domain._commit_paths
 
@@ -20756,8 +20812,17 @@ def test_a_short_cluster_solution_degrades_instead_of_raising(
 
     monkeypatch.setattr(last_mile_module, "solve_cluster", short)
     canvas, nets, bounds = _one_stranded_net_fixture()
-    before = tuple(canvas.buildings)
+    reference, reference_nets, _ = _one_stranded_net_fixture()
     belt_id = catalog.item_id("conveyor-belt-1")
+    with monkeypatch.context() as context:
+        context.setattr(last_mile_module, "B_MAX_STRANDED", 0)
+        routing_domain._route_all(
+            reference,
+            reference_nets,
+            belt_id,
+            catalog.building(belt_id).model_index,
+            bounds,
+        )
 
     result = routing_domain._route_all(
         canvas,
@@ -20769,7 +20834,26 @@ def test_a_short_cluster_solution_degrades_instead_of_raising(
 
     assert result.status is not DetailedRouteStatus.ROUTED
     assert not result.exhaustive
-    assert tuple(canvas.buildings) == before
+    assert tuple(canvas.buildings) == tuple(reference.buildings)
+    assert routing_domain._leads_back(canvas, nets[0].source.belt, {nets[0].dst.belt})
+    assert not routing_domain._leads_back(canvas, nets[1].source.belt, {nets[1].dst.belt})
+    for building in canvas.buildings:
+        assert (building.x, building.y) not in canvas.solid
+        if building.output_obj is not None:
+            assert building.carries_item == canvas.buildings[building.output_obj].carries_item
+    report = validate.validate(
+        Placement(tuple(canvas.buildings)),
+        only={
+            "geom.collide",
+            "geom.overlap",
+            "geom.belt_single_occupancy",
+            "game.belt_collide",
+            "belt.continuity",
+            "belt.link_adjacent",
+            "belt.acyclic",
+        },
+    )
+    assert not report.errors
 
 
 def _last_mile_outcome(result: DetailedRouteResult) -> tuple[object, ...]:

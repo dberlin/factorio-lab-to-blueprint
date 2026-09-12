@@ -157,8 +157,8 @@ def test_capacity_frontier_charges_inherited_prefix_and_suffix() -> None:
 
 
 def test_overhead_prices_congestion_without_turning_it_into_a_wall() -> None:
-    from flab2bp.layout.routing_proposals import overhead_path
     from flab2bp.layout.projection_world import GeometricWorld
+    from flab2bp.layout.routing_proposals import overhead_path
 
     canvas = domain._Canvas(belt_rules=replace(domain._DEFAULT_BELT_RULES, max_z=Fraction(0)))
     world = GeometricWorld(canvas, history={(4, 0, 0): 40}, pressure=0.5)
@@ -170,8 +170,8 @@ def test_overhead_prices_congestion_without_turning_it_into_a_wall() -> None:
 
 
 def test_overhead_dogleg_connects_when_both_corner_routes_are_blocked() -> None:
-    from flab2bp.layout.routing_proposals import overhead_path
     from flab2bp.layout.projection_world import GeometricWorld
+    from flab2bp.layout.routing_proposals import overhead_path
 
     canvas = domain._Canvas(belt_rules=replace(domain._DEFAULT_BELT_RULES, max_z=Fraction(0)))
     canvas.guard.update({(3, 0, 0), (0, 3, 0)})
@@ -248,8 +248,8 @@ def test_rejected_ramp_approaches_do_not_starve_other_endpoints(
 
 
 def test_overhead_keeps_searching_after_consumer_rejects_a_proposal() -> None:
-    from flab2bp.layout.routing_proposals import overhead_path
     from flab2bp.layout.projection_world import GeometricWorld
+    from flab2bp.layout.routing_proposals import overhead_path
 
     canvas = domain._Canvas(belt_rules=replace(domain._DEFAULT_BELT_RULES, max_z=Fraction(0)))
     world = GeometricWorld(canvas)
@@ -294,8 +294,8 @@ def test_live_splitter_withholds_downstream_but_not_upstream_merges() -> None:
 
 
 def test_complete_overhead_route_crosses_ground_wall_with_legal_ramps() -> None:
-    from flab2bp.layout.routing_proposals import overhead_path
     from flab2bp.layout.projection_world import GeometricWorld
+    from flab2bp.layout.routing_proposals import overhead_path
 
     canvas = domain._Canvas(
         limit=(0, 0, 16, 0),
@@ -631,7 +631,9 @@ def test_cluster_provider_hands_its_new_tap_to_the_dropped_sibling(
 def test_repair_moves_a_route_blocking_only_the_future_splitter(
     monkeypatch: pytest.MonkeyPatch, allow_displacement: bool
 ) -> None:
-    from flab2bp.layout.route_feedback import RouteFailureKind
+    from inspect import signature
+
+    from flab2bp.layout import slots
 
     bounds = (-6, -6, 16, 8)
     canvas = domain._Canvas(
@@ -650,7 +652,7 @@ def test_repair_moves_a_route_blocking_only_the_future_splitter(
     canvas.junction_ban.update(
         (x, y, 0) for x in range(-6, 17) for y in range(-6, 9) if (x, y) != (1, 0)
     )
-    canvas.guard.update(((0, -1, 0), (0, 1, 0)))
+    canvas.guard.add((0, 1, 0))
     nets = [
         domain._Net(
             foreign_source,
@@ -669,19 +671,27 @@ def test_repair_moves_a_route_blocking_only_the_future_splitter(
         ],
     ]
     search = domain._astar
-    queries = 0
+    search_signature = signature(search)
 
     def bounded_family_queries(*args, **kwargs):
-        nonlocal queries
-        queries += 1
-        if queries in (2, 3):
-            kwargs["budget"]["left"] -= 1
-            return domain._PathSearchResult(None, RouteFailureKind.BUDGET, (), 1)
+        arguments = search_signature.bind(*args, **kwargs).arguments
+        grid = arguments.get("grid")
+        owners = arguments.get("blocking_owners", {})
+        if (
+            (1, 0, 0) in arguments["starts"]
+            and owners.get((1, -1, 0)) == 0
+            and grid is not None
+            and not grid.occ[grid.index((1, -1, 0))]
+        ):
+            arguments["budget"] = {"left": 0}
+            return search(**arguments)
         return search(*args, **kwargs)
 
-    # The longer foreign route settles first. Bound the family's initial
-    # queries so repair sees the conflict without history steering a path
-    # across the foreign belt and accidentally naming the missing victim.
+    # The straight foreign route occupies (1, -1), not the family's belt
+    # path along y=0, but it blocks the only permitted future splitter.
+    # Bound only family queries that still treat that foreign body cell as
+    # occupied. Repair's crossing view and every query after displacement
+    # use the real search budget, independent of call order.
     monkeypatch.setattr(domain, "_astar", bounded_family_queries)
     monkeypatch.setattr(domain, "_SINGLE_ROUND_NETS", 3)
     monkeypatch.setattr(domain, "RRR_MAX", 1)
@@ -696,7 +706,9 @@ def test_repair_moves_a_route_blocking_only_the_future_splitter(
         bounds,
         budget={"left": 100_000},
         prioritize_source_families=False,
+        flow_limits=domain.RoutingFlowLimits((Fraction(6), Fraction(3), Fraction(3)), Fraction(6)),
     )
+    networks: list[set[int]] = []
     for root, targets in ((foreign_source, (foreign_destination,)), (source, destinations)):
         reached: set[int] = set()
         pending = [root.belt]
@@ -709,14 +721,51 @@ def test_repair_moves_a_route_blocking_only_the_future_splitter(
             if output is not None:
                 pending.append(output)
             pending.extend(canvas.buildings.by_input_obj(index))
+        networks.append(reached)
+        item = canvas.buildings[root.belt].carries_item
+        assert all(canvas.buildings[index].carries_item in (None, item) for index in reached)
         if root == foreign_source or allow_displacement:
             assert {target.belt for target in targets} <= reached
         else:
             assert not {target.belt for target in targets} & reached
+    # The foreign full-capacity stream cannot subsidize either gear consumer,
+    # nor can the two item families share a belt or a junction after repair.
+    assert networks[0].isdisjoint(networks[1])
     if allow_displacement:
         assert result.status is DetailedRouteStatus.ROUTED
+        assert any(
+            building.item_id == catalog.SPLITTER_ID and (building.x, building.y) == (1, 0)
+            for building in canvas.buildings
+        )
     else:
         assert {failure.net_id for failure in result.failures} == {net.net_id for net in nets[1:]}
+        assert any(
+            building.carries_item == "iron-ingot" and (building.x, building.y) == (1, -1)
+            for building in canvas.buildings
+        )
+    report = validate.validate(
+        Placement(slots.assign_sorter_slots(tuple(canvas.buildings))),
+        max_belt_z=Fraction(0),
+        only={
+            "geom.overlap",
+            "geom.collide",
+            "geom.belt_single_occupancy",
+            "geom.altitude_range",
+            "geom.altitude_step",
+            "game.belt_crossing",
+            "game.belt_collide",
+            "belt.continuity",
+            "belt.link_adjacent",
+            "belt.port_dock",
+            "belt.acyclic",
+            "junction.stack_support",
+            "junction.ports",
+            "junction.colocated",
+            "junction.port_pose",
+            "junction.records_no_links",
+        },
+    )
+    assert not report.errors
 
 
 @pytest.mark.parametrize("allow_displacement", (False, True))

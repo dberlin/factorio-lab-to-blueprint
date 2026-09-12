@@ -1397,9 +1397,7 @@ def test_cached_coater_queries_follow_changed_physical_geometry() -> None:
     assert failure is not None
     assert failure.buildings == (coater[0], touching[0][0])
 
-    moved_coaters = tuple(
-        (index, replace(placed, x=placed.x + 20)) for index, placed in coaters
-    )
+    moved_coaters = tuple((index, replace(placed, x=placed.x + 20)) for index, placed in coaters)
     assert cache.addon_splitter_failure(moved_coaters, touching, projection) is None
     assert cache.addon_splitter_failure(coaters, touching, projection) == failure
     seam_touching = (
@@ -1621,10 +1619,6 @@ def test_projected_coater_splitter_candidates_include_bound_edge() -> None:
     assert candidates == ((splitter,), ())
 
 
-
-
-
-
 def test_projected_coater_splitter_broad_phase_is_linear_plus_candidates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1651,6 +1645,9 @@ def test_projected_coater_splitter_broad_phase_is_linear_plus_candidates(
         coater: tuple[int, colliders.Placed],
         splitter: tuple[int, colliders.Placed],
         _projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+        _coater_box_cache: finalize._CoaterBoxCache | None = None,
     ) -> None:
         exact_pairs.append((coater[0], splitter[0]))
         return None

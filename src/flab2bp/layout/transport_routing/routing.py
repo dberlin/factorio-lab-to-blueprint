@@ -224,14 +224,14 @@ class TemplateConstructor(ReusingConstructor):
             budget.charge("predicates")
             if endpoint.junction_id is None:
                 continue
-            keepout = junction_keepouts.get(endpoint.junction_id)
-            if keepout is not None:
+            endpoint_keepout = junction_keepouts.get(endpoint.junction_id)
+            if endpoint_keepout is not None:
                 x, y, z = endpoint.cell
                 dx, dy = endpoint.outward
                 # Every attached path must occupy its first outward cell.
                 # The existing path-pair audit protects that used dock; an
                 # unused dock remains foreign collider space, not free ground.
-                keepout.discard((x + dx, y + dy, z))
+                endpoint_keepout.discard((x + dx, y + dy, z))
         for keepout in junction_keepouts.values():
             budget.charge("predicates", len(keepout))
             blocked.update(keepout)

@@ -141,7 +141,7 @@ def test_adjacent_coaters_can_feed_from_opposite_transverse_sides(
             index = len(canvas.buildings)
             indices.append(
                 canvas.add(
-                    freeform.PlacedBuilding(
+                    PlacedBuilding(
                         item_id=belt_id,
                         model_index=belt_model,
                         x=x + y,

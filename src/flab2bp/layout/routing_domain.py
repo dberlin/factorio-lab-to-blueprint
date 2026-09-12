@@ -41,19 +41,23 @@ from ortools.sat.python import cp_model
 from flab2bp.dsp import catalog, codec, colliders, params, planet, rules, splitter_ports
 from flab2bp.indexed import Nets, PortReservations, StakedPaths, UnionFind
 from flab2bp.indexed.staked_paths import StakedPathSnapshot
-from flab2bp.layout import finalize, geometric_router, junction, last_mile, physical_flow, slots
-from flab2bp.layout import projection_world
+from flab2bp.layout import (
+    finalize,
+    geometric_router,
+    junction,
+    last_mile,
+    physical_flow,
+    projection_world,
+    slots,
+)
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import Facing, NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.buildings import Buildings, MutableBuildings, bounds_of
 from flab2bp.layout.buildings import Kind as BuildingKind
 from flab2bp.layout.coater_mode import coater_mode
 from flab2bp.layout.geometric_world import GeometricWorld
-from flab2bp.layout.projection_world import FlatScreen
-from flab2bp.layout.routing_proposals import Deadline as _GeometricDeadline
-from flab2bp.layout.routing_proposals import inside as _inside_route_box
-from flab2bp.layout.routing_proposals import overhead_path
 from flab2bp.layout.piling import LaneLoad, MergePlan, PilerPlan, plan_merges
+from flab2bp.layout.projection_world import FlatScreen
 from flab2bp.layout.route_feedback import (
     Cell,
     DetailedRouteResult,
@@ -71,6 +75,9 @@ from flab2bp.layout.route_feedback import (
     RouteSettlementRefused,
 )
 from flab2bp.layout.route_primitives import RouteOwnership, RoutePrimitives
+from flab2bp.layout.routing_proposals import Deadline as _GeometricDeadline
+from flab2bp.layout.routing_proposals import inside as _inside_route_box
+from flab2bp.layout.routing_proposals import overhead_path
 from flab2bp.layout.strip_variants import CargoDomain, StripFamilyId, StripInstanceId
 from flab2bp.spec import BuildSpec
 
@@ -4178,8 +4185,6 @@ def _routing_transitions(
     return tuple(by_level)
 
 
-
-
 def _cut_loops(path: list[Cell], *, ramped: bool) -> list[Cell]:
     """Remove loops without changing the surviving cells' physical altitudes.
 
@@ -4654,10 +4659,6 @@ class _PathSearchResult:
     kind: RouteFailureKind | None
     wall: tuple[Cell, ...]
     expansions: int
-
-
-
-
 
 
 def _astar(
@@ -6518,6 +6519,15 @@ def _route_all(
     relaxed_junctions = False
     junction_reservation_blockers: set[int] = set()
 
+    @cache
+    def _junction_stacks_collide(existing: Cell, candidate: Cell) -> bool:
+        """Cache a shape pair, independent of whether either tap is selected."""
+        nearby = _splitter_stack_geometry(*existing)
+        return any(
+            _building_collider_hits(nearby, member)
+            for member in _splitter_stack_geometry(*candidate)
+        )
+
     def _can_junction(x: int, y: int, level: int, *, project: bool = True) -> bool:
         cell = (x, y, level)
         planned_here = planned_taps.get(cell, ())
@@ -6536,18 +6546,13 @@ def _route_all(
         # stay as they are, now over the cluster's own taps alone.
         if cell in canvas.guard and not planned_here and not relaxed_junctions:
             return False
-        nearby = [
-            stack_member
-            for tx, ty, tz in planned_taps
-            if (tx, ty, tz) != cell
+        if any(
+            (tx, ty, tz) != cell
             and abs(tx - x) <= 3
             and abs(ty - y) <= 3
             and abs(tz - level) <= 3
-            for stack_member in _splitter_stack_geometry(tx, ty, tz)
-        ]
-        if nearby and any(
-            _building_collider_hits(nearby, stack_member)
-            for stack_member in _splitter_stack_geometry(x, y, level)
+            and _junction_stacks_collide((tx, ty, tz), cell)
+            for tx, ty, tz in planned_taps
         ):
             return False
         got = junction_ok.get(cell)
@@ -6793,6 +6798,18 @@ def _route_all(
             if owner.get(cell) == index:
                 del owner[cell]
 
+    _prebuilt_path_port = lru_cache(maxsize=None)(splitter_ports.expected_path_port)
+
+    @cache
+    def _prebuilt_branch_port(
+        splitter: PlacedBuilding, source_belt: PlacedBuilding, outward: Cell
+    ) -> int | None:
+        """Reuse only immutable physical shape, never a live admission verdict."""
+        attachment = replace(source_belt, z=Fraction(outward[2]))
+        return _prebuilt_path_port(
+            splitter, attachment, replace(attachment, x=outward[0], y=outward[1])
+        )
+
     def _prebuilt_source_starts(
         index: int,
         source: _Port,
@@ -6841,7 +6858,7 @@ def _route_all(
             if len(incoming) != 1:
                 direct_ports_valid = False
             else:
-                feed_port = splitter_ports.expected_path_port(
+                feed_port = _prebuilt_path_port(
                     prospective_splitter,
                     source_belt,
                     canvas.buildings[incoming[0]],
@@ -6851,7 +6868,7 @@ def _route_all(
                 else:
                     direct_ports.add(feed_port)
             if source_belt.output_obj is not None:
-                carry_port = splitter_ports.expected_path_port(
+                carry_port = _prebuilt_path_port(
                     prospective_splitter,
                     source_belt,
                     canvas.buildings[source_belt.output_obj],
@@ -6871,15 +6888,7 @@ def _route_all(
                 if selected_tap != tap:
                     continue
                 first = sibling_path[0]
-                branch_attachment = replace(
-                    source_belt,
-                    z=Fraction(first[2]),
-                )
-                port = splitter_ports.expected_path_port(
-                    prospective_splitter,
-                    branch_attachment,
-                    replace(branch_attachment, x=first[0], y=first[1]),
-                )
+                port = _prebuilt_branch_port(prospective_splitter, source_belt, first)
                 if port is None or port in direct_ports:
                     direct_ports_valid = False
                     break
@@ -6913,15 +6922,7 @@ def _route_all(
                 ):
                     continue
                 if needs_junction:
-                    branch_attachment = replace(
-                        source_belt,
-                        z=Fraction(branch_level),
-                    )
-                    port = splitter_ports.expected_path_port(
-                        prospective_splitter,
-                        branch_attachment,
-                        replace(branch_attachment, x=cell[0], y=cell[1]),
-                    )
+                    port = _prebuilt_branch_port(prospective_splitter, source_belt, cell)
                     if port is None or port in direct_ports:
                         continue
                 if (
@@ -13795,9 +13796,8 @@ def _power_plan(
     *,
     policy: BandPolicy,
     additional_demand: Collection[tuple[int, int]] = (),
-    complete_plan_failure: Callable[
-        [tuple[PlacedBuilding, ...]], finalize.ProjectionFailure | None
-    ] | None = None,
+    complete_plan_failure: Callable[[tuple[PlacedBuilding, ...]], finalize.ProjectionFailure | None]
+    | None = None,
     staged_static_cache: _StagedStaticCache | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> list[tuple[int, int]]:
@@ -14165,9 +14165,7 @@ def _power_plan(
         ]
 
     remaining = dark.copy()
-    remaining_count = (
-        int(np.count_nonzero(remaining)) if complete_plan_failure is not None else 0
-    )
+    remaining_count = int(np.count_nonzero(remaining)) if complete_plan_failure is not None else 0
     deferred_sites: list[tuple[int, int]] = []
     # `score` is maintained incrementally. Rebuilding it every round is the same
     # answer and was measured at 0.9s on `universe-matrix`, which is real money
@@ -14436,7 +14434,11 @@ def _power_plan(
         ):
             candidate_failure = complete_plan_failure(
                 (
-                    *(building for index, building, _ in power_nodes if index >= len(canvas.buildings)),
+                    *(
+                        building
+                        for index, building, _ in power_nodes
+                        if index >= len(canvas.buildings)
+                    ),
                     candidate[1],
                 )
             )

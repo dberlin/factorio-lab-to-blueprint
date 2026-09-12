@@ -2132,8 +2132,8 @@ def _projected_coater_splitter_candidates(
         radius2 = math.nextafter(radius * radius, math.inf)
         period = projection.band.columns * geometry.metric.column_lower_bound
         grouped: list[list[tuple[int, colliders.Placed]]] = [[] for _coater in coaters]
-        for splitter in splitters:
-            centre = coordinates(splitter[1])
+        for splitter_index, splitter in splitters:
+            centre = coordinates(splitter)
             found: set[int] = set()
             _coater_splitter_kd_range(geometry.tree, centre, radius2, found, cancelled=cancelled)
             retained: set[int] = set()
@@ -2151,7 +2151,7 @@ def _projected_coater_splitter_candidates(
                 if _coater_splitter_point_distance2(
                     (longitude, coater_centre[1], coater_centre[2]), centre
                 ) <= math.nextafter(reach * reach, math.inf):
-                    grouped[position].append(splitter)
+                    grouped[position].append((splitter_index, splitter))
                     retained.add(position)
         return tuple(tuple(peers) for peers in grouped)
 
@@ -2177,7 +2177,7 @@ def _projected_coater_splitter_candidates(
     for centre, coater_bound in geometry.coaters:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        found: set[int] = set()
+        found = set()
         metric.positions(
             tree,
             centre,

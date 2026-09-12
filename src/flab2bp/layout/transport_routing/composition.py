@@ -11,7 +11,7 @@ from flab2bp.dsp import catalog
 from flab2bp.layout import finalize
 from flab2bp.layout import routing_domain as rd
 from flab2bp.layout.band_policy import BAND_DIMENSIONS, BandPolicy
-from flab2bp.layout.base import Placement, PlacedBuilding
+from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.slots import assign_sorter_slots
 from flab2bp.layout.strip_variants import CargoDomain
 from flab2bp.spec import BuildSpec

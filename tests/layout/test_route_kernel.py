@@ -96,6 +96,87 @@ def test_interval_search_keeps_interior_optimum_when_occupancy_changes() -> None
     assert route(query).cost == 7.0
 
 
+@pytest.mark.parametrize("shared_destination", [False, True])
+def test_affine_incumbent_rounding_does_not_discard_a_cheaper_connector(
+    shared_destination: bool,
+) -> None:
+    flags = bytearray(38)
+    history = array("d", [0.0] * 38)
+    for x in range(18):
+        flags[2 * x] = 1
+        if x:
+            history[2 * x] = 0.1
+    flags[1] = flags[37] = 1
+    world = GeometricWorld(
+        nx=19,
+        ny=2,
+        nz=1,
+        gx0=0,
+        gy0=0,
+        flags=flags,
+        history=history,
+        transitions=(
+            (
+                (1, 0, 0, False, 1.0),
+                (-1, 0, 0, False, 1.0),
+                (0, 1, 0, False, 1.0),
+                (0, -1, 0, False, 1.0),
+            ),
+        ),
+    )
+    # Seventeen independently priced landings are genuinely more expensive
+    # than the connector, even though rounding the incumbent to double ties them.
+    goals = (37,) if shared_destination else (34, 37)
+    extras = {1: ((37, 18.7),)}
+    if shared_destination:
+        extras[34] = ((37, 0.0),)
+    result = route(GeometricQuery(world, (0, 1), goals, 1.0, 10_000, extra_edges=extras))
+
+    assert result.path == (1, 37)
+    assert result.cost == 18.7
+
+
+@pytest.mark.parametrize("occupied", [False, True])
+def test_blocked_starts_keep_their_original_occupied_price_policy(occupied: bool) -> None:
+    world = GeometricWorld(
+        nx=3,
+        ny=1,
+        nz=1,
+        gx0=0,
+        gy0=0,
+        flags=bytearray([0, 1, 0]),
+        history=array("d", [1e30, 0.125, 5.0]),
+        transitions=(((1, 0, 0, False, 1.0), (-1, 0, 0, False, 2.0)),),
+    )
+    result = route(GeometricQuery(world, (0, 2), (1,), 1.0, 100, charge_occupied_cells=occupied))
+
+    assert result.path == ((2, 1) if occupied else (0, 1))
+    assert result.cost == (7.125 if occupied else 1.125)
+
+
+def test_reverse_weighted_ramp_keeps_the_original_via_plane_and_toll() -> None:
+    world = GeometricWorld(
+        nx=3,
+        ny=1,
+        nz=2,
+        gx0=0,
+        gy0=0,
+        flags=bytearray([0, 1, 1, 0, 0, 1]),
+        history=array("d", [4.0, 0.0, 2.0, 0.0, 0.0, 0.7]),
+        transitions=(((2, 0, 1, True, 3.01),), ()),
+    )
+    query = GeometricQuery(world, (0, 1), (5,), 1.0, 100, charge_occupied_cells=True)
+    result = route(query)
+
+    assert result.path == (0, 2, 5)
+    assert result.cost == pytest.approx(9.71)
+
+    world.flags[2] = 0
+    blocked = route(query)
+    assert blocked.path is None
+    assert blocked.co_reachable == ((0, 1, 2, 2),)
+
+
 def test_goal_pocket_reports_incoming_ramp_via_owner_within_budget() -> None:
     bounds = (0, 0, 100, 100)
     canvas = routing_domain._Canvas(
@@ -189,3 +270,38 @@ def test_search_from_unpadded_corner_does_not_wrap_into_other_columns() -> None:
 
     assert result.path is None
     assert result.kind is RouteFailureKind.SEALED_POCKET
+
+
+def test_returned_cost_is_certified_in_original_path_order() -> None:
+    world = GeometricWorld(
+        nx=3,
+        ny=2,
+        nz=1,
+        gx0=0,
+        gy0=0,
+        flags=bytearray([1, 0, 1, 0, 1, 1]),
+        history=array("d", [0.0, 0.0, 0.1, 0.0, 0.7, 0.0]),
+        transitions=(((1, 0, 0, False, 1.0),),),
+    )
+    result = route(GeometricQuery(world, (0, 5), (4,), 1.0, 1000))
+
+    assert result.path == (0, 2, 4)
+    assert result.cost == 2.8
+
+
+def test_overlapping_endpoints_need_no_work_to_certify_a_zero_edge_route() -> None:
+    world = GeometricWorld(
+        nx=6,
+        ny=1,
+        nz=1,
+        gx0=0,
+        gy0=0,
+        flags=bytearray([1] * 6),
+        history=None,
+        transitions=(((1, 0, 0, False, 1.0), (-1, 0, 0, False, 1.0)),),
+    )
+    result = route(GeometricQuery(world, (2, 3, 4, 5), (0, 1, 2), 0.0, 1))
+
+    assert result.path == (2,)
+    assert result.cost == 0.0
+    assert result.metrics["charged_work"] == 0

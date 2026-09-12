@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING
 from flab2bp.dsp import catalog, codec, colliders, planet
 from flab2bp.indexed import BeltOverlap
 from flab2bp.layout import routing_proposals as r
-from flab2bp.layout.routing_proposals import Box, Counters, check_deadline, movement_costs
 from flab2bp.layout.route_feedback import Cell
+from flab2bp.layout.routing_proposals import Box, Counters, check_deadline, movement_costs
 
 if TYPE_CHECKING:
     from flab2bp.layout.routing_domain import _Canvas

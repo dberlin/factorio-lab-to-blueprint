@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from fractions import Fraction
+from time import monotonic
 from types import CellType, CodeType, FunctionType
 
 import pytest
@@ -242,6 +243,7 @@ def test_budget_exit_materializes_selected_partial_without_settlement(
     )
     original = routing_domain._astar
     expired = False
+    now = monotonic()
 
     def search(*args, **kwargs):
         nonlocal expired
@@ -254,7 +256,7 @@ def test_budget_exit_materializes_selected_partial_without_settlement(
         pytest.fail("an expired partial cannot invoke full settlement")
 
     monkeypatch.setattr(routing_domain, "_astar", search)
-    monkeypatch.setattr(routing_domain.time, "monotonic", lambda: 2.0 if expired else 0.0)
+    monkeypatch.setattr(routing_domain.time, "monotonic", lambda: now + 2.0 if expired else now)
     result = routing_domain._route_all(
         canvas,
         [net, missing],
@@ -262,7 +264,7 @@ def test_budget_exit_materializes_selected_partial_without_settlement(
         35,
         canvas.limit,
         budget={"left": 20_000},
-        deadline=1.0,
+        deadline=now + 1.0,
         settle=settle,
     )
     assert result.status is DetailedRouteStatus.BUDGET
@@ -849,7 +851,8 @@ def test_earlier_partial_incumbent_cannot_inherit_later_refused_workspace(
 
 def test_unused_source_offers_do_not_exhaust_physical_admission_deadline(monkeypatch):
     """Pay deterministic time for real projection, then require both physical links."""
-    clock = [0.0]
+    clock = [monotonic()]
+    deadline = clock[0] + 30.0
     canvas = routing_domain._Canvas(limit=(-3, -3, 85, 9))
     source = canvas.add(PlacedBuilding(2001, 35, -1, 0, carries_item="iron-ore"))
     trunk = canvas.add(PlacedBuilding(2001, 35, 80, 0, carries_item="iron-ore"))
@@ -875,7 +878,7 @@ def test_unused_source_offers_do_not_exhaust_physical_admission_deadline(monkeyp
 
     monkeypatch.setattr(routing_domain._CompositionProjection, "allows_buildings", charged)
     monkeypatch.setattr(routing_domain.time, "monotonic", lambda: clock[0])
-    result = routing_domain._route_all(canvas, nets, 2001, 35, canvas.limit, deadline=30.0)
+    result = routing_domain._route_all(canvas, nets, 2001, 35, canvas.limit, deadline=deadline)
     assert result.status is DetailedRouteStatus.ROUTED
     assert set(result.routed) == {net.net_id for net in nets}
     reached = set()
