@@ -87,10 +87,7 @@ def prepare_inventory(
     )
     if not strips:
         raise TransportRefusal("UNSUPPORTED_INTERFACE", "no physical machine strips to connect")
-    modules = tuple(
-        ModulePlan((strip.west_channel, 2), freeform._box(strip)[0], freeform._box(strip)[1] + 2)
-        for strip in strips
-    )
+    modules = tuple(ModulePlan((strip.west_channel, 0), *freeform._box(strip)) for strip in strips)
     # This disjoint capture canvas is discarded. Endpoint coordinates below are
     # module-local; the constructor selects the final, band-constrained banks.
     bases = {index: 1000 * index for index in range(len(strips))}

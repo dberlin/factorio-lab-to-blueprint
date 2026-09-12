@@ -11,6 +11,7 @@ it runs the same solver as the CLI and renders the generated blueprint in 3D.
 - Python 3.14 or newer
 - [uv](https://docs.astral.sh/uv/)
 - [Bun](https://bun.sh/) for the browser interface and TypeScript cross-validation
+- A C++17-capable compiler when building the native extensions from source
 
 The viewer's item names, icons, recipes, and building geometry are extracted from the game and
 are not stored in Git. Populate `web/public/assets/` once from a local Dyson Sphere Program
@@ -47,6 +48,17 @@ candidate gives hierarchical one quarter of its share (at least one worker), kee
 one worker for transport-routing, and divides the rest between freeform and sequence-pair.
 A single 16-worker portfolio uses 8/3/1/4 workers in that order. If four workers cannot
 be funded, `best` runs the strategies serially within the aggregate worker budget.
+
+Detailed routing and relaxed global congestion routing use the native geometric interval
+engine (`route_backend: geometric`), without an A* fallback. Routing budget and `expansions`
+counters measure newly prepared cells plus processed active intervals, not historical A*
+node expansions. Existing numerical caps, deadlines, and atomic-completion grace remain
+unchanged. The two routing modes retain their distinct congestion costs: detailed search
+charges arrivals; relaxed search also charges starts and ramp-via cells.
+A bounded reverse interval probe can identify a sealed destination pocket without
+exhausting the larger source region. Its prepared cells and interval work consume the
+same allowance as forward search. Exhaustion reports distinguish the source-reachable
+component from the goal-reaching component; interrupted probes supply neither proof.
 
 **A refusal is a result.** A spec that cannot be laid out reports why each strategy and
 candidate gave up. An invalid build withholds the blueprint and lists the validation errors,

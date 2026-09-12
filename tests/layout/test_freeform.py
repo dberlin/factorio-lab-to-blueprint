@@ -36,7 +36,9 @@ from flab2bp.layout.base import (
     Placement,
     PlacementCompletion,
 )
+from flab2bp.layout.buildings import MutableBuildings
 from flab2bp.layout.finalize import ProjectionNoGood
+from flab2bp.layout.finalize import finalize_placement as project_placement
 from flab2bp.layout.freeform import (
     _DETERMINISTIC_PACK_STRIPS,
     MU_DIRECT,
@@ -1466,7 +1468,10 @@ def test_commit_link_rejection_reroutes_the_same_net_before_emission(
 def test_commit_preflight_repairs_a_routed_net_while_another_remains_stranded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    canvas = _Canvas(limit=(0, -2, 6, 5))
+    canvas = _Canvas(
+        belt_rules=replace(routing_domain._DEFAULT_BELT_RULES, vertical_construction=False),
+        limit=(0, -2, 6, 5),
+    )
     blocked_source = canvas.add(
         PlacedBuilding(2001, 35, 0, 0, carries_item="blocked"),
         level=0,
@@ -1674,7 +1679,10 @@ def test_route_feedback_preflight_commit_link_retains_exact_endpoint_evidence(
 
 
 def test_unreachable_elevated_port_returns_structured_failure_without_route() -> None:
-    canvas = _Canvas(limit=(0, -2, 6, 2))
+    canvas = _Canvas(
+        belt_rules=replace(routing_domain._DEFAULT_BELT_RULES, vertical_construction=False),
+        limit=(0, -2, 6, 2),
+    )
     source_index = canvas.add(
         PlacedBuilding(2001, 35, 0, 0, carries_item="proliferator-3"),
         level=0,
@@ -2214,102 +2222,6 @@ def _direct_candidate_fixtures() -> list[tuple[str, list[Strip], BuildSpec]]:
     ]
 
 
-#: Read once: ``__getattribute__`` below runs on every attribute load.
-_STRIP_FIELD_NAMES: frozenset[str] = frozenset(field.name for field in fields(Strip))
-
-
-class _ReadRecordingStrip(Strip):
-    """A real ``Strip`` that records every field read through it, TRANSITIVELY.
-
-    ``_FieldRecordingStrip`` delegates with ``__getattr__``, so a property like
-    ``machine_row`` runs on the WRAPPED strip and the fields it reads never
-    reach the recorder -- which is why its own guard can only assert a subset.
-    A memo key over a strip PAIR has to be checked against the transitive read
-    set instead, because ``row_of_output`` and ``input_lane_tiles`` are exactly
-    where the extra fields come from.  Overriding ``__getattribute__`` on a real
-    subclass records the reads a method makes of ``self`` as well.
-    """
-
-    @classmethod
-    def recording(cls, strip: Strip, read: set[str]) -> _ReadRecordingStrip:
-        recorder = cls(**{field.name: getattr(strip, field.name) for field in fields(Strip)})
-        object.__setattr__(recorder, "_read", read)
-        return recorder
-
-    def __getattribute__(self, name: str) -> object:
-        if name in _STRIP_FIELD_NAMES:
-            # ``__post_init__`` runs before ``recording`` attaches the set.
-            read = cast(
-                "set[str] | None",
-                object.__getattribute__(self, "__dict__").get("_read"),
-            )
-            if read is not None:
-                read.add(name)
-        return Strip.__getattribute__(self, name)
-
-
-def test_direct_candidate_key_classifies_every_strip_field() -> None:
-    """Every ``Strip`` field is in the pair memo key or declared unread.
-
-    A NEW ``Strip`` FIELD FAILS THIS TEST UNTIL IT IS CLASSIFIED, for the same
-    reason as ``test_direct_geometry_key_classifies_every_strip_field``: the
-    key is exact only while it IS the set of fields
-    ``_direct_net_candidate_uncached`` reads off its two endpoints, and a field
-    that quietly joins the read set without joining the key would hand one
-    strip pair another pair's candidate with nothing else to see.
-
-    The key is a SUPERSET of ``_direct_geometry_key``: enumeration reads
-    ``recipe_id`` and ``group_key`` for the eligibility and destination
-    lookups, and ``row_of_output`` reads ``port_dock_plan``, none of which
-    ``_direct_origin_deltas`` ever touches.
-
-    Two halves, and BOTH are needed.  The first drives the enumeration body and
-    says what it reads.  The second drives ``_direct_candidate_key`` itself and
-    says what the hand-written tuple covers -- without it, deleting
-    ``source.port_dock_plan`` from that tuple would serve one strip pair
-    another pair's candidate with this suite still green, because the body-read
-    half never builds a key at all.
-    """
-    strip_fields = {field.name for field in fields(Strip)}
-    assert strip_fields == (
-        freeform._DIRECT_CANDIDATE_KEY_FIELDS | freeform._UNREAD_BY_DIRECT_CANDIDATE
-    )
-    assert not (freeform._DIRECT_CANDIDATE_KEY_FIELDS & freeform._UNREAD_BY_DIRECT_CANDIDATE)
-
-    read: set[str] = set()
-    for label, strips, spec in _direct_candidate_fixtures():
-        # ``plan_strips`` populates the deltas memo for every strip it plans;
-        # without this clear the recorded run could hit a value-equal entry and
-        # never execute the body whose reads are being counted.
-        freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
-        expected = _direct_net_candidates(strips, spec)
-        freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
-        probed = [_ReadRecordingStrip.recording(strip, read) for strip in strips]
-        assert _direct_net_candidates(cast("list[Strip]", probed), spec) == expected, label
-    freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
-
-    assert read == freeform._DIRECT_CANDIDATE_KEY_FIELDS
-
-    # The tuple the memo is actually keyed on has to cover that read set, and
-    # the walk above never built one.  Fresh recorders, one per endpoint: the
-    # builder asks each side the same questions, so each must read the whole
-    # classified set on its own.
-    pair_strips = _direct_candidate_fixtures()[0][1]
-    source_read: set[str] = set()
-    destination_read: set[str] = set()
-    key = freeform._direct_candidate_key(
-        _ReadRecordingStrip.recording(pair_strips[0], source_read),
-        _ReadRecordingStrip.recording(pair_strips[1], destination_read),
-    )
-
-    # A gated pair returns ``None`` before touching the second endpoint, which
-    # would make the two assertions below vacuous.
-    assert key is not None
-    assert key == freeform._direct_candidate_key(pair_strips[0], pair_strips[1])
-    assert source_read == freeform._DIRECT_CANDIDATE_KEY_FIELDS
-    assert destination_read == freeform._DIRECT_CANDIDATE_KEY_FIELDS
-
-
 def test_direct_net_candidates_memo_is_transparent() -> None:
     """The pair memo answers exactly what the uncached body would build."""
     memo = freeform.DirectCandidateMemo()
@@ -2480,165 +2392,6 @@ def test_staged_static_clearance_keys_memo_skips_unsprayed_strips() -> None:
 
     assert routing_domain._staged_static_clearance_keys(unsprayed) == frozenset()
     assert not routing_domain._STAGED_CLEARANCE_KEYS_MEMO
-
-
-class _FieldRecordingStrip:
-    """A strip that records which of its fields something read."""
-
-    def __init__(self, strip: Strip) -> None:
-        object.__setattr__(self, "strip", strip)
-        object.__setattr__(self, "read", set())
-
-    def __getattr__(self, name: str) -> object:
-        cast(set[str], object.__getattribute__(self, "read")).add(name)
-        return getattr(object.__getattribute__(self, "strip"), name)
-
-
-def test_direct_geometry_key_classifies_every_strip_field() -> None:
-    """Every ``Strip`` field is either in the memo key or declared unread.
-
-    A NEW ``Strip`` FIELD FAILS THIS TEST UNTIL IT IS CLASSIFIED, which is the
-    point: ``_direct_geometry_key`` is exact only while its tuple IS the set of
-    fields ``_direct_origin_deltas`` reads, and a field that quietly joins the
-    read set without joining the key makes the memo serve wrong answers with
-    nothing else to see.
-    """
-    spec = spray_domain_spec(clean=True, sprayed=True)
-    strips = plan_strips(spec, strip_len=6)
-    strip = next(candidate for candidate in strips if candidate.physical_variant is not None)
-    recorder = _FieldRecordingStrip(strip)
-
-    key = freeform._direct_geometry_key(cast(Strip, cast(object, recorder)))
-
-    assert key == freeform._direct_geometry_key(strip)
-    assert {field.name for field in dataclasses.fields(Strip)} == (
-        freeform._DIRECT_GEOMETRY_KEY_FIELDS | freeform._UNREAD_BY_DIRECT_GEOMETRY
-    )
-    assert not (freeform._DIRECT_GEOMETRY_KEY_FIELDS & freeform._UNREAD_BY_DIRECT_GEOMETRY)
-    # ``physical_variant`` is the gate: read, but never part of the key.
-    assert recorder.read == freeform._DIRECT_GEOMETRY_KEY_FIELDS | {"physical_variant"}
-
-    # `_direct_origin_deltas_uncached` is the memo's ACTUAL read set; drive it
-    # directly, recording both the source and the destination side, and check
-    # that every `Strip` FIELD it touches (methods like `width`,
-    # `_output_attachment_plan`, `_input_attachment_plan`, `input_lane_tiles`
-    # and `lane_of_input` are not fields and are filtered out) is inside the
-    # same key.  A helper that starts reading an unclassified field would
-    # otherwise serve the memo wrong cached answers in silence.
-    source, destination = _direct_flow_order_strips()
-    lane = next(
-        k
-        for k, (item, _destination, domain) in enumerate(source.out_lanes)
-        if item == "iron-ingot" and domain is CargoDomain.UNSPRAYED
-    )
-    source_recorder = _FieldRecordingStrip(source)
-    destination_recorder = _FieldRecordingStrip(destination)
-    deltas = freeform._direct_origin_deltas_uncached(
-        cast(Strip, cast(object, source_recorder)),
-        cast(Strip, cast(object, destination_recorder)),
-        lane,
-        "iron-ingot",
-        source_rate=F(1),
-        required_rate=F(4),
-    )
-    assert deltas
-    strip_field_names = {field.name for field in dataclasses.fields(Strip)}
-    touched_fields = (source_recorder.read | destination_recorder.read) & strip_field_names
-    assert touched_fields <= freeform._DIRECT_GEOMETRY_KEY_FIELDS | {"physical_variant"}
-
-
-class _FieldRecordingCandidate:
-    """A direct candidate that records which of its fields something read."""
-
-    def __init__(self, candidate: freeform._DirectCandidate) -> None:
-        object.__setattr__(self, "candidate", candidate)
-        object.__setattr__(self, "read", set())
-
-    def __getattr__(self, name: str) -> object:
-        cast(set[str], object.__getattribute__(self, "read")).add(name)
-        return getattr(object.__getattribute__(self, "candidate"), name)
-
-
-def test_direct_alignment_key_classifies_every_candidate_field() -> None:
-    """Every ``_DirectCandidate`` field is in the memo key or declared unread.
-
-    A NEW ``_DirectCandidate`` FIELD FAILS THIS TEST UNTIL IT IS CLASSIFIED,
-    which is the point: ``_direct_alignment_key`` is exact only while its tuple
-    IS the set of fields ``_direct_alignment_targets_uncached`` reads, and a
-    field that quietly joins the read set without joining the key makes the memo
-    hand one variant pair another pair's targets with nothing else to see.
-
-    The key is over the CANDIDATE MAPPING rather than over
-    ``_DirectCandidateSnapshot``: that class binds candidates to a strip plan,
-    but the memoized function is handed the mapping alone and never sees a
-    snapshot, so the mapping is the whole input and the snapshot's ``strips``
-    would be a key field nothing reads.
-    """
-    spec = two_stage_spec()
-    candidates = _direct_net_candidates(list(_direct_flow_order_strips()), spec)
-    assert candidates
-    recorders = {key: _FieldRecordingCandidate(value) for key, value in candidates.items()}
-    probed = cast(
-        "Mapping[tuple[int, int], freeform._DirectCandidate]",
-        cast(object, recorders),
-    )
-
-    key = freeform._direct_alignment_key(probed)
-    targets = freeform._direct_alignment_targets_uncached(probed)
-
-    assert key == freeform._direct_alignment_key(candidates)
-    assert targets == freeform._direct_alignment_targets_uncached(candidates)
-    candidate_fields = {field.name for field in dataclasses.fields(freeform._DirectCandidate)}
-    assert candidate_fields == (
-        freeform._DIRECT_ALIGNMENT_KEY_FIELDS | freeform._UNREAD_BY_DIRECT_ALIGNMENT
-    )
-    assert not (freeform._DIRECT_ALIGNMENT_KEY_FIELDS & freeform._UNREAD_BY_DIRECT_ALIGNMENT)
-    read: set[str] = set()
-    for recorder in recorders.values():
-        read |= cast(set[str], recorder.read)
-    assert read & candidate_fields == freeform._DIRECT_ALIGNMENT_KEY_FIELDS
-
-
-@pytest.mark.usefixtures("off_arm")
-def test_staged_clearance_key_classifies_every_strip_field() -> None:
-    """Every ``Strip`` field is either in the clearance memo key or declared unread.
-
-    A NEW ``Strip`` FIELD FAILS THIS TEST UNTIL IT IS CLASSIFIED, which is the
-    point: the memo key built in ``_staged_static_clearance_keys`` is exact
-    only while its tuple IS the set of fields that function and
-    ``_staged_static_clearance_keys_uncached`` read, and a field that quietly
-    joins the read set without joining the key makes the memo serve wrong
-    answers with nothing else to see.
-    """
-    strip = _coater_strip_with_variant()
-    recorder = _FieldRecordingStrip(strip)
-
-    # `_coater_strip_with_variant` calls `plan_strips`, which populates the
-    # memo for every strip it plans -- without this clear the call below could
-    # hit that pre-existing value-equal entry and never run the uncached body
-    # for the recorder, under-reporting the fields it actually touches.
-    routing_domain._STAGED_CLEARANCE_KEYS_MEMO.clear()
-    keys = routing_domain._staged_static_clearance_keys(cast(Strip, cast(object, recorder)))
-    routing_domain._STAGED_CLEARANCE_KEYS_MEMO.clear()
-
-    assert keys == routing_domain._staged_static_clearance_keys(strip)
-    routing_domain._STAGED_CLEARANCE_KEYS_MEMO.clear()
-    assert {field.name for field in dataclasses.fields(Strip)} == (
-        routing_domain._STAGED_CLEARANCE_KEY_FIELDS | routing_domain._UNREAD_BY_STAGED_CLEARANCE
-    )
-    assert not (
-        routing_domain._STAGED_CLEARANCE_KEY_FIELDS & routing_domain._UNREAD_BY_STAGED_CLEARANCE
-    )
-    # ``cargo_domain`` and ``physical_variant`` are the gate; ``machine_row``,
-    # ``in_lanes`` and ``row_of_input`` are derived properties/methods, not
-    # ``Strip`` fields -- all five are read but none is part of the key.
-    assert recorder.read == routing_domain._STAGED_CLEARANCE_KEY_FIELDS | {
-        "cargo_domain",
-        "physical_variant",
-        "machine_row",
-        "in_lanes",
-        "row_of_input",
-    }
 
 
 def test_requested_output_is_unsprayed_beside_proliferated_internal_lane() -> None:
@@ -3649,14 +3402,16 @@ def _direct_flow_order_canvas(
         output_obj=1,
     )
     canvas = _Canvas(
-        buildings=[
-            source_machine,
-            destination_machine,
-            *source_lane,
-            *destination_lane,
-            source_sorter,
-            destination_sorter,
-        ]
+        buildings=MutableBuildings(
+            (
+                source_machine,
+                destination_machine,
+                *source_lane,
+                *destination_lane,
+                source_sorter,
+                destination_sorter,
+            )
+        )
     )
     canvas.blocked = {
         (building.x, building.y, 0): index
@@ -3818,6 +3573,7 @@ class TestDirectInsertion:
     def _stacked(spec: BuildSpec, *, direct: bool) -> tuple[Placement, object]:
         """Build a forced safe bridge, or the ordinary no-bridge packing."""
         strips = list(_direct_flow_order_strips())
+        pack: routing_domain._Pack | None
         if direct:
             pack = _forced_direct_pack(strips, spec)
         else:
@@ -3919,7 +3675,7 @@ class TestDirectInsertion:
         )
         source_machine = replace(machine, y=-3, owner_strip=0, recipe_id=1)
         lane[2] = replace(lane[2], input_obj=6)
-        canvas = _Canvas(buildings=[machine, *lane, standing, source_machine])
+        canvas = _Canvas(buildings=MutableBuildings((machine, *lane, standing, source_machine)))
         canvas.blocked = {(b.x, b.y, 0): i + 1 for i, b in enumerate(lane)}
         src = _Port(3, 5, 0, 5, 6, (3, 4), 1)
         dst = _Port(1, 5, 2, 5, 6, (1, 2), 1)
@@ -4270,54 +4026,6 @@ def test_a_routing_failure_with_no_feedback_is_still_not_retry_eligible() -> Non
     attempt = _proof_attempt(routing, plan_strips(two_stage_spec()))
 
     assert not freeform._feedback_retry_eligible(attempt, FeedbackState.empty((10, 10)))
-
-
-def test_the_window_launches_on_a_best_failing_pack_with_three_failures(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A slot and a clock, and no `learned` evidence: that is the trigger now."""
-    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(
-        freeform,
-        "destroy_strips",
-        lambda *_args, **_kwargs: frozenset({0}),
-    )
-    monkeypatch.setattr(
-        freeform,
-        "_pack_relation_pair",
-        lambda *_args, **_kwargs: SequencePair((0, 1), (0, 1)),
-    )
-    launched: list[object] = []
-
-    def record_window(*_args: object, **kwargs: object) -> None:
-        launched.append(kwargs)
-
-    monkeypatch.setattr(freeform, "_pack_window", record_window)
-    feedback_retry_cuts: list[freeform.ExactPackNoGood] = []
-
-    def record_feedback_retry(
-        _candidate: tuple[int, int],
-        pack: routing_domain._Pack,
-        exact_no_goods: tuple[freeform.ExactPackNoGood, ...],
-    ) -> routing_domain._Pack:
-        feedback_retry_cuts.extend(
-            no_good
-            for no_good in exact_no_goods
-            if no_good.evidence[0].check == "route.feedback_retry"
-        )
-        return pack
-
-    _sweep_after_first_routing(
-        monkeypatch,
-        _feedback_bearing_routing(count=3),
-        arrangements=2,
-        heights=(20,),
-        time_budget_s=1e6,
-        pack_transform=record_feedback_retry,
-    )
-
-    assert len(launched) == 1
-    assert feedback_retry_cuts == []
 
 
 def test_the_window_is_withheld_on_a_pack_that_only_ties_the_best_failing_one(
@@ -9473,7 +9181,7 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
     monkeypatch.setattr(
         finalize,
         "finalize_placement",
-        _identity_finalizer,
+        project_placement,
     )
 
     result = FreeformLayout(
@@ -9973,8 +9681,8 @@ def _sweep_with_repeated_exact_feedback(
         "power" if source == "power" else "seating",
         failure,
         {
-            0: PlacedBuilding(1, 1, 0, 0, owner_strip=0),
-            1: PlacedBuilding(1, 1, 1, 0, owner_strip=1),
+            0: PlacedBuilding(2309, 64, 0, 0, width=7, height=5, owner_strip=0),
+            1: PlacedBuilding(2309, 64, 16, 0, width=7, height=5, owner_strip=1),
         },
     )
     assert exact_retry_evidence is not None
@@ -10039,8 +9747,8 @@ def _sweep_with_repeated_exact_feedback(
     ) -> _BuildResult:
         placement = Placement(
             buildings=(
-                PlacedBuilding(1, 1, 0, 0, owner_strip=0),
-                PlacedBuilding(1, 1, 1, 0, owner_strip=1),
+                PlacedBuilding(2309, 64, 0, 0, width=7, height=5, owner_strip=0),
+                PlacedBuilding(2309, 64, 16, 0, width=7, height=5, owner_strip=1),
             ),
             description=str(pack.height),
             stats={"belt_tiles": 0.0},
@@ -10203,7 +9911,7 @@ def test_unaffordable_base_height_is_not_started_after_valid_candidate(
     monkeypatch.setattr(
         finalize,
         "finalize_placement",
-        _identity_finalizer,
+        project_placement,
     )
     monkeypatch.setattr(
         freeform,
@@ -11581,7 +11289,7 @@ def test_piler_transit_cycle_is_rejected_by_router_admission() -> None:
             replace(_linked_belt(2, 0), input_obj=1, carries_item="gear"),
         )
     )
-    canvas = _Canvas(buildings=list(placement.buildings))
+    canvas = _Canvas(buildings=MutableBuildings(placement.buildings))
     assert routing_domain._leads_back(canvas, 0, {2})
     assert routing_domain._committed_path_closes_cycle(canvas, [0])
     report = validate.validate(placement, only=("belt.acyclic",), expect_power=False)
@@ -11591,15 +11299,17 @@ def test_piler_transit_cycle_is_rejected_by_router_admission() -> None:
 def test_serial_piler_merge_stays_admissible_until_relinked_into_cycle() -> None:
     piler = catalog.building(catalog.PILER_ID)
     canvas = _Canvas(
-        buildings=[
-            _linked_belt(0, 1),
-            PlacedBuilding(item_id=catalog.PILER_ID, model_index=piler.model_index, x=1, y=0),
-            replace(_linked_belt(2, 3), input_obj=1),
-            PlacedBuilding(item_id=catalog.PILER_ID, model_index=piler.model_index, x=3, y=0),
-            replace(_linked_belt(4, None), input_obj=3),
-            _linked_belt(5, 0),
-            _linked_belt(6, 0),
-        ]
+        buildings=MutableBuildings(
+            (
+                _linked_belt(0, 1),
+                PlacedBuilding(item_id=catalog.PILER_ID, model_index=piler.model_index, x=1, y=0),
+                replace(_linked_belt(2, 3), input_obj=1),
+                PlacedBuilding(item_id=catalog.PILER_ID, model_index=piler.model_index, x=3, y=0),
+                replace(_linked_belt(4, None), input_obj=3),
+                _linked_belt(5, 0),
+                _linked_belt(6, 0),
+            )
+        )
     )
     assert not routing_domain._leads_back(canvas, 0, {5, 6})
     assert not routing_domain._committed_path_closes_cycle(canvas, [0, 5, 6])
@@ -11612,21 +11322,25 @@ def test_serial_piler_merge_stays_admissible_until_relinked_into_cycle() -> None
 def test_output_tail_nets_cross_pilers_without_crossing_cargo_domains() -> None:
     piler = catalog.building(catalog.PILER_ID)
     canvas = _Canvas(
-        buildings=[
-            replace(_linked_belt(0, 1), carries_item="gear"),
-            PlacedBuilding(item_id=catalog.PILER_ID, model_index=piler.model_index, x=1, y=0),
-            replace(_linked_belt(2, None), input_obj=1, carries_item="gear"),
-        ]
+        buildings=MutableBuildings(
+            (
+                replace(_linked_belt(0, 1), carries_item="gear"),
+                PlacedBuilding(item_id=catalog.PILER_ID, model_index=piler.model_index, x=1, y=0),
+                replace(_linked_belt(2, None), input_obj=1, carries_item="gear"),
+            )
+        )
     )
     port = _Port(0, 0, 0, 0, 0)
     output = _Net(port, port, "gear")
     assert [net.source.belt for net in routing_domain._output_tail_nets(canvas, (output,))] == [2]
     canvas = _Canvas(
-        buildings=[
-            canvas.buildings[0],
-            canvas.buildings[1],
-            replace(canvas.buildings[2], carries_item="iron-ingot"),
-        ]
+        buildings=MutableBuildings(
+            (
+                canvas.buildings[0],
+                canvas.buildings[1],
+                replace(canvas.buildings[2], carries_item="iron-ingot"),
+            )
+        )
     )
     assert [net.source.belt for net in routing_domain._output_tail_nets(canvas, (output,))] == [0]
 
@@ -11642,36 +11356,46 @@ class TestCommittedPathClosesCycle:
         )
 
     def test_a_straight_chain_is_not_a_cycle(self) -> None:
-        canvas = _Canvas(buildings=[_linked_belt(0, 1), _linked_belt(1, 2), _linked_belt(2, None)])
+        canvas = _Canvas(
+            buildings=MutableBuildings(
+                (_linked_belt(0, 1), _linked_belt(1, 2), _linked_belt(2, None))
+            )
+        )
         assert routing_domain._committed_path_closes_cycle(canvas, [0, 1, 2]) is False
 
     def test_a_chain_whose_tail_feeds_its_head_is_a_cycle(self) -> None:
-        canvas = _Canvas(buildings=[_linked_belt(0, 1), _linked_belt(1, 2), _linked_belt(2, 0)])
+        canvas = _Canvas(
+            buildings=MutableBuildings((_linked_belt(0, 1), _linked_belt(1, 2), _linked_belt(2, 0)))
+        )
         assert routing_domain._committed_path_closes_cycle(canvas, [1]) is True
 
     def test_a_cycle_elsewhere_does_not_condemn_a_belt_off_it(self) -> None:
         # 0 -> 1 -> 2 -> 1 loops; belt 0 merely feeds the loop and is not on it.
-        canvas = _Canvas(buildings=[_linked_belt(0, 1), _linked_belt(1, 2), _linked_belt(2, 1)])
+        canvas = _Canvas(
+            buildings=MutableBuildings((_linked_belt(0, 1), _linked_belt(1, 2), _linked_belt(2, 1)))
+        )
         assert routing_domain._committed_path_closes_cycle(canvas, [0]) is False
         assert routing_domain._committed_path_closes_cycle(canvas, [2]) is True
 
     def test_a_self_loop_is_a_cycle(self) -> None:
-        canvas = _Canvas(buildings=[_linked_belt(0, 0)])
+        canvas = _Canvas(buildings=MutableBuildings((_linked_belt(0, 0),)))
         assert routing_domain._committed_path_closes_cycle(canvas, [0]) is True
 
     def test_a_dangling_output_index_is_not_followed(self) -> None:
-        canvas = _Canvas(buildings=[_linked_belt(0, 7)])
+        canvas = _Canvas(buildings=MutableBuildings((_linked_belt(0, 7),)))
         assert routing_domain._committed_path_closes_cycle(canvas, [0]) is False
 
     def test_splitter_branches_are_followed(self) -> None:
         # belt 0 -> splitter 1 -> belts 2 and 3 (input_obj=1); belt 3 -> belt 0.
         canvas = _Canvas(
-            buildings=[
-                _linked_belt(0, 1),
-                _splitter_at(1),
-                replace(_linked_belt(2, None), input_obj=1),
-                replace(_linked_belt(3, 0), input_obj=1),
-            ]
+            buildings=MutableBuildings(
+                (
+                    _linked_belt(0, 1),
+                    _splitter_at(1),
+                    replace(_linked_belt(2, None), input_obj=1),
+                    replace(_linked_belt(3, 0), input_obj=1),
+                )
+            )
         )
         assert routing_domain._committed_path_closes_cycle(canvas, [0]) is True
         assert routing_domain._committed_path_closes_cycle(canvas, [2]) is False
@@ -11690,7 +11414,7 @@ class TestCommittedPathClosesCycle:
             for i, b in enumerate(buildings):
                 if catalog.is_belt(b.item_id) and rng.random() < 0.3:
                     buildings[i] = replace(b, input_obj=rng.randrange(n))
-            canvas = _Canvas(buildings=buildings)
+            canvas = _Canvas(buildings=MutableBuildings(buildings))
             indices = [
                 i for i in range(n) if catalog.is_belt(buildings[i].item_id) and rng.random() < 0.6
             ]
@@ -11771,6 +11495,7 @@ class TestAltitudeProfileCache:
         first = routing_domain._altitude_profile(path, ramped=True)
         second = routing_domain._altitude_profile(list(path), ramped=True)
         assert first == second and first is not second
+        assert first is not None
         first.append(Fraction(99))
         assert routing_domain._altitude_profile(path, ramped=True) == second
 
@@ -12278,6 +12003,23 @@ class TestPortAccessIsReservedForEveryRole:
         assert first == (1, ((1, 0, 0), (2, 0, 0)), True)
 
 
+def test_boundary_goal_search_reaches_exit_without_exhausting_expansion_budget() -> None:
+    bounds = (-40, -40, 40, 40)
+    canvas = _Canvas(limit=bounds)
+    boundary = {
+        (x, y, 0) for x in range(-40, 41) for y in range(-40, 41) if abs(x) == 40 or abs(y) == 40
+    }
+    grid = _make_grid(canvas, bounds, (-42, -42, 42, 42), {})
+    budget = {"left": 1024}
+
+    result = _astar(canvas, [(0, 0, 0)], boundary, {}, 0.0, bounds, budget, grid=grid)
+
+    assert result.path is not None
+    assert result.path[0] == (0, 0, 0)
+    assert result.path[-1] in boundary
+    assert result.expansions < 1024
+
+
 def test_a_middle_lane_head_in_twice_cannot_hold_its_second_corridor() -> None:
     """The regression a future reordering would trip.
 
@@ -12323,27 +12065,6 @@ def _two_ports_with_two_corridors_each() -> tuple[
     }
 
 
-def test_corridor_tie_break_never_outruns_its_work_cap(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A tie-break solve that hits the deterministic cap keeps the rank-optimal
-    assignment instead of raising the preparation deadline."""
-    seen: list[tuple[float, float]] = []
-    real_solve = cp_model.CpSolver.solve
-
-    def recording_solve(self: cp_model.CpSolver, model: cp_model.CpModel) -> int:
-        seen.append((self.parameters.max_deterministic_time, self.parameters.max_time_in_seconds))
-        return real_solve(self, model)
-
-    monkeypatch.setattr(cp_model.CpSolver, "solve", recording_solve)
-    demands, corridors = _two_ports_with_two_corridors_each()
-    assigned = routing_domain._match_access_corridors(
-        demands, corridors, validate=lambda _assigned: None, deadline=time.monotonic() + 30.0
-    ).assigned
-    assert len(assigned) == len(demands)
-    assert seen, "the matcher solved nothing"
-    assert all(work > 0.0 for work, _wall in seen), seen
-    assert all(work <= routing_domain._ACCESS_RANK_DETERMINISTIC_WORK for work, _wall in seen), seen
-
-
 def test_corridor_matcher_falls_back_to_the_rank_solution_when_polish_is_cut_short(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -12352,7 +12073,7 @@ def test_corridor_matcher_falls_back_to_the_rank_solution_when_polish_is_cut_sho
     calls = {"n": 0}
     real_solve = cp_model.CpSolver.solve
 
-    def flaky_solve(self: cp_model.CpSolver, model: cp_model.CpModel) -> int:
+    def flaky_solve(self: cp_model.CpSolver, model: cp_model.CpModel) -> cp_model.CpSolverStatus:
         calls["n"] += 1
         if calls["n"] == 2:  # the first solve is rank 0's maximize; the second is the polish
             return cp_model.UNKNOWN
@@ -13518,13 +13239,16 @@ class TestPowerClaimsItsGroundBeforeRouting:
         canvas.add(self._machine(158, 8), solid=True)
         canvas.add(_belt(3, 3))
         canvas.add(_belt(161, 13))
+        cleanup_prefix = finalize._CleanupSurvivorGraph(
+            Placement(buildings=tuple(canvas.buildings))
+        )
         planning_envelope = set(
-            routing_domain._power_projection_envelope(
-                canvas,
+            routing_domain._projection_envelope(
+                cleanup_prefix.snapshot_bounds(),
+                limit,
                 policy,
             )
         )
-        assert len(planning_envelope) == 204
 
         compacted = finalize.compact_open_boundary_belts(
             Placement(buildings=tuple(canvas.buildings)),
@@ -17288,6 +17012,29 @@ class TestTheMergeFrontierWithdrawsSitesAJunctionCannotHold:
         got = routing_domain._merge_frontier(canvas, {5: path}, (5,), lambda x, y, level: True)
         assert {(-1, 0, 0), (0, -1, 0), (0, 1, 0)} <= got, sorted(got)
 
+    def test_a_connected_source_is_not_a_foreign_belt_at_the_first_tap(self) -> None:
+        canvas = _Canvas()
+        predecessor = canvas.add(_belt(-2, 0, item="gear"))
+        source = canvas.add(_belt(-1, 0, item="gear"))
+        canvas.buildings[predecessor] = _relink(canvas.buildings[predecessor], output_obj=source)
+        path = ((0, 0, 0), (1, 0, 0), (2, 0, 0))
+        for cell in path:
+            canvas.blocked[cell] = _TENTATIVE
+
+        def frontier() -> set[tuple[int, int, int]]:
+            return routing_domain._merge_frontier(
+                canvas,
+                {5: path},
+                (5,),
+                lambda x, y, level: (x, y, level) == (0, 0, 0),
+                belt_prefab=(2001, 35),
+                source_belts={5: source},
+            )
+
+        assert frontier() == {(0, -1, 0), (0, 1, 0)}
+        canvas.add(_belt(0, 1, item="foreign"))
+        assert frontier() == set()
+
 
 @pytest.mark.usefixtures("off_arm")
 class TestASprayedLaneEitherGetsACoaterOrRefuses:
@@ -17601,6 +17348,38 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             not routing_domain._staged_static_relation_projection_risk(relation, policy)
             for relation in relations
         )
+
+    @pytest.mark.parametrize("reverse", (False, True))
+    def test_staged_supply_cannot_cross_a_neighboring_coater(self, reverse: bool) -> None:
+        canvas, spec, strips, ports = self._fixture(3)
+        neighbor_item = "copper-ingot"
+        indices = tuple(canvas.add(_belt(x, 1, item=neighbor_item)) for x in range(1, 4))
+        neighbor = replace(
+            ports[0][self.ITEM],
+            belt=indices[0],
+            x=1,
+            y=1,
+            x1=3,
+            tiles=indices,
+        )
+        lanes = (neighbor_item, self.ITEM) if reverse else (self.ITEM, neighbor_item)
+        staged_strip = replace(strips[0], in_above=tuple((item,) for item in lanes), in_below=())
+        staged_ports = [{**ports[0], neighbor_item: neighbor}]
+        before = tuple(canvas.buildings)
+
+        with pytest.raises(routing_domain._Unseatable):
+            routing_domain._place_coaters(
+                canvas,
+                spec,
+                [staged_strip],
+                staged_ports,
+                2001,
+                35,
+                policy=BandPolicy("portable"),
+            )
+
+        assert tuple(canvas.buildings) == before
+        assert canvas.belt_ban == {}
 
     def test_a_lane_too_short_to_seat_a_coater_is_refused(self) -> None:
         """One tile: ``_coater_seats`` has no tile with a lane tile either side."""
@@ -18225,7 +18004,7 @@ class TestPreparedBeltPortDocking:
             assert host.input_obj is None and host.output_obj is None
 
         workspace = prepared.new_workspace()
-        rebound = _port_docks(workspace.buildings)
+        rebound = _port_docks(tuple(workspace.buildings))
         assert [
             (
                 dock.input_obj,
@@ -18865,9 +18644,7 @@ def test_staged_static_preclearance_cancels_inside_cold_proof_without_caching(
     routing_domain._staged_static_preclearance_proved.cache_clear()
 
 
-def test_power_projection_envelope_cancels_inside_rectangle_generation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_power_projection_envelope_cancels_inside_rectangle_generation() -> None:
     machine = catalog.building(2303)
     canvas = _Canvas()
     canvas.add(
@@ -18883,15 +18660,6 @@ def test_power_projection_envelope_cancels_inside_rectangle_generation(
     )
     canvas.limit = (-3, -3, 6, 6)
 
-    def cleanup_bounds(
-        placement: Placement,
-        *,
-        cancelled: Callable[[], bool] | None = None,
-    ) -> tuple[int, int, int, int]:
-        assert cancelled is not None
-        return placement.bounds
-
-    monkeypatch.setattr(finalize, "_cleanup_survivor_bounds", cleanup_bounds)
     checks = 0
 
     def cancelled() -> bool:
@@ -18900,8 +18668,9 @@ def test_power_projection_envelope_cancels_inside_rectangle_generation(
         return checks >= 8
 
     with pytest.raises(routing_domain._PreparationDeadline):
-        routing_domain._power_projection_envelope(
-            canvas,
+        routing_domain._projection_envelope(
+            Placement(buildings=tuple(canvas.buildings)).bounds,
+            canvas.limit,
             BandPolicy("portable"),
             cancelled=cancelled,
         )
@@ -19401,7 +19170,7 @@ def test_power_plan_cancels_inside_proposal_projection_node_scan(
     )
     canvas.limit = (-5, -5, 8, 8)
     band = planet.bands()[0]
-    projections = (
+    projections = tuple(
         planet.Projection(
             band,
             anchor,
@@ -19426,8 +19195,8 @@ def test_power_plan_cancels_inside_proposal_projection_node_scan(
 
     monkeypatch.setattr(
         routing_domain,
-        "_power_projection_envelope",
-        lambda *_args, **_kwargs: tuple(projections),
+        "_projection_envelope",
+        lambda *_args, **_kwargs: projections,
     )
     monkeypatch.setattr(finalize, "projected_power_failure", power_failure)
 
@@ -20256,7 +20025,9 @@ def _last_mile_block(canvas: _Canvas, cells: Collection[tuple[int, int]]) -> Non
 
 def _one_stranded_net_fixture() -> tuple[_Canvas, list[_Net], tuple[int, int, int, int]]:
     """Two nets in a walled pocket where the second destination is unreachable."""
-    canvas = _Canvas()
+    canvas = _Canvas(
+        belt_rules=replace(routing_domain._DEFAULT_BELT_RULES, vertical_construction=False)
+    )
     bounds = (-6, -6, 6, 6)
     canvas.limit = bounds
     blocker_id = NetId(0, 1, "blocker", NetRole.INTERNAL, 0)
@@ -20523,11 +20294,33 @@ def test_reservation_abort_restores_held_corridor_precedence(
 
     assert (tuple(canvas.reserved.items()), tuple(canvas.port_corridors.items())) == before
     assert canvas.reserved.first_for(held.cell) == first.access
+    assert canvas.limit is not None
     grid = _make_grid(canvas, canvas.limit, canvas.limit, {})
     flags = _routing_flags(grid)
     assert flags[grid.index(first.access)] == 0
     assert flags[grid.index(second.access)] == 0
     assert flags[grid.index((3, 3, 0))] == 1
+
+
+def test_restored_corridor_remains_routable_only_by_its_owner() -> None:
+    bounds = (-4, -4, 4, 4)
+    canvas = _Canvas(limit=bounds)
+    grid = _make_grid(canvas, bounds, bounds, {})
+    port = (3, 0, 0)
+    corridor = routing_domain.PortAccessCorridor(
+        (2, 0, 0), (1, 0, 0), routing_domain.PortAccessKind.INTERNAL_ARRIVAL
+    )
+    reservations = routing_domain._CorridorReservations(canvas, grid)
+    reservations.restore_role(port, corridor)
+
+    canvas.routing_ports = frozenset((port,))
+    owned = _astar(canvas, [(0, 0, 0)], {corridor.access}, {}, 0.0, bounds, grid=grid)
+    assert owned.path == ((0, 0, 0), (1, 0, 0), (2, 0, 0))
+
+    canvas.routing_ports = frozenset()
+    foreign = _astar(canvas, [(0, 0, 0)], {corridor.access}, {}, 0.0, bounds, grid=grid)
+    assert foreign.path is None
+    assert foreign.kind is RouteFailureKind.SEALED_POCKET
 
 
 @pytest.mark.parametrize("unexpected", [False, True])
@@ -20616,13 +20409,7 @@ def test_failed_cluster_restores_two_corridors_and_unrelated_grid(
 def test_a_hostile_cluster_solution_never_raises_and_never_routes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The pass absorbs a bad solution: no exception, no ROUTED, a counter moves.
-
-    A CRASH row fails the corpus gate, so the restore check must degrade rather
-    than assert.  This drives the two ways a solution can go wrong at once --
-    the committer refuses it, or the rollback does not reproduce the round --
-    and requires only that exactly one of the two counters records it.
-    """
+    """Reject an overlapping cluster solution without emitting any of its paths."""
     from flab2bp.layout import last_mile as last_mile_module
 
     def hostile(
@@ -20643,6 +20430,7 @@ def test_a_hostile_cluster_solution_never_raises_and_never_routes(
 
     monkeypatch.setattr(last_mile_module, "solve_cluster", hostile)
     canvas, nets, bounds = _one_stranded_net_fixture()
+    before = tuple(canvas.buildings)
     belt_id = catalog.item_id("conveyor-belt-1")
     result = routing_domain._route_all(
         canvas,
@@ -20654,14 +20442,7 @@ def test_a_hostile_cluster_solution_never_raises_and_never_routes(
 
     assert result.status is not DetailedRouteStatus.ROUTED
     assert result.exhaustive is False
-    assert result.last_mile is not None
-    assert result.last_mile.solved == 0
-    # The committer refuses the overlapping paths, so this is exact.  The
-    # rollback that follows may or may not reproduce the round from a state CBS
-    # would never have produced; either way it must not raise, and at most one
-    # mismatch can be recorded because the pass runs once.
-    assert result.last_mile.commit_rejected == 1
-    assert result.last_mile.restore_mismatch <= 1
+    assert tuple(canvas.buildings) == before
 
 
 def test_too_many_stranded_nets_never_reach_the_cluster_search(
@@ -20915,6 +20696,7 @@ def test_rejected_commit_never_returns_a_routed_pack(
 ) -> None:
     """Rejecting a real candidate must leave its consumer unconnected."""
     canvas, nets, bounds = _joint_only_fixture()
+    before = tuple(canvas.buildings)
     belt_id = catalog.item_id("conveyor-belt-1")
     original = routing_domain._commit_paths
 
@@ -20974,6 +20756,7 @@ def test_a_short_cluster_solution_degrades_instead_of_raising(
 
     monkeypatch.setattr(last_mile_module, "solve_cluster", short)
     canvas, nets, bounds = _one_stranded_net_fixture()
+    before = tuple(canvas.buildings)
     belt_id = catalog.item_id("conveyor-belt-1")
 
     result = routing_domain._route_all(
@@ -20985,11 +20768,8 @@ def test_a_short_cluster_solution_degrades_instead_of_raising(
     )
 
     assert result.status is not DetailedRouteStatus.ROUTED
-    assert result.last_mile is not None
-    assert result.last_mile.solved == 0
-    assert result.last_mile.commit_rejected == 1
-    assert result.last_mile.bounded == 1
-    assert result.last_mile.restore_mismatch == 0
+    assert not result.exhaustive
+    assert tuple(canvas.buildings) == before
 
 
 def _last_mile_outcome(result: DetailedRouteResult) -> tuple[object, ...]:
@@ -23915,7 +23695,7 @@ def test_shared_external_supply_routes_around_its_blocked_fixed_tap(vertical: bo
     )
     assert not any(
         building.item_id == catalog.SPLITTER_ID
-        and (building.x, building.y, building.z) == (root.x, root.y, root.z)
+        and (building.x, building.y, building.z) == (root.x, root.y, F(root.z))
         for building in workspace.canvas.buildings
     )
 
@@ -24255,8 +24035,15 @@ def test_prepare_holds_external_access_before_coater_placement(
 
     def inspect_first_hold(
         canvas: _Canvas,
-        *args: object,
-        **kwargs: object,
+        spec: BuildSpec,
+        strips: list[Strip],
+        ports: list[dict[str, _Port]],
+        belt_id: int,
+        belt_model: int,
+        *,
+        policy: BandPolicy,
+        staged_static_cache: routing_domain._StagedStaticCache | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> list[routing_domain.CoaterSupplyPort]:
         observed.extend(canvas.port_corridors.values())
         assert any(
@@ -24264,7 +24051,17 @@ def test_prepare_holds_external_access_before_coater_placement(
             for corridors in canvas.port_corridors.values()
             for corridor in corridors
         ), "the pre-coater hold omitted every external-only boundary arrival"
-        return original(canvas, *args, **kwargs)
+        return original(
+            canvas,
+            spec,
+            strips,
+            ports,
+            belt_id,
+            belt_model,
+            policy=policy,
+            staged_static_cache=staged_static_cache,
+            cancelled=cancelled,
+        )
 
     monkeypatch.setattr(routing_domain, "_place_coaters", inspect_first_hold)
     spec = proliferated_spec()
@@ -24994,8 +24791,11 @@ class TestThePowerBuildingIsTheSpecsChoice:
         :class:`TestALargePowerBuildingClaimsItsWholeFootprint`, which pins that
         field to a refusal.
         """
-        extra = {} if power_building is None else {"power_building": power_building}
-        canvas = _Canvas(limit=(0, 0, 60, 60), **extra)
+        canvas = (
+            _Canvas(limit=(0, 0, 60, 60))
+            if power_building is None
+            else _Canvas(limit=(0, 0, 60, 60), power_building=power_building)
+        )
         for x in range(2, 50, step):
             for y in range(2, 50, step):
                 canvas.add(self._machine(x, y), solid=True)

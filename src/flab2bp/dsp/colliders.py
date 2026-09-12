@@ -1139,6 +1139,15 @@ def collisions(
         for b in buildings
     ]
     targets = [target_boxes(b, *poses[i]) for i, b in enumerate(buildings)]
+    if len(buildings) == 2:
+        # Static placement probes already selected one candidate/obstacle pair.
+        # A spatial hash cannot prune that pair; constructing its 54 neighbor
+        # sets costs far more than the native overlap query itself.
+        if any_box_overlap(_query_boxes(buildings[0], *poses[0]), targets[1]) or any_box_overlap(
+            _query_boxes(buildings[1], *poses[1]), targets[0]
+        ):
+            return [(0, 1)]
+        return []
 
     # Broad phase.  Every build collider is well under this, so one cell plus
     # its 26 neighbours bounds any overlap.

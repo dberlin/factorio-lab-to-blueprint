@@ -33,12 +33,12 @@ import pytest
 from flab2bp.dsp import catalog, colliders
 from flab2bp.dsp.records import is_belt
 from flab2bp.lab.techs import belt_rules_for_url
-from flab2bp.layout import freeform, routing_domain, validate
+from flab2bp.layout import finalize, routing_domain, validate
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.base import Placement
+from flab2bp.layout.base import Facing, PlacedBuilding, Placement
 from flab2bp.layout.coater_mode import CoaterMode, coater_mode
 from flab2bp.layout.freeform import _COATER_WEST_CHANNEL, FreeformLayout, plan_strips
-from flab2bp.layout.routing_domain import WEST_CHANNEL, Strip, _Canvas, _Port
+from flab2bp.layout.routing_domain import WEST_CHANNEL, _Canvas, _Port
 from flab2bp.layout.strip_variants import CargoDomain
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 
@@ -92,14 +92,14 @@ def _arm(monkeypatch: pytest.MonkeyPatch, arm: str) -> None:
 def _lane_port(canvas: _Canvas, tiles: int, *, item: str = "iron-ingot") -> _Port:
     indices = [
         canvas.add(
-            freeform.PlacedBuilding(
+            PlacedBuilding(
                 item_id=catalog.item_id("conveyor-belt-2"),
                 model_index=catalog.building(catalog.item_id("conveyor-belt-2")).model_index,
                 x=x,
                 y=0,
                 width=1,
                 height=1,
-                yaw=freeform.Facing.EAST.value,
+                yaw=Facing.EAST.value,
                 carries_item=item,
             )
         )
@@ -222,17 +222,12 @@ def test_off_is_still_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not coater_mode().is_node
 
 
-def test_strip_has_no_coater_node_field() -> None:
-    """The packed arms are gone, so no Strip is a rectangle of belt."""
-    assert "coater_node" not in {f.name for f in dataclasses.fields(Strip)}
-
-
 # --- the seat rule ---------------------------------------------------------
 
 
 def test_half_span_is_derived_per_yaw_not_assumed_to_be_one() -> None:
     """Design risk 6: at yaw 0 the body does not extend along the lane at all."""
-    assert routing_domain._coater_body_half_span(freeform.Facing.EAST.value) == 1
+    assert routing_domain._coater_body_half_span(Facing.EAST.value) == 1
     assert routing_domain._coater_body_half_span(0.0) == 0
 
 
@@ -249,7 +244,7 @@ def test_off_offers_a_seat_whose_body_covers_the_lane_head(
     port = _lane_port(canvas, 4)
     seats = routing_domain._coater_seats(canvas, port, west_channel=_COATER_WEST_CHANNEL)
     assert [x for x, _ in seats] == [1, 2]
-    half = routing_domain._coater_body_half_span(freeform.Facing.EAST.value)
+    half = routing_domain._coater_body_half_span(Facing.EAST.value)
     assert seats[0][0] - half == port.x, "the first seat's body covers the head"
 
 
@@ -265,7 +260,7 @@ def test_a_narrowed_seat_never_covers_either_routing_port(
     port = _lane_port(canvas, 5)
     seats = routing_domain._coater_seats(canvas, port, west_channel=_COATER_WEST_CHANNEL)
     assert [x for x, _ in seats] == [2]
-    half = routing_domain._coater_body_half_span(freeform.Facing.EAST.value)
+    half = routing_domain._coater_body_half_span(Facing.EAST.value)
     assert all(port.x < x - half and x + half < port.x1 for x, _ in seats)
 
 
@@ -306,7 +301,7 @@ def test_placed_bans_the_area_one_rival(
     belt_item = catalog.item_id("conveyor-belt-2")
     belt_model = catalog.building(belt_item).model_index
     coater = catalog.building(catalog.SPRAY_COATER_ID)
-    body = freeform.PlacedBuilding(
+    body = PlacedBuilding(
         item_id=catalog.SPRAY_COATER_ID,
         model_index=coater.model_index,
         x=54,
@@ -314,7 +309,7 @@ def test_placed_bans_the_area_one_rival(
         z=F(0),
         width=1,
         height=1,
-        yaw=freeform.Facing.EAST.value,
+        yaw=Facing.EAST.value,
     )
 
     def ban(arm: str) -> dict[tuple[int, int], set[int]]:
@@ -428,8 +423,36 @@ def test_transverse_emitted_supply_passes_flat_certification(
 def test_node_admission_reserves_the_transverse_supply_approach() -> None:
     canvas = _Canvas()
     assert routing_domain._coater_node_site_is_clear(canvas, 0, 0)
-    canvas.add(freeform.PlacedBuilding(2002, 36, 1, -1, z=F(1)))
+    canvas.add(PlacedBuilding(2002, 36, 1, -1, z=F(1)))
     assert not routing_domain._coater_node_site_is_clear(canvas, 0, 0)
+
+
+@pytest.mark.parametrize(
+    "core,near",
+    [
+        ((0, 0, 199, 153), (50, 0)),
+        ((0, 0, 153, 199), (0, 50)),
+    ],
+)
+def test_node_site_keeps_its_supply_inside_a_legal_band(
+    core: tuple[int, int, int, int],
+    near: tuple[int, int],
+) -> None:
+    canvas = _Canvas()
+    envelope = finalize.band_policy_search_envelope(
+        BandPolicy("portable"), perimeter=routing_domain._ENTRY_RING
+    )
+
+    def fits(site: tuple[int, int]) -> bool:
+        x, y = site
+        width = max(core[2], x + routing_domain._COATER_NODE_TILES - 1) - min(core[0], x) + 1
+        height = max(core[3], y) - min(core[1], y - 1) + 1
+        return bool(envelope.frame_candidates(width, height))
+
+    nearest = routing_domain._coater_node_site(canvas, near, core=core, envelope=None)
+    assert nearest is not None and not fits(nearest)
+    admitted = routing_domain._coater_node_site(canvas, near, core=core, envelope=envelope)
+    assert admitted is not None and fits(admitted)
 
 
 # --- end to end ------------------------------------------------------------

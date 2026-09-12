@@ -1,265 +1,182 @@
 from __future__ import annotations
 
-import os
-from collections.abc import Callable, Collection, Mapping
-from typing import Any
+from array import array
+from dataclasses import replace
+from fractions import Fraction
 
 import pytest
 
 from flab2bp.lab.techs import belt_rules_for_url
-from flab2bp.layout import route_kernel, routing_domain
-from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.base import NoValidLayout
-from flab2bp.layout.freeform import FreeformLayout
+from flab2bp.layout import routing_domain
+from flab2bp.layout.geometric_router import GeometricQuery, route
+from flab2bp.layout.geometric_world import GeometricWorld
 from flab2bp.layout.route_feedback import RouteFailureKind
-from flab2bp.layout.routing_domain import _PathSearchResult
-from flab2bp.spec import BuildSpec
-from scripts.route_bench import _snapshot
-from tests.layout.test_freeform import plastic_spec, two_stage_spec
 
 _BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
 
 
-Cell = tuple[int, int, int]
-Case = dict[str, Any]
+def test_ramp_via_alias_does_not_lower_the_route_start() -> None:
+    bounds = (0, 0, 2, 0)
+    canvas = routing_domain._Canvas(
+        limit=bounds, belt_rules=replace(_BELT_RULES, vertical_construction=False)
+    )
+    start, goal = (1, 0, 1), (0, 0, 0)
+    free = {start, (2, 0, 1), goal}
+    canvas.guard.update(
+        (x, 0, level)
+        for x in range(3)
+        for level in range(canvas.levels)
+        if (x, 0, level) not in free
+    )
 
+    result = routing_domain._astar(canvas, [start], {goal}, {}, 1.0, bounds)
 
-def _capture_searches(spec: BuildSpec, budget_s: float) -> list[Case]:
-    """Replayable snapshots of every real search one Freeform lay_out makes."""
-    original = routing_domain._astar
-    cases: list[Case] = []
-
-    def spy(
-        canvas: Any,
-        starts: list[Cell],
-        goals: set[Cell],
-        history: dict[Cell, float],
-        pressure: float,
-        bounds: tuple[int, int, int, int],
-        budget: dict[str, int] | None = None,
-        deadline: float | None = None,
-        blame: dict[Cell, float] | None = None,
-        grid: Any = None,
-        owned_starts: Collection[Cell] = (),
-        released_starts: Collection[Cell] = (),
-        forbidden: Collection[Cell] = (),
-        blocking_owners: Mapping[Cell, int] | None = None,
-        *,
-        extra_edges: dict[int, tuple[tuple[int, float], ...]] | None = None,
-        deadline_check_every: int | None = None,
-        reverse: bool = False,
-    ) -> _PathSearchResult:
-        shot_canvas, shot_grid, shot_hist = _snapshot(canvas, grid, history)
-        cases.append(
-            {
-                "canvas": shot_canvas,
-                "grid": shot_grid,
-                "history": shot_hist,
-                "starts": list(starts),
-                "goals": set(goals),
-                "pressure": pressure,
-                "bounds": bounds,
-                "owned_starts": tuple(owned_starts),
-                "released_starts": tuple(released_starts),
-                "forbidden": tuple(forbidden),
-                "blocking_owners": None if blocking_owners is None else dict(blocking_owners),
-                "extra_edges": None if extra_edges is None else dict(extra_edges),
-                "deadline_check_every": deadline_check_every,
-                "reverse": reverse,
-            }
-        )
-        return original(
-            canvas,
-            starts,
-            goals,
-            history,
-            pressure,
-            bounds,
-            budget,
-            deadline,
-            blame,
-            grid,
-            owned_starts,
-            released_starts,
-            forbidden,
-            blocking_owners,
-            extra_edges=extra_edges,
-            deadline_check_every=deadline_check_every,
-            reverse=reverse,
-        )
-
-    routing_domain._astar = spy
-    try:
-        FreeformLayout(
-            belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=1
-        ).lay_out(spec, time_budget_s=budget_s)
-    except NoValidLayout:
-        pass
-    finally:
-        routing_domain._astar = original
-    return cases
-
-
-def _require_both_backends() -> Callable[..., object]:
-    """The compiled loop, or skip -- but only when it was switched OFF on purpose.
-
-    A comparison of the two backends needs both, and ``FLAB2BP_ROUTE_KERNEL=python``
-    is a deliberate request for one.  Anything else missing the extension is a
-    build that did not happen, which must fail rather than quietly skip: a parity
-    test that reports "skipped" when the thing it compares against is absent is a
-    parity test that never runs.
-    """
-    if os.environ.get("FLAB2BP_ROUTE_KERNEL") == "python":
-        pytest.skip("FLAB2BP_ROUTE_KERNEL=python switches the compiled backend off")
-    assert route_kernel.compiled_available()
-    compiled = route_kernel._compiled_astar
-    assert compiled is not None
-    return compiled
-
-
-def _replay(
-    case: Case,
-    budget: dict[str, int] | None = None,
-    *,
-    deadline: float | None = None,
-    deadline_check_every: int | None = None,
-) -> _PathSearchResult:
-    return routing_domain._astar(
-        case["canvas"],
-        case["starts"],
-        case["goals"],
-        case["history"],
-        case["pressure"],
-        case["bounds"],
-        {"left": 1 << 40} if budget is None else budget,
-        deadline,
-        {},
-        case["grid"],
-        case["owned_starts"],
-        case["released_starts"],
-        case["forbidden"],
-        case["blocking_owners"],
-        extra_edges=case["extra_edges"],
-        deadline_check_every=(
-            case["deadline_check_every"] if deadline_check_every is None else deadline_check_every
-        ),
-        reverse=case["reverse"],
+    assert result.path is not None
+    profile = routing_domain._altitude_profile(result.path, ramped=canvas.ramped)
+    assert profile is not None
+    assert profile[0] == start[2] * routing_domain._LEVEL_HEIGHT
+    assert profile[-1] == goal[2] * routing_domain._LEVEL_HEIGHT
+    assert all(
+        routing_domain._legal_link(*a[:2], za, *b[:2], zb, ramped=canvas.ramped)
+        for a, b, za, zb in zip(result.path, result.path[1:], profile, profile[1:], strict=False)
     )
 
 
-@pytest.mark.parametrize("make_spec", [two_stage_spec, plastic_spec])
-def test_compiled_astar_matches_python_on_real_searches(
-    make_spec: Callable[[], BuildSpec], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _require_both_backends()
-    cases = _capture_searches(make_spec(), budget_s=4.0)
-    assert cases
+def test_unavoidable_goal_history_keeps_a_short_route_within_budget() -> None:
+    world = GeometricWorld(
+        nx=4,
+        ny=1,
+        nz=1,
+        gx0=0,
+        gy0=0,
+        flags=bytearray([1] * 4),
+        history=array("d", (0.0, 0.0, 0.0, 80.0)),
+        transitions=(((1, 0, 0, False, 1.0), (-1, 0, 0, False, 1.0)),),
+    )
 
-    compiled = [_replay(case) for case in cases]
-    monkeypatch.setattr(route_kernel, "_compiled_astar", None)
-    assert route_kernel.selected_backend() == "python"
-    python = [_replay(case) for case in cases]
+    result = route(GeometricQuery(world, (0,), (3,), 1.0, 16))
 
-    for compiled_result, python_result in zip(compiled, python, strict=True):
-        assert compiled_result.path == python_result.path
-        assert compiled_result.kind == python_result.kind
-        assert compiled_result.wall == python_result.wall
-        assert compiled_result.expansions == python_result.expansions
-
-
-def test_compiled_astar_honours_expansion_cap_and_budget(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Both backends must agree on the two exits the parity replay cannot reach.
-
-    ``test_compiled_astar_matches_python_on_real_searches`` replays with
-    ``left = 1 << 40`` and no deadline, so no captured case ever leaves through a
-    budget or cap path -- and those are the exits carrying the deliberate +1
-    asymmetry (``start_left - expansions + 1`` when the cap or the deadline
-    stopped the search, ``start_left - expansions`` when the budget ran out).
-    Getting that wrong in one backend changes how many nodes every later net in
-    a routing pass may spend, so it is compared here rather than assumed.
-    """
-    compiled = _require_both_backends()
-    cases = _capture_searches(two_stage_spec(), budget_s=2.0)
-    found = [case for case in cases if _replay(case).expansions >= 3]
-    assert found
-    case = found[0]
-
-    def under(
-        backend: Callable[..., object] | None,
-        budget: dict[str, int],
-        max_expansions: int | None = None,
-    ) -> _PathSearchResult:
-        with monkeypatch.context() as forced:
-            forced.setattr(route_kernel, "_compiled_astar", backend)
-            if max_expansions is not None:
-                forced.setattr(routing_domain, "_MAX_EXPANSIONS", max_expansions)
-            return _replay(case, budget)
-
-    # The shared budget runs out: charged for the expansion that hit the wall.
-    cython_budget, python_budget = {"left": 3}, {"left": 3}
-    from_cython = under(compiled, cython_budget)
-    from_python = under(None, python_budget)
-    assert from_cython == from_python
-    assert cython_budget == python_budget
-    assert from_cython.path is None
-    assert from_cython.kind is RouteFailureKind.BUDGET
-    assert from_cython.expansions == 3
-    assert cython_budget["left"] == 0
-
-    # The expansion cap fires first: charged one FEWER than it expanded.
-    cython_cap, python_cap = {"left": 1 << 40}, {"left": 1 << 40}
-    from_cython = under(compiled, cython_cap, max_expansions=2)
-    from_python = under(None, python_cap, max_expansions=2)
-    assert from_cython == from_python
-    assert cython_cap == python_cap
-    assert from_cython.kind is RouteFailureKind.BUDGET
-    assert from_cython.expansions == 3  # cap + 1, exactly as the Python loop counts it
-    assert cython_cap["left"] == (1 << 40) - 2
+    assert result.kind == "routed"
+    assert result.path == (0, 1, 2, 3)
+    assert result.cost == 83.0
+    assert result.metrics["charged_work"] <= 16
 
 
-def test_compiled_astar_deadline_checkpoint_preserves_raw_telemetry_and_budget(
+def test_interval_search_keeps_interior_optimum_when_occupancy_changes() -> None:
+    # The cheap path changes levels at x=4 inside an affine arrival interval.
+    # Considering only its endpoints and the goal's x chooses the 7.5 bypass.
+    world = GeometricWorld(
+        nx=9,
+        ny=1,
+        nz=3,
+        gx0=0,
+        gy0=0,
+        flags=bytearray([1] * 27),
+        history=None,
+        transitions=(
+            ((1, 0, 0, False, 1.25), (-1, 0, 0, False, 1.25), (2, 0, 1, True, 3.0)),
+            ((1, 0, 0, False, 1.25), (-1, 0, 0, False, 1.25)),
+            (
+                (1, 0, 0, False, 0.5),
+                (-1, 0, 0, False, 0.5),
+                (0, 0, -2, False, 2.0),
+                (6, 0, -1, False, 7.5),
+            ),
+        ),
+    )
+    query = GeometricQuery(world, (2,), (19,), 1.0, 10_000)
+
+    assert route(query).cost == 7.0
+
+    # Reusing the movement topology must not retain the now-blocked ramp via.
+    world.flags[15] = 0
+    assert route(query).cost == 7.5
+
+    world.flags[15] = 1
+    assert route(query).cost == 7.0
+
+
+def test_goal_pocket_reports_incoming_ramp_via_owner_within_budget() -> None:
+    bounds = (0, 0, 100, 100)
+    canvas = routing_domain._Canvas(
+        limit=bounds,
+        belt_rules=replace(_BELT_RULES, max_z=Fraction(1), vertical_construction=False),
+    )
+    start, goal, via = (48, 50, 0), (50, 50, 1), (49, 50, 0)
+    canvas.guard.update((x, y, 1) for x in range(101) for y in range(101) if (x, y, 1) != goal)
+    canvas.guard.update({(51, 50, 0), (50, 49, 0), (50, 51, 0)})
+    canvas.blocked[via] = routing_domain._TENTATIVE
+    budget = {"left": 1024}
+
+    result = routing_domain._astar(
+        canvas, [start], {goal}, {}, 1.0, bounds, budget, blocking_owners={via: 7}
+    )
+
+    assert result.kind is RouteFailureKind.SEALED_POCKET
+    assert result.wall == (via,)
+    assert 0 < result.expansions < 1024
+    assert budget["left"] == 1024 - result.expansions
+
+    del canvas.blocked[via]
+    opened = routing_domain._astar(canvas, [start], {goal}, {}, 1.0, bounds)
+    assert opened.path is not None
+    assert opened.path[0] == start
+    assert opened.path[-1] == goal
+
+
+def test_unequal_goal_history_preserves_the_cheapest_destination() -> None:
+    bounds = (-10, -10, 10, 10)
+    canvas = routing_domain._Canvas(limit=bounds)
+    near, cheap = (0, 1, 0), (4, 0, 0)
+    history = {near: 100.0, cheap: 4.0}
+    grid = routing_domain._make_grid(canvas, bounds, bounds, history)
+
+    result = routing_domain._astar(
+        canvas, [(0, 0, 0)], {near, cheap}, history, 1.0, bounds, grid=grid
+    )
+
+    assert result.path == tuple((x, 0, 0) for x in range(5))
+
+
+def test_detailed_search_charges_shared_budget_without_exceeding_its_cap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    compiled = _require_both_backends()
-    cases = _capture_searches(two_stage_spec(), budget_s=2.0)
-    found = [case for case in cases if _replay(case).expansions >= 3]
-    assert found
-    case = found[0]
+    bounds = (0, 0, 7, 0)
+    canvas = routing_domain._Canvas(
+        limit=bounds, belt_rules=replace(_BELT_RULES, max_z=Fraction(0))
+    )
+    budget = {"left": 3}
+    exhausted = routing_domain._astar(canvas, [(0, 0, 0)], {(7, 0, 0)}, {}, 1.0, bounds, budget)
+    assert exhausted.path is None
+    assert exhausted.kind is RouteFailureKind.BUDGET
+    assert 0 < exhausted.expansions <= 3
+    assert budget["left"] == 3 - exhausted.expansions
 
-    def under(
-        backend: Callable[..., object] | None,
-        budget: dict[str, int],
-    ) -> _PathSearchResult:
-        expired_checks = 0
-
-        def expire_at_checkpoint(_deadline: float | None) -> bool:
-            nonlocal expired_checks
-            expired_checks += 1
-            return expired_checks > 1
-
-        with monkeypatch.context() as forced:
-            forced.setattr(route_kernel, "_compiled_astar", backend)
-            forced.setattr(routing_domain, "_expired", expire_at_checkpoint)
-            return _replay(case, budget, deadline=0.0, deadline_check_every=1)
-
-    cython_budget, python_budget = {"left": 3}, {"left": 3}
-    from_cython = under(compiled, cython_budget)
-    from_python = under(None, python_budget)
-
-    assert from_cython == from_python
-    assert cython_budget == python_budget
-    assert from_cython.path is None
-    assert from_cython.kind is RouteFailureKind.BUDGET
-    assert from_cython.expansions == 1
-    assert cython_budget["left"] == 3
+    monkeypatch.setattr(routing_domain, "_MAX_EXPANSIONS", 2)
+    shared = {"left": 1000}
+    capped = routing_domain._astar(canvas, [(0, 0, 0)], {(7, 0, 0)}, {}, 1.0, bounds, shared)
+    assert capped.path is None
+    assert capped.kind is RouteFailureKind.BUDGET
+    assert 0 < capped.expansions <= 2
+    assert shared["left"] == 1000 - capped.expansions
 
 
-def test_search_from_unpadded_corner_does_not_wrap_into_other_columns(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dataclasses import replace
-    from fractions import Fraction
+def test_expired_detailed_search_does_not_spend_shared_budget() -> None:
+    bounds = (0, 0, 7, 0)
+    canvas = routing_domain._Canvas(limit=bounds)
+    budget = {"left": 1000}
 
+    result = routing_domain._astar(
+        canvas, [(0, 0, 0)], {(7, 0, 0)}, {}, 1.0, bounds, budget, deadline=0.0
+    )
+
+    assert result.path is None
+    assert result.kind is RouteFailureKind.BUDGET
+    assert result.expansions == 0
+    assert budget["left"] == 1000
+
+
+def test_search_from_unpadded_corner_does_not_wrap_into_other_columns() -> None:
     canvas = routing_domain._Canvas(
         belt_rules=replace(routing_domain._DEFAULT_BELT_RULES, max_z=Fraction(0))
     )
@@ -267,14 +184,8 @@ def test_search_from_unpadded_corner_does_not_wrap_into_other_columns(
     canvas.blocked[(1, 0, 0)] = 0
     box = (0, 0, 1, 1)
     grid = routing_domain._make_grid(canvas, box, box, {})
-    monkeypatch.setattr(route_kernel, "_compiled_astar", None)
+
     result = routing_domain._astar(canvas, [(0, 0, 0)], {(1, 1, 0)}, {}, 1.0, box, grid=grid)
+
     assert result.path is None
     assert result.kind is RouteFailureKind.SEALED_POCKET
-    assert result.expansions == 1
-
-
-def test_backend_falls_back_when_extension_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(route_kernel, "_compiled_astar", None)
-    assert not route_kernel.compiled_available()
-    assert route_kernel.selected_backend() == "python"

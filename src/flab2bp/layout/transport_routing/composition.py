@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from fractions import Fraction
 
 from flab2bp.dsp import catalog
+from flab2bp.layout import finalize
 from flab2bp.layout import routing_domain as rd
 from flab2bp.layout.band_policy import BAND_DIMENSIONS, BandPolicy
-from flab2bp.layout.base import Placement
+from flab2bp.layout.base import Placement, PlacedBuilding
 from flab2bp.layout.slots import assign_sorter_slots
 from flab2bp.layout.strip_variants import CargoDomain
 from flab2bp.spec import BuildSpec
@@ -21,6 +23,9 @@ from .construction import ConstructionRefusal, Constructor, Terminal
 from .flights import Flight
 from .inventory import Inventory, TransportDemand, prepare_inventory
 from .routing import RoutingRun, TemplateConstructor
+
+# Two facing two-cell terminal approaches need distinct riser columns.
+_BOUNDARY_CLEARANCE = 2 + 1 + 2
 
 
 def _sink_terminals(
@@ -192,6 +197,39 @@ def _proliferator_terminals(
     return leaves, roots
 
 
+@dataclass(frozen=True, slots=True)
+class BoundaryPlan:
+    rows: dict[int, int]
+    supply_rows: tuple[int, ...]
+    width: int
+    height: int
+
+
+def _boundary_plan(inventory: Inventory) -> BoundaryPlan:
+    roots = external_roots(inventory)
+    families: dict[int, list[int]] = defaultdict(list)
+    for ordinal, root in roots.items():
+        families[root].append(ordinal)
+    rows: dict[int, int] = {}
+    y = 0
+    width = _BOUNDARY_CLEARANCE
+    for family in families.values():
+        # A plain boundary belt needs one row. Only a real splitter tree
+        # needs north/south approaches and the continuation-node pitch.
+        shared = len(family) > 1
+        row = y + (2 if shared else 0)
+        rows.update((ordinal, row) for ordinal in family)
+        y += junctions.tree_extent(len(family)) if shared else 1
+        if shared:
+            width = _BOUNDARY_CLEARANCE + 4
+    supply_rows = tuple(range(y, y + len(inventory.supplies)))
+    height = max(
+        y + len(supply_rows),
+        sum(demand.role == "output" for demand in inventory.demands),
+    )
+    return BoundaryPlan(rows, supply_rows, width, height)
+
+
 def _bank_shelves(
     sizes: list[tuple[int, int]],
     height: int,
@@ -204,10 +242,7 @@ def _bank_shelves(
     for i in order:
         if sizes[i][1] > height:
             raise ConstructionRefusal(f"strip {i} exceeds the legal bank height")
-    boundary_height = max(
-        6 * (len(set(external_roots(inventory).values())) + len(inventory.supplies)),
-        3 * sum(demand.role == "output" for demand in inventory.demands),
-    )
+    boundary = _boundary_plan(inventory)
     selected: list[list[int]] = []
     selected_height = height
     best: tuple[int, int, int, int] | None = None
@@ -234,8 +269,12 @@ def _bank_shelves(
         supply_bounds = plan_proliferator_banks(inventory, limit).bounds
         supply_width = 0 if supply_bounds is None else max(0, 10 - supply_bounds[0])
         supply_height = 0 if supply_bounds is None else 4 + supply_bounds[3]
-        used_width = sum(bank_widths) + 24 * (len(banks) - 1) + 36 + supply_width
-        used_height = max(max(used_heights), boundary_height, supply_height) + 12
+        # The boxes already contain every mandatory launch/landing cell.
+        # One additional column carries a through track between adjacent banks.
+        used_width = (
+            sum(bank_widths) + len(banks) - 1 + boundary.width + _BOUNDARY_CLEARANCE + supply_width
+        )
+        used_height = max(max(used_heights), boundary.height, supply_height)
         score = (used_width * used_height, used_height, used_width, limit)
         if used_width <= width and used_height <= height + 12 and (best is None or score < best):
             best = score
@@ -245,7 +284,12 @@ def _bank_shelves(
 
 
 def construct(
-    spec: BuildSpec, rules: catalog.BeltAltitudeRules, policy: BandPolicy, session: RoutingRun
+    spec: BuildSpec,
+    rules: catalog.BeltAltitudeRules,
+    policy: BandPolicy,
+    session: RoutingRun,
+    *,
+    project_candidate: Callable[[Placement], Placement],
 ) -> Placement:
     budget = session.budget
     budget.check()
@@ -282,11 +326,16 @@ def construct(
             sink_families[demand.sink.belt].append(demand)
     source_nodes: dict[int, list[int]] = defaultdict(list)
     source_access: dict[int, int] = {}
+    source_extensions: dict[int, int] = {}
     strip_sources: dict[int, list[int]] = defaultdict(list)
     for belt, family in source_families.items():
         endpoint = family[0].source
         assert endpoint is not None
         source_access[belt] = len(strip_sources[endpoint.strip])
+        extension = 2 * source_access[belt]
+        if family[0].role == "local-coating":
+            extension += max(0, inventory.modules[endpoint.strip].width - endpoint.x)
+        source_extensions[belt] = extension
         strip_sources[endpoint.strip].append(belt)
         if len(family) > 1:
             source_nodes[endpoint.strip].append(belt)
@@ -296,17 +345,50 @@ def construct(
     for belt, family in sink_families.items():
         endpoint = family[0].sink
         assert endpoint is not None
-        sink_access[belt] = len(strip_sinks[endpoint.strip])
+        # Coating transfers approach along distinct consumer rows from the east.
+        # They need no global inlet/collector rank on the module's west edge.
+        sink_access[belt] = (
+            0
+            if family[0].role == "local-coating"
+            else sum(
+                sink_families[previous][0].role != "local-coating"
+                for previous in strip_sinks[endpoint.strip]
+            )
+        )
         strip_sinks[endpoint.strip].append(belt)
         if len(family) > 1:
             sink_nodes[endpoint.strip].append(belt)
     sizes: list[tuple[int, int]] = []
+    west_edges: list[int] = []
     for i, module in enumerate(inventory.modules):
         access = sum(junctions.tree_extent(len(source_families[belt])) for belt in source_nodes[i])
         access = max(
             access, sum(junctions.tree_extent(len(sink_families[belt])) for belt in sink_nodes[i])
         )
-        sizes.append((module.width + 8, module.height + 4 + access))
+        # Pack the complete fixed access envelope, not just strip/coater bodies.
+        # Ranked approaches must not meet a neighboring bank's launch risers.
+        west, east = 0, module.width
+        for belt in strip_sources[i]:
+            endpoint = source_families[belt][0].source
+            assert endpoint is not None
+            reach = max(
+                source_extensions[belt] + 2,
+                6 if len(source_families[belt]) > 1 else 0,
+            )
+            east = max(east, endpoint.x + reach + 1)
+        for belt in strip_sinks[i]:
+            endpoint = sink_families[belt][0].sink
+            assert endpoint is not None
+            reach = max(
+                2 * (sink_access[belt] + 1),
+                6 if len(sink_families[belt]) > 1 else 0,
+            )
+            west = min(west, endpoint.x - reach)
+        west_edges.append(west)
+        # The last junction is at height + 2 + 6 * (nodes - 1), and
+        # its final north leaf ends two cells later. One spare row remains
+        # in `access`; strips without junctions need no extra south apron.
+        sizes.append((east - west, module.height + access))
     band_height, band_width = max(
         (height, width)
         for height, width in BAND_DIMENSIONS
@@ -314,20 +396,16 @@ def construct(
     )
     banks, bank_height = _bank_shelves(sizes, band_height - 12, band_width, inventory, budget)
     origins: dict[int, tuple[int, int]] = {}
-    bank_widths: list[int] = []
+    bank_edges: list[tuple[int, int]] = []
     x = 10
     for bank in banks:
         width = max(sizes[i][0] for i in bank)
-        bank_widths.append(width)
+        bank_edges.append((x, x + width))
         y = 10
         for i in bank:
-            origins[i] = (x, y)
+            origins[i] = (x - west_edges[i], y)
             y += sizes[i][1]
-        x += width + 24
-    bank_edges = [
-        (origins[bank[0]][0], origins[bank[0]][0] + width)
-        for bank, width in zip(banks, bank_widths, strict=True)
-    ]
+        x += width + 1
     x_tracks = tuple(
         ((left[1] + right[0]) // 2 for left, right in zip(bank_edges, bank_edges[1:], strict=False))
     )
@@ -341,7 +419,7 @@ def construct(
         )
     )
     constructor.set_tracks(x_tracks, y_tracks)
-    middle_x = 10 + bank_widths[0] + 12
+    middle_x = bank_edges[0][1]
     physical: dict[int, rd._Port] = {}
     prepared = rd._prepare_transport_inventory(
         spec,
@@ -370,6 +448,25 @@ def construct(
         },
     )
     constructor.canvas = prepared.canvas
+    # Coater admission shares the canvas's finite projection capacity. Establish
+    # this compiler's complete bank/boundary envelope before that stage; its
+    # machine-only fallback otherwise excludes not-yet-emitted fixed accesses.
+    supply_bounds = plan_proliferator_banks(inventory, bank_height).bounds
+    planned_left = bank_edges[0][0]
+    if supply_bounds is not None:
+        planned_left += supply_bounds[0] - 10
+    boundary = _boundary_plan(inventory)
+    boundary_height = max(
+        10 + bank_height,
+        10 + boundary.height,
+        14 + supply_bounds[3] if supply_bounds is not None else 10,
+    )
+    constructor.canvas.limit = (
+        planned_left - 12 - 8,
+        2,
+        bank_edges[-1][1] + 16,
+        boundary_height + 8,
+    )
     coaters = (
         rd._place_coaters(
             constructor.canvas,
@@ -410,7 +507,7 @@ def construct(
     for belt, family in source_families.items():
         port = physical[belt]
         if len(family) == 1:
-            if distance := (2 * source_access[belt]):
+            if distance := source_extensions[belt]:
                 terminal = constructor.belt((port.x + distance, port.y, port.z), family[0].item)
                 constructor.connect(
                     port,
@@ -453,9 +550,8 @@ def construct(
     )
     supply_sources, supply_roots = _proliferator_terminals(constructor, inventory, bank_height)
     flight_index = 0
-    external_index = 0
     output_index = 0
-    external_x = min(int(b.x) for b in constructor.canvas.buildings) - 12
+    external_x = min(int(b.x) for b in constructor.canvas.buildings) - boundary.width
     right_edge = max(p.x for p in physical.values()) + 6
     right_edge = (
         max(
@@ -470,7 +566,7 @@ def construct(
                 default=right_edge,
             ),
         )
-        + 8
+        + _BOUNDARY_CLEARANCE
     )
     shared_external: dict[int, list[TransportDemand]] = {}
     for item, _, members in inventory.shared_groups:
@@ -500,7 +596,7 @@ def construct(
             raise rd._PreparationDeadline
         if demand.role == "output":
             port = sources[demand.ordinal].port
-            target = constructor.belt((right_edge, 10 + 3 * output_index, 0), demand.item)
+            target = constructor.belt((right_edge, 10 + output_index, 0), demand.item)
             output_index += 1
             constructor.flight(
                 sources[demand.ordinal],
@@ -515,8 +611,9 @@ def construct(
             continue
         source = sources.get(demand.ordinal)
         if source is None:
-            root = constructor.belt((external_x, 10 + 6 * external_index, 0), demand.item)
-            external_index += 1
+            root = constructor.belt(
+                (external_x, 10 + boundary.rows[demand.ordinal], 0), demand.item
+            )
             if demand.ordinal in shared_external:
                 family = shared_external[demand.ordinal]
                 total = sum((rates[d.ordinal] for d in family), Fraction())
@@ -539,9 +636,9 @@ def construct(
             else:
                 source = Terminal(root, (1, 0))
         if demand.role == "local-coating":
-            # Node rows run away from the machine band in the same order that
-            # consumer access columns run west. Their nested transfers therefore
-            # share one overflight plane without crossing another coating link.
+            # Leave the coater row along the ground, then cross the consumer
+            # row from outside the machine's east edge. Turning west above the
+            # coater inlet roofs every global approach to that inlet.
             sink = sinks[demand.ordinal]
             local = Flight(
                 source,
@@ -549,7 +646,7 @@ def construct(
                 demand.item,
                 rates[demand.ordinal],
                 coating_level,
-                sink.port.x - 2,
+                source.port.x + 2,
                 demand.role,
             )
             constructor.connect(
@@ -572,8 +669,9 @@ def construct(
         )
         flight_index += 1
     for group_index, supply_plan in enumerate(inventory.supplies):
-        root = constructor.belt((external_x, 10 + 6 * external_index, 0), supply_plan.item)
-        external_index += 1
+        root = constructor.belt(
+            (external_x, 10 + boundary.supply_rows[group_index], 0), supply_plan.item
+        )
         if group_index in supply_roots:
             constructor.flight(
                 Terminal(root, (1, 0)),
@@ -604,16 +702,56 @@ def construct(
         )
         flight_index += 1
     constructor.finish()
-    constructor.canvas.limit = rd._core_bounds(constructor.canvas)
+    x0, y0, x1, y1 = rd._core_bounds(constructor.canvas)
+    rx0, ry0, rx1, ry1 = rd._power_reservation(constructor.canvas.power_building)
+    # A dense bank may fill its occupied envelope completely. Standing ground
+    # is not power demand: allow one real tower-clearance footprint outside
+    # the routed core, without adding an apron to any module or emitted area.
+    constructor.canvas.limit = (
+        x0 - (rx1 - rx0),
+        y0 - (ry1 - ry0),
+        x1 + (rx1 - rx0),
+        y1 + (ry1 - ry0),
+    )
     demand_box = (
         10,
         10,
         right_edge,
         max((oy + inventory.modules[i].height for i, (_, oy) in origins.items())),
     )
-    sites = rd._power_plan(constructor.canvas, demand_box, policy=policy, cancelled=cancelled)
-    constructor.canvas.keep_out.clear()
-    rd._place_power(constructor.canvas, sites)
-    placement = Placement(buildings=assign_sorter_slots(constructor.canvas.buildings))
+    projected: Placement | None = None
+
+    def complete_plan_failure(
+        towers: tuple[PlacedBuilding, ...],
+    ) -> finalize.ProjectionFailure | None:
+        nonlocal projected
+        budget.check()
+        candidate = Placement(
+            buildings=assign_sorter_slots((*constructor.canvas.buildings, *towers))
+        )
+        try:
+            projected = project_candidate(candidate)
+        except finalize.ProjectionRefusal as exc:
+            return exc.failures[0]
+        return None
+
+    try:
+        sites = rd._power_plan(
+            constructor.canvas,
+            demand_box,
+            policy=policy,
+            cancelled=cancelled,
+            complete_plan_failure=complete_plan_failure,
+        )
+        constructor.canvas.keep_out.clear()
+        rd._place_power(constructor.canvas, sites)
+    except rd._Unpowerable as exc:
+        if exc.failures:
+            raise finalize.ProjectionRefusal(exc.failures) from exc
+        raise ConstructionRefusal(str(exc)) from exc
+    if projected is None:
+        projected = project_candidate(
+            Placement(buildings=assign_sorter_slots(constructor.canvas.buildings))
+        )
     budget.check()
-    return placement
+    return projected

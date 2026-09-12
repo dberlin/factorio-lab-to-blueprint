@@ -84,6 +84,46 @@ def test_adjacent_coaters_are_supplied_without_coating_the_raw_branch() -> None:
     assert decoded.buildings == encoded.buildings
 
 
+def test_six_input_coater_modules_do_not_cross_the_neighboring_bank() -> None:
+    # Six coating transfers need separate launches without roofing their
+    # upstream inlet approaches or meeting the neighboring bank's risers.
+    inputs = {
+        item: Fraction(1, 15)
+        for item in (
+            "antimatter",
+            "electromagnetic-matrix",
+            "energy-matrix",
+            "gravity-matrix",
+            "information-matrix",
+            "structure-matrix",
+        )
+    }
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="universe-matrix",
+                machine_item_id="matrix-lab",
+                count=2,
+                proliferator_mode=ProliferatorMode.PRODUCTS,
+                inputs_per_machine=inputs,
+                outputs_per_machine={"universe-matrix": Fraction(1, 12)},
+            ),
+        ),
+        external_inputs={
+            **{item: rate * 2 for item, rate in inputs.items()},
+            "proliferator-3": Fraction(1, 75),
+        },
+        outputs={"universe-matrix": Fraction(1, 6)},
+        spray_lanes=dict.fromkeys(inputs, True),
+    )
+    placement = TransportRoutingKernel(belt_rules=_RULES, band_policy=_POLICY).lay_out(
+        spec, time_budget_s=15
+    )
+    report = validate.certify(placement, spec, belt_rules=_RULES, expect_power=True)
+    assert report.ok, report.errors
+    assert not report.skipped
+
+
 def test_explicit_coater_sites_cannot_overlap_another_node() -> None:
     spec = _mixed_motor()
     strips = freeform.plan_strips(spec, strip_len=48, band_policy=_POLICY)

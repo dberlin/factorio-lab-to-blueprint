@@ -64,22 +64,38 @@ class TransportRoutingKernel:
                 "transport_work_assignments": budget.counts.get("assignments", 0),
             }
 
+        def project_candidate(placement: Placement) -> Placement:
+            nonlocal stage
+            previous_stage = stage
+            try:
+                stage = "belt-tier-selection"
+                budget.check()
+                placement = retier_belts(placement, spec)
+                stage = "compaction"
+                budget.check()
+                placement = finalize.compact_open_boundary_belts(
+                    placement, spec, expect_power=True, belt_rules=self.belt_rules
+                )
+                stage = "projection"
+                budget.check()
+                placement = finalize.finalize_placement(
+                    placement,
+                    self.band_policy,
+                    cancelled=lambda: budget.clock() >= budget.deadline,
+                )
+            except finalize.ProjectionRefusal:
+                stage = previous_stage
+                raise
+            stage = previous_stage
+            return placement
+
         try:
-            placement = construct(spec, self.belt_rules, self.band_policy, session)
-            stage = "belt-tier-selection"
-            budget.check()
-            placement = retier_belts(placement, spec)
-            stage = "compaction"
-            budget.check()
-            placement = finalize.compact_open_boundary_belts(
-                placement, spec, expect_power=True, belt_rules=self.belt_rules
-            )
-            stage = "projection"
-            budget.check()
-            placement = finalize.finalize_placement(
-                placement,
+            placement = construct(
+                spec,
+                self.belt_rules,
                 self.band_policy,
-                cancelled=lambda: budget.clock() >= budget.deadline,
+                session,
+                project_candidate=project_candidate,
             )
             stage = "certification"
             budget.check()

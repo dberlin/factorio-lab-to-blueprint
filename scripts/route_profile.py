@@ -200,7 +200,6 @@ def install(tally: Tally) -> Callable[[], None]:
     orig_commit = routing_domain._commit_paths
     orig_make_grid = routing_domain._make_grid
     orig_refresh = routing_domain._Grid.refresh_history
-    orig_landmarks = routing_domain._Grid.build_landmarks
     orig_reserve = routing_domain._reserve_port_access
     orig_merge = routing_domain._merge_frontier
     orig_last_mile = last_mile.solve_cluster
@@ -222,8 +221,6 @@ def install(tally: Tally) -> Callable[[], None]:
         blocking_owners: Mapping[Cell, int] | None = None,
         *,
         extra_edges: dict[int, tuple[tuple[int, float], ...]] | None = None,
-        deadline_check_every: int | None = None,
-        reverse: bool = False,
     ) -> routing_domain._PathSearchResult:
         t0 = time.perf_counter()
         out = orig_astar(
@@ -242,8 +239,6 @@ def install(tally: Tally) -> Callable[[], None]:
             forbidden,
             blocking_owners,
             extra_edges=extra_edges,
-            deadline_check_every=deadline_check_every,
-            reverse=reverse,
         )
         dt = time.perf_counter() - t0
         tally.add("astar", dt)
@@ -344,11 +339,6 @@ def install(tally: Tally) -> Callable[[], None]:
         t0 = time.perf_counter()
         orig_refresh(self, history)
         tally.add("refresh_history", time.perf_counter() - t0)
-
-    def landmarks(self: routing_domain._Grid, count: int) -> None:
-        t0 = time.perf_counter()
-        orig_landmarks(self, count)
-        tally.add("build_landmarks", time.perf_counter() - t0)
 
     # Signature-agnostic on purpose: this only times the call, and pinning the
     # parameter list here is what broke the harness when the real
@@ -489,7 +479,6 @@ def install(tally: Tally) -> Callable[[], None]:
     routing_domain._commit_paths = commit
     routing_domain._make_grid = make_grid
     type.__setattr__(routing_domain._Grid, "refresh_history", refresh)
-    type.__setattr__(routing_domain._Grid, "build_landmarks", landmarks)
     routing_domain._reserve_port_access = reserve
     routing_domain._merge_frontier = merge
     last_mile.solve_cluster = timed_last_mile
@@ -500,7 +489,6 @@ def install(tally: Tally) -> Callable[[], None]:
         routing_domain._commit_paths = orig_commit
         routing_domain._make_grid = orig_make_grid
         type.__setattr__(routing_domain._Grid, "refresh_history", orig_refresh)
-        type.__setattr__(routing_domain._Grid, "build_landmarks", orig_landmarks)
         routing_domain._reserve_port_access = orig_reserve
         routing_domain._merge_frontier = orig_merge
         last_mile.solve_cluster = orig_last_mile
@@ -717,7 +705,6 @@ def main() -> int:
             "commit_paths",
             "make_grid",
             "refresh_history",
-            "build_landmarks",
             "reserve_port_access",
             "merge_frontier",
         ):
@@ -734,7 +721,6 @@ def main() -> int:
                 "commit_paths",
                 "make_grid",
                 "refresh_history",
-                "build_landmarks",
                 "reserve_port_access",
             )
         )

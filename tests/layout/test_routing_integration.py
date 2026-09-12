@@ -157,8 +157,8 @@ def test_capacity_frontier_charges_inherited_prefix_and_suffix() -> None:
 
 
 def test_overhead_prices_congestion_without_turning_it_into_a_wall() -> None:
-    from flab2bp.layout.geometric_router import overhead_path
-    from flab2bp.layout.geometric_world import GeometricWorld
+    from flab2bp.layout.routing_proposals import overhead_path
+    from flab2bp.layout.projection_world import GeometricWorld
 
     canvas = domain._Canvas(belt_rules=replace(domain._DEFAULT_BELT_RULES, max_z=Fraction(0)))
     world = GeometricWorld(canvas, history={(4, 0, 0): 40}, pressure=0.5)
@@ -170,8 +170,8 @@ def test_overhead_prices_congestion_without_turning_it_into_a_wall() -> None:
 
 
 def test_overhead_dogleg_connects_when_both_corner_routes_are_blocked() -> None:
-    from flab2bp.layout.geometric_router import overhead_path
-    from flab2bp.layout.geometric_world import GeometricWorld
+    from flab2bp.layout.routing_proposals import overhead_path
+    from flab2bp.layout.projection_world import GeometricWorld
 
     canvas = domain._Canvas(belt_rules=replace(domain._DEFAULT_BELT_RULES, max_z=Fraction(0)))
     canvas.guard.update({(3, 0, 0), (0, 3, 0)})
@@ -184,8 +184,8 @@ def test_overhead_dogleg_connects_when_both_corner_routes_are_blocked() -> None:
 def test_overhead_blocked_nearest_start_does_not_starve_clear_alternative(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from flab2bp.layout import geometric_router
-    from flab2bp.layout.geometric_world import GeometricWorld
+    from flab2bp.layout import routing_proposals
+    from flab2bp.layout.projection_world import GeometricWorld
 
     canvas = domain._Canvas(belt_rules=replace(domain._DEFAULT_BELT_RULES, max_z=Fraction(5)))
     canvas.guard.update((-1, y, z) for y in range(-4, 5) for z in range(canvas.levels))
@@ -195,12 +195,12 @@ def test_overhead_blocked_nearest_start_does_not_starve_clear_alternative(
         nonlocal remaining
         remaining -= 1
         if remaining <= 0:
-            raise geometric_router.Deadline
+            raise routing_proposals.Deadline
 
     # A deterministic query allowance: the unreachable nearest endpoint must
     # not consume every construction opportunity before the clear alternative.
-    monkeypatch.setattr(geometric_router, "check_deadline", bounded_work)
-    path = geometric_router.overhead_path(
+    monkeypatch.setattr(routing_proposals, "check_deadline", bounded_work)
+    path = routing_proposals.overhead_path(
         GeometricWorld(canvas),
         [(-2, 0, 0), (0, 3, 0)],
         {(0, 0, 0)},
@@ -213,8 +213,8 @@ def test_overhead_blocked_nearest_start_does_not_starve_clear_alternative(
 def test_rejected_ramp_approaches_do_not_starve_other_endpoints(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from flab2bp.layout import geometric_router
-    from flab2bp.layout.geometric_world import GeometricWorld
+    from flab2bp.layout import routing_proposals
+    from flab2bp.layout.projection_world import GeometricWorld
 
     canvas = domain._Canvas(belt_rules=replace(domain._DEFAULT_BELT_RULES, max_z=Fraction(1)))
     canvas.guard.update((-1, y, 0) for y in range(-32, 37))
@@ -229,12 +229,12 @@ def test_rejected_ramp_approaches_do_not_starve_other_endpoints(
         nonlocal remaining
         remaining -= 1
         if remaining <= 0:
-            raise geometric_router.Deadline
+            raise routing_proposals.Deadline
 
     # Both starts are clear. The nearest start's ceiling rejects its ramp
     # approaches; the farther start can cross its ground wall overhead.
-    monkeypatch.setattr(geometric_router, "check_deadline", bounded_work)
-    path = geometric_router.overhead_path(
+    monkeypatch.setattr(routing_proposals, "check_deadline", bounded_work)
+    path = routing_proposals.overhead_path(
         GeometricWorld(canvas),
         [(-4, 0, 0), (20, 0, 0)],
         {(0, 4, 0)},
@@ -248,8 +248,8 @@ def test_rejected_ramp_approaches_do_not_starve_other_endpoints(
 
 
 def test_overhead_keeps_searching_after_consumer_rejects_a_proposal() -> None:
-    from flab2bp.layout.geometric_router import overhead_path
-    from flab2bp.layout.geometric_world import GeometricWorld
+    from flab2bp.layout.routing_proposals import overhead_path
+    from flab2bp.layout.projection_world import GeometricWorld
 
     canvas = domain._Canvas(belt_rules=replace(domain._DEFAULT_BELT_RULES, max_z=Fraction(0)))
     world = GeometricWorld(canvas)
@@ -294,8 +294,8 @@ def test_live_splitter_withholds_downstream_but_not_upstream_merges() -> None:
 
 
 def test_complete_overhead_route_crosses_ground_wall_with_legal_ramps() -> None:
-    from flab2bp.layout.geometric_router import overhead_path
-    from flab2bp.layout.geometric_world import GeometricWorld
+    from flab2bp.layout.routing_proposals import overhead_path
+    from flab2bp.layout.projection_world import GeometricWorld
 
     canvas = domain._Canvas(
         limit=(0, 0, 16, 0),

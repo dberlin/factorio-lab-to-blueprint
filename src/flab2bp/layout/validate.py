@@ -5170,26 +5170,16 @@ def _coater_rides_one_run(ctx: Context) -> Iterable[Finding]:
     predecessors [830, 2037] under coater#771.  Both blueprints validated clean.
 
     The second clause fires when belts of two or more DISTINCT RUNS lie within
-    ``rules.ADDON_AREA_RADIUS`` of addon area 1: which one the game attaches is
-    then a rotation convention, not something the geometry we emitted decides.
+    ``rules.ADDON_AREA_RADIUS`` of addon area 1.  Multiple candidates from ONE
+    run carry the same supply, so choosing among them does not create ambiguity.
+    Different runs remain ambiguous even when the nearest-belt lookup itself
+    selects a deterministic winner.
 
-    Narrowed from "a second belt" to "a second RUN" on 2026-09-07 (controller
-    ruling, spec section 9 R6) after landing the literal rule convicted every
-    coater this tool has ever placed: ``freeform._place_coaters`` always feeds
-    a coater with two belts of its OWN making -- a ``supply`` belt on
-    ``slots.addon_supply_cell(..., area=1)`` and an ``approach`` belt one tile
-    further out that feeds it -- and at the Spray Coater's fixed addon pose
-    with ``Facing.EAST`` those sit ``0.314`` and ``0.942`` world units from the
-    area-1 centre, both inside the radius of ``1.0``.  Landing the literal rule
-    took 19 ``tests/layout/test_freeform.py`` builds to ``NoValidLayout``, on
-    ``proliferated_spec``, ``all-products``, ``output-products`` and the
-    negentropy block, every finding naming the coater's own approach/supply
-    pair.  Two belts of ONE run carry one item, so which of them the game
-    attaches cannot change what supplies the coater -- there is no ambiguity to
-    convict.  Two RUNS is exactly the originally reported defect:
-    coater#768's area 1 held the proliferator run 59 tail at (53,20,1) and a
-    cargo lane, run 27, at (55,20,1), both at ``0.250``, separated only by the
-    yaw convention.
+    The addon area's horizontal offset is in world units, not tiles.  At yaw
+    90, area 1 of a coater at (10, 5, 0) is almost at (9, 5, 1): the belt at
+    (8, 5, 1) is outside the radius and cannot witness a second supply run.
+    Belts at (9, 5, 1) and (9, 5, 1.5), however, are both inside it.  Membership
+    is measured by the shared world-distance predicate, including altitude.
     """
     bs = ctx.placement.buildings
     predecessor_counts = _coater_belt_predecessor_counts(ctx)

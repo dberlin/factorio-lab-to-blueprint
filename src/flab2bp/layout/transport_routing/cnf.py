@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
+from itertools import islice
 
 from pysat.card import CardEnc, EncType
 
@@ -153,6 +154,26 @@ class FactorCNF:
         combo, height = divmod(candidate, len(self.height[domain]))
         self._binary(-self.xy[domain][combo], -self.height[domain][height])
 
+    def exclude_mask(self, domain: int, rejected: int) -> None:
+        """Exclude complete XY rows once; retain exact partial-height cuts."""
+        levels = len(self.height[domain])
+        if rejected < 0 or rejected.bit_length() > len(self.xy[domain]) * levels:
+            raise AssertionError("rejection mask lies outside original domain")
+        all_levels = (1 << levels) - 1
+        while rejected:
+            self.budget.charge("predicates")
+            combo = ((rejected & -rejected).bit_length() - 1) // levels
+            shift = combo * levels
+            heights = (rejected >> shift) & all_levels
+            rejected &= ~(all_levels << shift)
+            if heights == all_levels:
+                self.clause([-self.xy[domain][combo]])
+                continue
+            while heights:
+                bit = heights & -heights
+                self.exclude(domain, shift + bit.bit_length() - 1)
+                heights ^= bit
+
     def forbid(self, left: int, right: int, family: Family) -> int:
         if left >= right:
             raise AssertionError("family domains must use canonical dense order")
@@ -201,24 +222,28 @@ class FactorCNF:
         return self.rectangles - before
 
     def select(self, model: list[int]) -> list[int]:
-        self.budget.charge("predicates", len(model) + len(self._choice_ends))
-        chosen = [0] * len(self._choice_ends)
-        for literal in model:
-            if not 0 < literal <= self.primary_variables:
-                continue
-            lo, hi = 0, len(self._choice_ends)
-            while lo < hi:
-                self.budget.charge("predicates")
-                middle = (lo + hi) // 2
-                if literal <= self._choice_ends[middle]:
-                    hi = middle
-                else:
-                    lo = middle + 1
-            self.budget.charge("predicates")
-            previous = chosen[lo]
-            if previous != 0 and previous != literal:
-                raise AssertionError("SAT assignment violates exact semantic choices")
-            chosen[lo] = literal
+        # CaDiCaL returns one signed literal per variable, in variable order.
+        # Consume only the contiguous primary groups, without copying their
+        # prefix or visiting the growing auxiliary suffix on every round.
+        self.budget.charge("predicates", 1 + self.primary_variables + len(self._choice_ends))
+        if len(model) < self.primary_variables:
+            raise AssertionError("SAT assignment omits primary variables")
+        literals = iter(model)
+        chosen: list[int] = []
+        start = 0
+        for end in self._choice_ends:
+            selected_literal = 0
+            for literal in islice(literals, end - start):
+                if literal <= 0:
+                    continue
+                self.budget.charge("predicates", 2)
+                if not start < literal <= end or (
+                    selected_literal != 0 and selected_literal != literal
+                ):
+                    raise AssertionError("SAT assignment violates exact semantic choices")
+                selected_literal = literal
+            chosen.append(selected_literal)
+            start = end
         selected: list[int] = []
         count = len(self.xy)
         for domain in range(count):

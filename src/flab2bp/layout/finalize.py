@@ -517,8 +517,11 @@ class _ProjectionCache:
         def coater_geometry(
             coaters: tuple[tuple[int, colliders.Placed], ...],
             projection: planet.Projection,
+            index_coaters: bool,
         ) -> _ProjectedCoaterGeometry:
-            return _ProjectedCoaterGeometry.of(coaters, projection, cancelled=self.cancelled)
+            return _ProjectedCoaterGeometry.of(
+                coaters, projection, cancelled=self.cancelled, index_coaters=index_coaters
+            )
 
         @cache
         def addon_splitter_failure(
@@ -533,7 +536,9 @@ class _ProjectionCache:
                 projection,
                 cancelled=self.cancelled,
                 _coater_geometry=(
-                    coater_geometry(coaters, projection) if coaters and splitters else None
+                    coater_geometry(coaters, projection, len(coaters) > len(splitters))
+                    if coaters and splitters
+                    else None
                 ),
                 _coater_box_cache=self.coater_boxes,
             )
@@ -2025,6 +2030,8 @@ class _ProjectedCoaterGeometry:
 
     metric: _CoaterSplitterMetric
     coaters: tuple[tuple[_CoaterSplitterCoordinates, float], ...]
+    tree: _CoaterSplitterKdNode | None
+    maximum_radius: float
 
     @classmethod
     def of(
@@ -2033,6 +2040,7 @@ class _ProjectedCoaterGeometry:
         projection: planet.Projection,
         *,
         cancelled: Callable[[], bool] | None = None,
+        index_coaters: bool = False,
     ) -> _ProjectedCoaterGeometry:
         metric = _CoaterSplitterMetric.of(projection)
         entries: list[tuple[_CoaterSplitterCoordinates, float]] = []
@@ -2040,7 +2048,26 @@ class _ProjectedCoaterGeometry:
             if cancelled is not None and cancelled():
                 raise ProjectionCancelled
             entries.append((metric.coordinates(coater), metric.coater_bound(coater)))
-        return cls(metric, tuple(entries))
+        tree = None
+        if index_coaters:
+            # Store the same three seam copies the forward query uses. This
+            # preserves its exact floating-point boundary arithmetic while
+            # indexing the immutable side of repeated single-Splitter probes.
+            period = projection.band.columns * metric.column_lower_bound
+            points = tuple(
+                _CoaterSplitterKdPoint(
+                    position=3 * position + copy,
+                    coordinates=(longitude, centre[1], centre[2]),
+                )
+                for position, (centre, _bound) in enumerate(entries)
+                for copy, longitude in enumerate(
+                    (centre[0] - period, centre[0], centre[0] + period)
+                )
+            )
+            tree = _coater_splitter_kd_tree(points, cancelled=cancelled)
+        return cls(
+            metric, tuple(entries), tree, max((bound for _centre, bound in entries), default=0.0)
+        )
 
 
 def _projected_coater_splitter_candidates(
@@ -2080,7 +2107,12 @@ def _projected_coater_splitter_candidates(
         return tuple(() for _coater in coaters)
 
     geometry = (
-        _ProjectedCoaterGeometry.of(coaters, projection, cancelled=cancelled)
+        _ProjectedCoaterGeometry.of(
+            coaters,
+            projection,
+            cancelled=cancelled,
+            index_coaters=len(coaters) > len(splitters),
+        )
         if _coater_geometry is None
         else _coater_geometry
     )
@@ -2094,6 +2126,35 @@ def _projected_coater_splitter_candidates(
         )
 
     metric = geometry.metric
+    coordinates = geometry.metric.coordinates
+    if geometry.tree is not None:
+        radius = geometry.maximum_radius + splitter_bound
+        radius2 = math.nextafter(radius * radius, math.inf)
+        period = projection.band.columns * geometry.metric.column_lower_bound
+        grouped: list[list[tuple[int, colliders.Placed]]] = [[] for _coater in coaters]
+        for splitter in splitters:
+            centre = coordinates(splitter[1])
+            found: set[int] = set()
+            _coater_splitter_kd_range(geometry.tree, centre, radius2, found, cancelled=cancelled)
+            retained: set[int] = set()
+            for point in sorted(found):
+                position, copy = divmod(point, 3)
+                if position in retained:
+                    continue
+                coater_centre, coater_radius = geometry.coaters[position]
+                longitude = (
+                    coater_centre[0] - period,
+                    coater_centre[0],
+                    coater_centre[0] + period,
+                )[copy]
+                reach = coater_radius + splitter_bound
+                if _coater_splitter_point_distance2(
+                    (longitude, coater_centre[1], coater_centre[2]), centre
+                ) <= math.nextafter(reach * reach, math.inf):
+                    grouped[position].append(splitter)
+                    retained.add(position)
+        return tuple(tuple(peers) for peers in grouped)
+
     points: list[_CoaterSplitterKdPoint] = []
     for position, splitter_entry in enumerate(splitters):
         if cancelled is not None and cancelled():

@@ -43,7 +43,7 @@ class Flight:
         bx, by = b.x + 2 * sink.outward[0], b.y + 2 * sink.outward[1]
         # Input lanes may begin at the machine edge; stay two cells west of it.
         # Ascending sink ranks terminate beyond the lower-ranked collector trees.
-        middle_x = a.x - 2 if local and self.exclusive_level > 1 else self.middle_x
+        middle_x = a.x - 2 if reverse and self.exclusive_level > 1 else self.middle_x
         points = [
             (a.x, a.y, a.z),
             (ax, ay, a.z),

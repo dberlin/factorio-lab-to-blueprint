@@ -8,6 +8,7 @@ from fractions import Fraction
 from typing import override
 
 from flab2bp.dsp import catalog
+from flab2bp.layout import junction
 from flab2bp.layout import routing_domain as rd
 from flab2bp.spec import BuildSpec
 
@@ -209,9 +210,34 @@ class TemplateConstructor(ReusingConstructor):
             and endpoint.cell[:2] not in self.canvas.keep_out
             and self.canvas.reserved.get(endpoint.cell, endpoint.cell) == endpoint.cell
         )
+        junction_keepouts: dict[int, set[Cell]] = {}
+        for index in self.junctions:
+            node = self.canvas.buildings[index]
+            keepout = set(
+                junction.keepout_cells(
+                    node.x, node.y, int(node.z), model_index=node.model_index, yaw=node.yaw
+                )
+            )
+            budget.charge("predicates", 1 + len(keepout))
+            junction_keepouts[index] = keepout
+        for endpoint in endpoints:
+            budget.charge("predicates")
+            if endpoint.junction_id is None:
+                continue
+            keepout = junction_keepouts.get(endpoint.junction_id)
+            if keepout is not None:
+                x, y, z = endpoint.cell
+                dx, dy = endpoint.outward
+                # Every attached path must occupy its first outward cell.
+                # The existing path-pair audit protects that used dock; an
+                # unused dock remains foreign collider space, not free ground.
+                keepout.discard((x + dx, y + dy, z))
+        for keepout in junction_keepouts.values():
+            budget.charge("predicates", len(keepout))
+            blocked.update(keepout)
         self.problem = TemplateProblem(
             self.problem.obligations,
-            self.problem.blocked,
+            frozenset(blocked),
             fixed_paths,
             x_tracks,
             y_tracks,

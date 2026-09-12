@@ -415,7 +415,10 @@ _CATALOG: tuple[Entry, ...] = (
         Kind.RULE,
         depends_on=(_TECH_LAB,),
         resolved_by="catalog.belt_rules_for_technologies",
-        mutation_exempt_because=("R4 measures emitted-layout seams, not request normalization."),
+        mutation_exempt_because=(
+            "Request normalization and routing's import-time synthetic-save "
+            "default consume this; R4 does not rebuild those save rules."
+        ),
         note="GameHistoryData.Init: labLevel = 3 on a new save.",
     ),
     _e(
@@ -424,8 +427,8 @@ _CATALOG: tuple[Entry, ...] = (
         depends_on=(_TECH_LAB,),
         resolved_by="catalog.belt_rules_for_technologies",
         mutation_exempt_because=(
-            "R4 perturbs observable emitted-paste seams; carrying this value in an "
-            "otherwise-read dataclass is not an observable seam."
+            "Request normalization and routing's import-time synthetic-save "
+            "default consume this; R4 does not rebuild those save rules."
         ),
         note="GameHistoryData.Init: storageLevel = 2 on a new save.",
     ),
@@ -515,7 +518,10 @@ _CATALOG: tuple[Entry, ...] = (
         Kind.RULE,
         depends_on=("lab level, i.e. researched vertical construction",),
         resolved_by="catalog.belt_rules_for_technologies",
-        mutation_exempt_because=("R4 measures emitted-layout seams, not request normalization."),
+        mutation_exempt_because=(
+            "Request normalization and routing's import-time synthetic-save "
+            "default consume this; R4 does not rebuild those save rules."
+        ),
         note="GameHistoryData.buildMaxHeight, quoted in the function's docstring.",
     ),
     _e(

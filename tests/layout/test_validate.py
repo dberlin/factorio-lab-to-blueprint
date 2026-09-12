@@ -1855,7 +1855,7 @@ def test_coater_supply_area_with_two_belts_of_two_runs_is_convicted() -> None:
     assert findings
     runs = findings[0].detail["runs"]
     assert isinstance(runs, list)
-    assert len(runs) >= 2
+    assert len(runs) == 2
 
 
 def test_coater_supply_area_with_two_belts_of_one_run_is_not_convicted() -> None:

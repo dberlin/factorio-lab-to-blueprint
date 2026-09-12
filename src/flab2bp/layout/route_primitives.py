@@ -155,6 +155,8 @@ class RoutePrimitives:
         self.witnesses: dict[Edge, junction.SplitterRouteCandidate] = {}
 
     def on_path(self, path: Sequence[Cell]) -> tuple[junction.SplitterRouteCandidate, ...]:
+        if not self.witnesses:
+            return ()
         return tuple(
             self.witnesses[edge]
             for edge in zip(path, path[1:], strict=False)
@@ -172,10 +174,14 @@ class RoutePrimitives:
         return (
             *(member for tap in sorted(set(taps)) for member in _splitter_stack_geometry(*tap)),
             *(
-                member
-                for path in paths.values()
-                for candidate in self.on_path(path)
-                for member in candidate.stack_members
+                (
+                    member
+                    for path in paths.values()
+                    for candidate in self.on_path(path)
+                    for member in candidate.stack_members
+                )
+                if self.witnesses
+                else ()
             ),
         )
 

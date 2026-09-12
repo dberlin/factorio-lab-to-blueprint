@@ -1,4 +1,4 @@
-"""Replay real A* searches, so the inner loop can be A/B'd without CP-SAT.
+"""Replay real geometric routing queries without regenerating their factory.
 
     uv run python scripts/route_bench.py --capture universe-matrix
     uv run python scripts/route_bench.py --cases /tmp/route-cases-universe-matrix.pkl
@@ -21,7 +21,7 @@ WHAT IS CAPTURED, AND WHAT IS SHARED
 
 Only what a search MUTATES is copied: ``canvas.blocked`` (staked paths),
 ``canvas.routing_ports`` (rebound per net) and the grid's ``occ`` and ``hist``.
-Everything else -- ``solid``, ``keep_out``, the landmark fields, ``base`` -- is
+Everything else -- ``solid``, ``keep_out``, ``base`` -- is
 read-only for the length of a routing pass, so sharing it keeps a capture of
 sixty searches to megabytes rather than gigabytes.  ``_astar`` itself writes to
 nothing except the ``blame`` and ``budget`` the caller hands it, and the bench
@@ -129,8 +129,6 @@ def capture(
         blocking_owners: Mapping[tuple[int, int, int], int] | None = None,
         *,
         extra_edges: dict[int, tuple[tuple[int, float], ...]] | None = None,
-        deadline_check_every: int | None = None,
-        reverse: bool = False,
     ) -> routing_domain._PathSearchResult:
         nonlocal seen
         want = seen % every == 0 and len(cases) < cap
@@ -153,8 +151,6 @@ def capture(
             forbidden,
             blocking_owners,
             extra_edges=extra_edges,
-            deadline_check_every=deadline_check_every,
-            reverse=reverse,
         )
         if want:
             cases.append(
@@ -171,8 +167,6 @@ def capture(
                     "forbidden": tuple(forbidden),
                     "blocking_owners": (None if blocking_owners is None else dict(blocking_owners)),
                     "extra_edges": None if extra_edges is None else dict(extra_edges),
-                    "deadline_check_every": deadline_check_every,
-                    "reverse": reverse,
                     "path": out_path,
                 }
             )
@@ -298,29 +292,8 @@ def digest(paths: Iterable[Any]) -> str:
     return hasher.hexdigest()[:16]
 
 
-def bench(path: Path, rounds: int, check: bool, landmarks: int | None) -> int:
+def bench(path: Path, rounds: int, check: bool) -> int:
     cases = pickle.loads(path.read_bytes())
-    if landmarks is not None:
-        # RE-SWEEP THE LANDMARKS ON THE CAPTURED GRID, so the strength of the
-        # heuristic can be varied over the SAME searches.  `base` is the
-        # occupancy the real pass built its fields from, and the sweep is
-        # deterministic, so `--landmarks 4` reproduces the capture exactly --
-        # which is the control this experiment needs.
-        # `alt_flat` is `alt` concatenated for the compiled loop and the two must
-        # move together; restoring only `alt` would hand the kernel a band count
-        # its buffer cannot cover.
-        done: dict[int, tuple[tuple[Any, ...], Any]] = {}
-        for case in cases:
-            grid = case["grid"]
-            if grid is None:
-                continue
-            key = id(grid.base)
-            if key not in done:
-                grid.alt = ()
-                grid.build_landmarks(landmarks)
-                done[key] = (grid.alt, grid.alt_flat)
-            grid.alt, grid.alt_flat = done[key]
-        print(f"landmarks re-swept to {landmarks} on {len(done)} grid(s)")
     best = None
     for r in range(rounds):
         # A fresh budget per round, sized so it can never bind: the point is to
@@ -348,8 +321,6 @@ def bench(path: Path, rounds: int, check: bool, landmarks: int | None) -> int:
                     case.get("forbidden", ()),
                     case.get("blocking_owners"),
                     extra_edges=case.get("extra_edges"),
-                    deadline_check_every=case.get("deadline_check_every"),
-                    reverse=case.get("reverse", False),
                 )
             )
         dt = time.perf_counter() - t0
@@ -357,15 +328,15 @@ def bench(path: Path, rounds: int, check: bool, landmarks: int | None) -> int:
         if best is None or dt < best[0]:
             best = (dt, spent, got)
         print(
-            f"  round {r + 1}: {dt:.3f}s  {spent:,} expansions  "
-            f"{1e6 * dt / max(spent, 1):.3f} us/exp"
+            f"  round {r + 1}: {dt:.3f}s  {spent:,} charged work units  "
+            f"{1e6 * dt / max(spent, 1):.3f} us/unit"
         )
     if best is None:
         raise ValueError("rounds must be positive")
     dt, spent, got = best
     print(
-        f"BEST {dt:.3f}s  {spent:,} expansions  "
-        f"{1e6 * dt / max(spent, 1):.3f} us/exp  digest {digest(got)}"
+        f"BEST {dt:.3f}s  {spent:,} charged work units  "
+        f"{1e6 * dt / max(spent, 1):.3f} us/unit  digest {digest(got)}"
     )
     if check:
         want = digest(case["path"] for case in cases)
@@ -387,7 +358,6 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--cases", type=Path)
     ap.add_argument("--rounds", type=int, default=3)
     ap.add_argument("--check", action="store_true")
-    ap.add_argument("--landmarks", type=int)
     ap.add_argument("--stranded", action="store_true")
     ap.add_argument(
         "--policy",
@@ -410,7 +380,7 @@ def main() -> int:
         return 0
     if not args.cases:
         ap.error("--cases or --capture required")
-    return bench(args.cases, args.rounds, args.check, args.landmarks)
+    return bench(args.cases, args.rounds, args.check)
 
 
 if __name__ == "__main__":

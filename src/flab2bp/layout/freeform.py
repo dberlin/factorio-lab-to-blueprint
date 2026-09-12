@@ -1295,54 +1295,6 @@ _DIRECT_ORIGIN_DELTAS_MEMO: dict[tuple[object, ...], tuple[int, ...]] = {}
 _DIRECT_ORIGIN_DELTAS_MEMO_LIMIT = 65536
 
 
-#: The ``Strip`` fields :func:`_direct_geometry_key` puts in the memo key, and
-#: the ones it deliberately leaves out.  Together they must PARTITION
-#: ``dataclasses.fields(Strip)``, which
-#: ``test_direct_geometry_key_classifies_every_strip_field`` enforces: a new
-#: field is a test failure until somebody decides which side it belongs on.
-#: That is the guard on the memo's whole correctness argument -- the key is
-#: exact only while it is the read set, and a helper that starts reading, say,
-#: ``west_channel`` would otherwise serve wrong cached answers in silence.
-_DIRECT_GEOMETRY_KEY_FIELDS: frozenset[str] = frozenset(
-    {
-        "machines",
-        "pw",
-        "ph",
-        "item_id",
-        "yaw",
-        "cargo_domain",
-        "in_above",
-        "in_below",
-        "out_lanes",
-        "pilers",
-        "lane_plan",
-        "attachment_plan",
-        "flank_outputs",
-    }
-)
-_UNREAD_BY_DIRECT_GEOMETRY: frozenset[str] = frozenset(
-    {
-        "group_key",
-        "recipe_id",
-        "model_index",
-        "mw",
-        "mh",
-        # `drain_outermost` moves rows only on a FLANKED strip, and a flanked
-        # strip has no `physical_variant`, so `_direct_geometry_key` returns
-        # `None` for it and no two strips this memo keys can disagree about it.
-        "drain_outermost",
-        "box_height",
-        "physical_variant",
-        "port_dock_plan",
-        "mode_params",
-        "family_id",
-        "machine_start",
-        "west_channel",
-        "tail_extension",
-    }
-)
-
-
 def _direct_geometry_key(strip: routing_domain.Strip) -> tuple[object, ...] | None:
     """Everything :func:`_direct_origin_deltas` reads off one strip.
 
@@ -1381,12 +1333,7 @@ def _direct_geometry_key(strip: routing_domain.Strip) -> tuple[object, ...] | No
     ``None`` means "do not memo": a strip without a realized pose belongs to a
     compatibility family, and those are rare enough not to be worth a key.
 
-    The two lists above are :data:`_DIRECT_GEOMETRY_KEY_FIELDS` and
-    :data:`_UNREAD_BY_DIRECT_GEOMETRY`; they partition ``Strip``'s fields and a
-    test says so, so a field added to ``Strip`` cannot slip past this decision.
-    The literal below is read back by that test rather than driven from the
-    constant, because the annealer builds this key 130k times a run and a
-    ``getattr`` loop is slower than the attribute loads.
+    Explicit attribute loads keep this hot key free of reflective lookup.
     """
     if strip.physical_variant is None:
         return None
@@ -1520,47 +1467,6 @@ def _direct_origin_deltas_uncached(
     return _direct_column_deltas(source_columns, destination_columns)
 
 
-#: The ``Strip`` fields :func:`_direct_candidate_key` puts in the pair memo key,
-#: and the ones it deliberately leaves out.  Together they must PARTITION
-#: ``dataclasses.fields(Strip)``, which
-#: ``test_direct_candidate_key_classifies_every_strip_field`` enforces, for the
-#: same reason as :data:`_DIRECT_GEOMETRY_KEY_FIELDS`: the key is exact only
-#: while it IS the read set of :func:`_direct_net_candidate_uncached`, and a
-#: field that quietly joins that read set without joining the key would hand one
-#: strip pair another pair's candidate in silence.
-#:
-#: It is a strict SUPERSET of the geometry key.  Enumeration asks three
-#: questions ``_direct_origin_deltas`` never asks: ``recipe_id`` for the
-#: eligibility lookup, ``group_key`` for the destination match and the two rate
-#: lookups, and ``port_dock_plan`` for ``row_of_output``'s planned-dock branch.
-#: ``physical_variant`` is read by :func:`_direct_geometry_key` itself as the
-#: "do not memo" gate, so it is classified here as read rather than unread.
-_DIRECT_CANDIDATE_KEY_FIELDS: frozenset[str] = _DIRECT_GEOMETRY_KEY_FIELDS | frozenset(
-    {
-        "group_key",
-        "recipe_id",
-        "port_dock_plan",
-        "physical_variant",
-    }
-)
-_UNREAD_BY_DIRECT_CANDIDATE: frozenset[str] = frozenset(
-    {
-        "model_index",
-        "mw",
-        "mh",
-        # Same argument as in :data:`_UNREAD_BY_DIRECT_GEOMETRY`: the pair key
-        # inherits that key's `None` gate, so a flanked strip -- the only kind
-        # whose drain row can move -- never reaches this memo.
-        "drain_outermost",
-        "box_height",
-        "mode_params",
-        "family_id",
-        "machine_start",
-        "west_channel",
-        "tail_extension",
-    }
-)
-
 #: One entry per DISTINCT strip pair, not per selection, so the bound is the
 #: number of distinct endpoint geometries a run projects.  Bounded and cleared
 #: on overflow like :data:`_DIRECT_ALIGNMENT_MEMO_LIMIT`: clearing costs
@@ -1623,9 +1529,8 @@ def _direct_candidate_key(
     wrong cached answer.  :func:`_direct_geometry_key` already certifies the
     geometry half -- it is the read set of ``_direct_origin_deltas``, which in
     turn covers ``input_lane_tiles``, ``lane_of_input`` and
-    ``_piled_output_tail_column``.  The four fields added on top are the ones
-    enumeration reads and the deltas never do; see
-    :data:`_DIRECT_CANDIDATE_KEY_FIELDS`.
+    ``_piled_output_tail_column``. The four fields added on top are the ones
+    enumeration reads and the deltas never do.
 
     ``None`` means "do not memo", inherited from the geometry key: a strip with
     no realized pose belongs to a compatibility family and is rare enough not to
@@ -1809,29 +1714,6 @@ def _direct_candidate_snapshot(
     )
 
 
-#: The ``_DirectCandidate`` fields :func:`_direct_alignment_key` puts in the
-#: memo key, and the ones it deliberately leaves out.  Together they must
-#: PARTITION ``dataclasses.fields(_DirectCandidate)``, which
-#: ``test_direct_alignment_key_classifies_every_candidate_field`` enforces, for
-#: the same reason as :data:`_DIRECT_GEOMETRY_KEY_FIELDS`: the key is exact only
-#: while it IS the read set, and a candidate field that quietly joins the read
-#: set without joining the key would serve another pair's targets in silence.
-_DIRECT_ALIGNMENT_KEY_FIELDS: frozenset[str] = frozenset(
-    {
-        "prod_row",
-        "cons_row",
-        "prod_span",
-        "cons_span",
-        "origin_deltas",
-    }
-)
-_UNREAD_BY_DIRECT_ALIGNMENT: frozenset[str] = frozenset(
-    {
-        "item",
-        "cargo_domain",
-    }
-)
-
 #: One memo entry per DISTINCT candidate mapping, not per variant pair, so the
 #: bound is the number of distinct direct geometries a run projects rather than
 #: the number of selections it tries.  Bounded and cleared on overflow like
@@ -1856,9 +1738,6 @@ def _direct_alignment_key(
     is handed.  ``item`` and ``cargo_domain`` are deliberately absent -- they
     select WHICH nets became candidates, upstream in
     :func:`_direct_net_candidates`, but no target field is derived from them.
-    The partition is declared in :data:`_DIRECT_ALIGNMENT_KEY_FIELDS` /
-    :data:`_UNREAD_BY_DIRECT_ALIGNMENT` and a test says so, so a field added to
-    ``_DirectCandidate`` cannot slip past this decision.
     """
     return tuple(
         (
@@ -4755,17 +4634,16 @@ class FreeformLayout:
             "attempts": float(len(attempts)),
             "skipped_heights": float(len(skipped_heights)),
         }
-        # A build that WIRED and then failed our own validator is a different
-        # defect from one that could not be wired, and saying so is the whole
-        # value of checking: "the packer produced packs its own router cannot
-        # wire" would be false here and would send the next reader to the packer.
+        # Rejections include preparation geometry, not only routed placements.
+        # Other candidates may also have exhausted their routing allowance.
         if rejected and not completion_expired:
             raise NoValidLayout(
-                "every packing that wired was rejected by our own validator ("
+                "no valid layout completed; candidate geometry or validation "
+                "checks rejected layouts ("
                 + _refusal_summary(rejected)
-                + "); a placement that fails validation is refused rather than "
-                "returned, because an invalid blueprint pastes and then does not "
-                "run" + over_band + stale_note,
+                + ")"
+                + over_band
+                + stale_note,
                 spec_label=spec.label,
                 budget_s=budgets[-1],
                 projection_failures=projection_failures,

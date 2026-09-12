@@ -1875,6 +1875,27 @@ def test_composed_projection_checks_prospective_splitters_against_each_other():
     assert projection.allows_buildings(farther, committed=left)
     # An abandoned incompatible choice must not poison the next selection.
     assert projection.allows_buildings(right)
+    assert not projection.allows_buildings(left, committed=right)
+    assert projection.allows_buildings(left, committed=farther)
+    assert not projection.allows_buildings(left, committed=left)
+    assert projection.allows_buildings(left)
+
+
+def test_same_static_extent_does_not_reuse_another_arrangements_collision_verdict() -> None:
+    bounds = (0, -4, 179, 74)
+    projection = routing_domain._CompositionProjection(
+        _projection_extent_poles(bounds), bounds, BandPolicy("portable")
+    )
+    ends = (
+        *routing_domain._splitter_stack_geometry(40, 0, 1),
+        *routing_domain._splitter_stack_geometry(60, 0, 1),
+    )
+    separated = (*ends, *routing_domain._splitter_stack_geometry(50, 0, 1))
+    overlapping = (*ends, *routing_domain._splitter_stack_geometry(42, 0, 1))
+
+    assert projection.allows_buildings(separated)
+    assert not projection.allows_buildings(overlapping)
+    assert projection.allows_buildings(separated)
 
 
 def test_composed_projection_query_deadline_precedes_cached_admission():

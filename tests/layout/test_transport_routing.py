@@ -7,15 +7,24 @@ from fractions import Fraction
 from itertools import combinations
 from time import monotonic
 
+from pysat.solvers import Cadical195
+
 from flab2bp.dsp import catalog, colliders
-from flab2bp.layout import validate
+from flab2bp.layout import routing_domain as rd
+from flab2bp.layout import finalize, junction, validate
 from flab2bp.layout.band_policy import BandPolicy
+from flab2bp.layout.base import Placement
 from flab2bp.layout.markers import self_loop_prime_heads
 from flab2bp.layout.routing_domain import spherical_overflight_limit
+from flab2bp.layout.slots import assign_sorter_slots
 from flab2bp.layout.transport_routing import paths, solver
 from flab2bp.layout.transport_routing.allocation import select_topology
 from flab2bp.layout.transport_routing.budget import WorkBudget
+from flab2bp.layout.transport_routing.cnf import FactorCNF
+from flab2bp.layout.transport_routing.construction import Terminal, path_through
+from flab2bp.layout.transport_routing.flights import Flight, occupied_cells
 from flab2bp.layout.transport_routing.inventory import prepare_inventory
+from flab2bp.layout.transport_routing.routing import RoutingRun, TemplateConstructor
 from flab2bp.layout.transport_routing.runtime import TransportRoutingKernel
 from flab2bp.spec import BeltTier, BuildSpec, MachineGroup, ProliferatorMode, SelfLoopSeed
 
@@ -43,6 +52,102 @@ def test_different_flight_levels_retain_riser_and_shared_column_contacts() -> No
         solver._overlapping_cells(right, left, right_off_level, left_off_level, same_level=False)
         == expected
     )
+
+
+def test_selected_run_contacts_survive_shared_line_removal_and_restoration() -> None:
+    original: list[tuple[paths.Cell, ...]] = [
+        ((-2, 0, 3), (2, 0, 3)),
+        ((-2, 0, 3), (2, 0, 3)),
+        ((0, 0, 0), (0, 0, 5)),
+        ((2, 0, 3), (2, 2, 3)),
+        ((-2, 0, 4), (2, 0, 4)),
+    ]
+    routes = list(original)
+    budget = WorkBudget(monotonic() + 10)
+    index = solver._SelectedRuns(len(routes))
+
+    def contacts(changed: list[bool]) -> set[tuple[int, int]]:
+        geometries = [
+            paths._geometry(
+                paths.FixedPath(
+                    points,
+                    paths.Endpoint(points[0], (1, 0), 2 * owner),
+                    paths.Endpoint(points[-1], (-1, 0), 2 * owner + 1),
+                    f"item-{owner}",
+                ),
+                budget,
+            )
+            for owner, points in enumerate(routes)
+        ]
+        return set(index.pairs(geometries, changed, budget))
+
+    assert contacts([True] * 5) == {
+        (0, 1),
+        (0, 2),
+        (0, 3),
+        (1, 2),
+        (1, 3),
+        (2, 4),
+    }
+
+    # Removing one owner must not remove the other owner of the same line.
+    routes[0] = ((-2, 8, 3), (2, 8, 3))
+    assert contacts([True, False, False, False, False]) == set()
+    routes[2] = ((2, 0, 0), (2, 0, 5))
+    assert contacts([False, False, True, False, False]) == {(1, 2), (2, 3), (2, 4)}
+
+    routes[0], routes[2] = original[0], original[2]
+    assert contacts([True, False, True, False, False]) == {
+        (0, 1),
+        (0, 2),
+        (0, 3),
+        (1, 2),
+        (2, 4),
+    }
+    assert contacts([False] * 5) == set()
+    assert contacts([False, False, True, False, False]) == {(0, 2), (1, 2), (2, 4)}
+
+
+def test_ranked_output_transfer_stays_outside_the_machine_edge() -> None:
+    # Higher-ranked outputs leave eastward; the westward input-collector
+    # detour would turn this path back through the neighboring machine body.
+    flight = Flight(
+        Terminal(rd._Port(0, 0, 0), (1, 0)),
+        Terminal(rd._Port(1, 4, 10), (-1, 0)),
+        "iron-ingot",
+        Fraction(1),
+        2,
+        4,
+        "local-source",
+    )
+    occupied = occupied_cells(path_through(flight.points(2)))
+    machine_edge = {(-1, y, z) for y in range(11) for z in range(3)}
+    assert occupied.isdisjoint(machine_edge)
+    assert {(0, 0, 0), (4, 10, 0)} <= occupied
+
+
+def test_static_rejections_preserve_legal_heights_of_partial_adapter_rows() -> None:
+    obligation = paths.Obligation(
+        0,
+        "iron-ingot",
+        Fraction(1),
+        paths.Endpoint((0, 0, 0), (1, 0), 0),
+        paths.Endpoint((12, 4, 0), (-1, 0), 1),
+    )
+    budget = WorkBudget(monotonic() + 10)
+    domains = paths.domains(
+        paths.TemplateProblem((obligation,), frozenset(), (), (), (), (3, 4)),
+        budget,
+    )
+    with Cadical195() as sat:
+        factors = FactorCNF(domains, sat.add_clause, budget)
+        # Both heights of XY row zero are blocked; only the upper height of row
+        # one is blocked. Compressing a full row must not drop that distinction.
+        factors.exclude_mask(0, 0b1011)
+        for candidate in range(6):
+            combo, height = divmod(candidate, 2)
+            feasible = sat.solve(assumptions=[factors.xy[0][combo], factors.height[0][height]])
+            assert feasible is (candidate in (2, 4, 5))
 
 
 def test_overflight_clears_projected_corner_that_flat_height_misses() -> None:
@@ -110,51 +215,53 @@ def test_seeded_return_survives_competing_import_of_the_same_item() -> None:
     assert set(self_loop_prime_heads(placement, spec)) == {"hydrogen"}
 
 
-def test_split_cyclic_producer_exports_surplus_from_its_internal_lane() -> None:
-    # The two charging strips each produce 5/24 full accumulators/s. The first
-    # strip's captured lane only feeds discharge at 1/12/s, so its remaining
-    # 1/8/s must also reach the export rather than stranding exact production.
+def test_sharded_producer_can_export_its_surplus_after_feeding_a_consumer() -> None:
+    # The one-output-port exchanger splits internal and external destinations
+    # across strips. Its internal shard produces more than the discharge mode
+    # consumes; that surplus must remain eligible for the external boundary.
     spec = BuildSpec(
         groups=(
+            MachineGroup(
+                recipe_id="accumulator-full",
+                machine_item_id="energy-exchanger",
+                count=3,
+                inputs_per_machine={"accumulator": Fraction(1, 4)},
+                outputs_per_machine={"accumulator-full": Fraction(1, 4)},
+            ),
             MachineGroup(
                 recipe_id="accumulator-discharge",
                 machine_item_id="energy-exchanger",
                 count=1,
-                inputs_per_machine={"accumulator-full": Fraction(1, 12)},
-                outputs_per_machine={"accumulator": Fraction(1, 12)},
-            ),
-            MachineGroup(
-                recipe_id="accumulator-full",
-                machine_item_id="energy-exchanger",
-                count=4,
-                proliferator_mode=ProliferatorMode.PRODUCTS,
-                inputs_per_machine={"accumulator": Fraction(1, 12)},
-                outputs_per_machine={"accumulator-full": Fraction(5, 48)},
+                inputs_per_machine={"accumulator-full": Fraction(1, 8)},
+                outputs_per_machine={"accumulator": Fraction(1, 8)},
             ),
         ),
-        external_inputs={"accumulator": Fraction(1, 4), "proliferator-3": Fraction(1, 180)},
-        outputs={"accumulator-full": Fraction(1, 3)},
-        spray_lanes={"accumulator": True},
-        belt_required_edges=frozenset({("accumulator-discharge", "accumulator-full")}),
+        external_inputs={"accumulator": Fraction(5, 8)},
+        outputs={"accumulator-full": Fraction(5, 8)},
     )
     budget = WorkBudget(monotonic() + 15)
     inventory = prepare_inventory(spec, _BELT_RULES, BandPolicy("portable"), budget)
     selected = select_topology(spec, inventory, "captured", budget)
     exports = [
-        selected.rates[demand.ordinal]
+        demand
         for demand in selected.inventory.demands
-        if demand.sink is None and demand.item == "accumulator-full"
+        if demand.item == "accumulator-full" and demand.sink is None
     ]
+    assert sum((selected.rates[demand.ordinal] for demand in exports), Fraction()) == Fraction(5, 8)
+    assert {demand.source.strip for demand in exports if demand.source is not None} == {
+        index
+        for index, strip in enumerate(inventory.strips)
+        if strip.recipe_id == "accumulator-full"
+    }
     discharge = sum(
         (
             selected.rates[demand.ordinal]
             for demand in selected.inventory.demands
-            if demand.sink is not None and demand.item == "accumulator-full"
+            if demand.item == "accumulator-full" and demand.sink is not None
         ),
         Fraction(),
     )
-    assert sum(exports, Fraction()) == Fraction(1, 3)
-    assert discharge == Fraction(1, 12)
+    assert discharge == Fraction(1, 8)
 
 
 def test_native_routes_upgrade_above_floor_without_exceeding_allowed_ceiling() -> None:
@@ -214,3 +321,41 @@ def test_changed_routes_clear_conflicts_without_invalidating_unchanged_routes() 
         for obligation in obligations
     ]
     assert all(paths.compatible(first, second, budget) for first, second in combinations(routes, 2))
+
+
+def test_foreign_flight_avoids_unused_splitter_dock_while_used_docks_remain_live() -> None:
+    constructor = TemplateConstructor(
+        BuildSpec(groups=()), _BELT_RULES, RoutingRun(WorkBudget(monotonic() + 15))
+    )
+    node = constructor.splitter(0, 0, "iron-ingot")
+    inlet = constructor.dock(node, (-1, 0), feed=True)
+    outlet = constructor.dock(node, (1, 0), feed=False)
+    left = constructor.belt((-3, 0, 0), "iron-ingot")
+    right = constructor.belt((3, 0, 0), "iron-ingot")
+    constructor.connect(
+        left, inlet.port, [(-3, 0, 0), (0, 0, 0)], "iron-ingot", Fraction(1), "local-input"
+    )
+    constructor.connect(
+        outlet.port, right, [(0, 0, 0), (3, 0, 0)], "iron-ingot", Fraction(1), "local-output"
+    )
+    # Two elevated obstacles deny the short straight risers. Without the
+    # splitter's foreign keepout, the longer adapter takes its unused south
+    # dock at both ground and the next altitude. A lateral adapter is legal.
+    constructor.belt((-4, -1, 1), "stone")
+    constructor.belt((-2, -1, 1), "stone")
+    source = constructor.belt((-6, -1, 0), "copper-ingot")
+    sink = constructor.belt((6, -1, 0), "copper-ingot")
+    constructor.flight(
+        Terminal(source, (1, 0)),
+        Terminal(sink, (-1, 0)),
+        "copper-ingot",
+        Fraction(1),
+        3,
+        0,
+        "internal",
+    )
+    constructor.finish()
+    foreign = occupied_cells(constructor.selected_points[0])
+    assert foreign.isdisjoint(junction.keepout_cells(0, 0, 0))
+    placement = Placement(buildings=assign_sorter_slots(constructor.canvas.buildings))
+    finalize.finalize_placement(placement, BandPolicy("200"))

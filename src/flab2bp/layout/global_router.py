@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import heapq
-import math
 from array import array
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from types import MappingProxyType
-from typing import cast
 
 from flab2bp.dsp import catalog
-from flab2bp.layout import junction, route_kernel
+from flab2bp.layout import geometric_router, junction
+from flab2bp.layout.geometric_world import GeometricWorld
 from flab2bp.layout.route_feedback import Cell, FeedbackState, NetId, NetRole
 from flab2bp.layout.routing_domain import (
     _STEPS,
@@ -61,6 +59,8 @@ class GlobalRouteResult:
 
 @dataclass(frozen=True, slots=True)
 class _SearchResult:
+    """Relaxed result; ``expansions`` records charged geometric work units."""
+
     path: tuple[Cell, ...] | None
     expansions: int
     exhausted_budget: bool
@@ -471,48 +471,6 @@ def _live_index(grid: _Grid, flags: bytearray, cell: Cell) -> int | None:
     return index if flags[index] else None
 
 
-def _kernel_bounds_hold(
-    grid: _Grid,
-    starts: Sequence[int],
-    goals: Sequence[int],
-) -> bool:
-    """Whether the compiled relaxed loop's index preconditions hold on ``grid``.
-
-    THE TEST IS ``span`` MINUS THE TWO-CELL PAD, not ``span`` itself, and the
-    margin is the point rather than the containment.  A ramp travels two cells
-    and the loop indexes ``cur +- 2 * xstep +- 2 * LEVELS +- 1`` with no bounds
-    check of its own -- see :class:`_Grid` on why the pad exists.  A cell
-    sitting IN the pad is inside ``span`` and still one whose neighbour
-    arithmetic leaves the array: the compiled loop would read
-    ``flags[cur - 2 * xstep]`` below zero, which the Python loop merely wrapped
-    around silently.
-
-    Two facts together cover every index the kernel touches.  ``box`` two cells
-    inside ``span`` covers the reached cells, because ``_routing_flags`` only
-    ever clears bytes of ``occ`` and ``occ`` is 1 only inside ``box``, so every
-    cell the loop expands after passing ``flags[...]`` is inside the margin.
-    The explicit sweep covers the seeds, which are pushed without a
-    ``flags`` test.  Nothing reaches here with such a cell today -- starts and
-    goals both come from :func:`_live_index`, which demands a passable cell --
-    so this refuses no grid any test or corpus produces and moves no digest; it
-    makes the kernel's precondition the wrapper's job to enforce rather than an
-    invariant held at a distance.  A grid that fails it falls through to the
-    Python loop, which is memory-safe on any input.
-    """
-    gx0, gy0, gx1, gy1 = grid.span
-    lo_x, lo_y, hi_x, hi_y = grid.box
-    if not (gx0 + 2 <= lo_x and hi_x <= gx1 - 2 and gy0 + 2 <= lo_y and hi_y <= gy1 - 2):
-        return False
-    width = gx1 - gx0 + 1
-    for index in (*starts, *goals):
-        if not 0 <= index < grid.size:
-            return False
-        x, y = _local_xy(grid, index)
-        if not (2 <= x <= width - 3 and 2 <= y <= grid.gh - 3):
-            return False
-    return True
-
-
 @lru_cache(maxsize=32)
 def _relaxed_transitions(
     xstep: int,
@@ -575,178 +533,43 @@ def _search_relaxed(
     if budget <= 0:
         return _SearchResult(None, 0, True, False)
 
-    goal_set = frozenset(goals)
-    sorted_goals = sorted(goal_set)
-    goal_coordinates = tuple(_local_xy(grid, goal) for goal in sorted_goals)
     transitions = (
         _routing_transitions(grid.xstep, grid.levels, grid.vertical_construction)
         if movement is None
         else movement
     )
-    history = grid.hist
-    weight = 1.0 + feedback.net_weight.get(net_id, 0.0)
-
-    if route_kernel._compiled_relaxed is not None and _kernel_bounds_hold(
-        grid, starts, sorted_goals
-    ):
-        # The compiled loop takes flat buffers rather than the closures: the
-        # congestion term densified (already multiplied by `_PRESENT_COST`, so
-        # the kernel's `weight * (present + historical)` is the same double),
-        # the per-level transition table flattened behind a count slot, and the
-        # goal columns the heuristic scans.  `transitions_target` is the buffer
-        # that CARRIES the per-level count; the other two hold padding in that
-        # slot, so a zero there is padding rather than a flat step's via.
-        present = array("d", bytes(8 * grid.size))
-        for index in ledger.units:
-            present[index] = _PRESENT_COST * ledger.present_cost(index, compatible)
-        targets = array("q")
-        vias = array("q")
-        costs = array("d")
-        for level_transitions in transitions:
-            targets.append(len(level_transitions))
-            vias.append(0)
-            costs.append(0.0)
-            for target_offset, via_offset, _dx, _dy, base_cost in level_transitions:
-                targets.append(target_offset)
-                vias.append(via_offset)
-                costs.append(base_cost)
-        goal_xy = array("q", [value for pair in goal_coordinates for value in pair])
-        history_buffer: array[float]
-        if history is None:
-            history_buffer = array("d")
-        elif isinstance(history, array):
-            history_buffer = history
-        else:
-            history_buffer = array("d", history)
-        # The extension is typed by `_route_kernel.pyi`, but the backend holds
-        # it as a `Callable[..., object]` so a missing extension is a None
-        # rather than an import error; the shape it returns is that stub's.
-        path_indices, kernel_expansions, kernel_exhausted, kernel_cancelled = cast(
-            "tuple[Sequence[int] | None, int, bool, bool]",
-            route_kernel._compiled_relaxed(
-                flags,
-                present,
-                history_buffer,
-                weight,
-                targets,
-                vias,
-                costs,
-                array("q", starts),
-                array("q", sorted_goals),
-                goal_xy,
-                grid.gh,
-                grid.levels,
-                budget,
-                cancelled,
-            ),
+    present = array("d", bytes(8 * grid.size))
+    for index in ledger.units:
+        present[index] = _PRESENT_COST * ledger.present_cost(index, compatible)
+    world = GeometricWorld.from_grid(grid, flags, transitions)
+    result = geometric_router.route(
+        geometric_router.GeometricQuery(
+            world=world,
+            starts=tuple(starts),
+            goals=tuple(sorted(goals)),
+            pressure=1.0 + feedback.net_weight.get(net_id, 0.0),
+            max_work=budget,
+            present=present,
+            charge_occupied_cells=True,
+            cancelled=cancelled,
         )
-        if path_indices is None:
-            return _SearchResult(None, kernel_expansions, kernel_exhausted, kernel_cancelled)
-        cells = [_decode_cell(grid, index) for index in path_indices]
-        return _SearchResult(
-            tuple(_cut_loops(cells)), kernel_expansions, kernel_exhausted, kernel_cancelled
+    )
+    path = (
+        None
+        if result.path is None
+        else tuple(
+            _cut_loops(
+                [world.cell(index) for index in result.path],
+                ramped=not grid.vertical_construction,
+            )
         )
-
-    best = [math.inf] * grid.size
-    predecessor = array("i", [-2]) * grid.size
-    via: dict[int, int] = {}
-    open_heap: list[tuple[float, float, int]] = []
-
-    def heuristic(index: int) -> int:
-        x, y = _local_xy(grid, index)
-        first_goal_x, first_goal_y = goal_coordinates[0]
-        closest = abs(x - first_goal_x) + abs(y - first_goal_y)
-        for goal_x, goal_y in goal_coordinates[1:]:
-            distance = abs(x - goal_x) + abs(y - goal_y)
-            if distance < closest:
-                closest = distance
-        return closest
-
-    def congestion(index: int) -> float:
-        present = ledger.present_cost(index, compatible)
-        historical = history[index] if history is not None else 0.0
-        return weight * (_PRESENT_COST * present + historical)
-
-    for start in starts:
-        cost = congestion(start)
-        if cost < best[start]:
-            best[start] = cost
-            predecessor[start] = -1
-            heapq.heappush(open_heap, (cost + heuristic(start), cost, start))
-
-    expansions = 0
-    while open_heap:
-        if cancelled is not None and cancelled():
-            return _SearchResult(None, expansions, False, True)
-        _estimated, cost, current = heapq.heappop(open_heap)
-        if cost > best[current]:
-            continue
-        if expansions >= budget:
-            return _SearchResult(None, expansions, True, False)
-        expansions += 1
-        if current in goal_set:
-            return _SearchResult(
-                _reconstruct(grid, current, predecessor, via),
-                expansions,
-                False,
-                False,
-            )
-
-        column, level = divmod(current, grid.levels)
-        x, y = divmod(column, grid.gh)
-        width = grid.size // grid.xstep
-        for target_offset, via_offset, dx, dy, base_cost in transitions[level]:
-            if not (0 <= x + dx < width and 0 <= y + dy < grid.gh):
-                continue
-            target = current + target_offset
-            if not 0 <= target < grid.size or not flags[target]:
-                continue
-            run = current + via_offset if via_offset else -1
-            if run != -1 and (not 0 <= run < grid.size or not flags[run]):
-                continue
-            next_cost = cost + base_cost + congestion(target)
-            if run != -1:
-                next_cost += congestion(run)
-            if next_cost >= best[target]:
-                continue
-            best[target] = next_cost
-            predecessor[target] = current
-            if run == -1:
-                via.pop(target, None)
-            else:
-                via[target] = run
-            heapq.heappush(
-                open_heap,
-                (next_cost + heuristic(target), next_cost, target),
-            )
-
-    return _SearchResult(None, expansions, False, False)
-
-
-def _reconstruct(
-    grid: _Grid,
-    goal: int,
-    predecessor: array[int],
-    via: Mapping[int, int],
-) -> tuple[Cell, ...]:
-    reversed_path: list[Cell] = []
-    seen: set[int] = set()
-    node = goal
-    while node != -1:
-        if node in seen:
-            raise AssertionError("cycle in relaxed A* predecessor chain")
-        seen.add(node)
-        reversed_path.append(_decode_cell(grid, node))
-        run = via.get(node)
-        if run is not None:
-            reversed_path.append(_decode_cell(grid, run))
-        node = predecessor[node]
-    return tuple(_cut_loops(list(reversed(reversed_path))))
-
-
-def _local_xy(grid: _Grid, index: int) -> tuple[int, int]:
-    column, _level = divmod(index, grid.levels)
-    return divmod(column, grid.gh)
+    )
+    return _SearchResult(
+        path,
+        result.metrics["charged_work"],
+        result.kind == "budget",
+        result.kind == "cancelled",
+    )
 
 
 def _decode_cell(grid: _Grid, index: int) -> Cell:

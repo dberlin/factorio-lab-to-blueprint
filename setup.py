@@ -9,8 +9,10 @@ setup(
                 ["src/flab2bp/layout/_sequence_kernel.pyx"],
             ),
             Extension(
-                "flab2bp.layout._route_kernel",
-                ["src/flab2bp/layout/_route_kernel.pyx"],
+                "flab2bp.layout._geometric_kernel",
+                ["src/flab2bp/layout/_geometric_kernel.pyx"],
+                language="c++",
+                extra_compile_args=["-std=c++17", "-ffp-contract=off"],
             ),
             # `-ffp-contract=off` forbids fusing `a * b + c` into an FMA.  The
             # kernel has to round exactly where the Python reference rounds, and

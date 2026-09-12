@@ -106,24 +106,34 @@ def _fixed_right_relation(
     owners: frozenset[Cell],
     budget: WorkBudget,
 ) -> tuple[Rectangle, ...]:
-    # Every column has the same fixed segment. Only transitions between
-    # forbidden and permitted left rows can start or end a rectangle.
     bound = b.at(right_levels[0], budget)
+    if a.kind == "G":
+        budget.charge("predicates")
+        if _forbidden(a.at(left_levels[0], budget), bound, owners, budget):
+            budget.charge("predicates", 2)
+            return ((0, len(left_levels) - 1, 0, len(right_levels) - 1),)
+        return ()
+    # A moving plane/riser can change contact only at a fixed segment boundary,
+    # its riser endpoint, or an owned singleton. Partition at both sides of each
+    # critical height, exactly as the variable-right relation does below.
+    constants = {bound.lo[2], bound.hi[2], a.endpoint_z if a.kind == "R" else a.lo[2]}
+    constants.update(cell[2] for cell in owners)
+    budget.charge("predicates", len(constants) + len(owners))
+    boundaries = {0, len(left_levels)}
+    for value in constants:
+        boundaries.add(_bound(left_levels, value, False, budget))
+        boundaries.add(_bound(left_levels, value, True, budget))
+    budget.charge("predicates", len(boundaries) * max(1, len(boundaries).bit_length()))
+    ordered = sorted(boundaries)
     rectangles: list[Rectangle] = []
-    first_row: int | None = None
-    for p in range(1 if a.kind == "G" else len(left_levels)):
-        forbidden = _forbidden(a.at(left_levels[p], budget), bound, owners, budget)
+    for lo, end in zip(ordered, ordered[1:], strict=False):
         budget.charge("predicates")
-        if forbidden:
-            if first_row is None:
-                first_row = p
-        elif first_row is not None:
-            budget.charge("predicates")
-            rectangles.append((first_row, p - 1, 0, len(right_levels) - 1))
-            first_row = None
-    if first_row is not None:
-        budget.charge("predicates")
-        rectangles.append((first_row, len(left_levels) - 1, 0, len(right_levels) - 1))
+        if _forbidden(a.at(left_levels[lo], budget), bound, owners, budget):
+            if rectangles and rectangles[-1][1] + 1 == lo:
+                previous = rectangles[-1]
+                rectangles[-1] = previous[0], end - 1, 0, len(right_levels) - 1
+            else:
+                rectangles.append((lo, end - 1, 0, len(right_levels) - 1))
     budget.charge("predicates", len(rectangles))
     return tuple(rectangles)
 

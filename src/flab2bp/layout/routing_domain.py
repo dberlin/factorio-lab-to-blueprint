@@ -41,16 +41,18 @@ from ortools.sat.python import cp_model
 from flab2bp.dsp import catalog, codec, colliders, params, planet, rules, splitter_ports
 from flab2bp.indexed import Nets, PortReservations, StakedPaths, UnionFind
 from flab2bp.indexed.staked_paths import StakedPathSnapshot
-from flab2bp.layout import finalize, junction, last_mile, physical_flow, route_kernel, slots
+from flab2bp.layout import finalize, geometric_router, junction, last_mile, physical_flow, slots
+from flab2bp.layout import projection_world
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import Facing, NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.buildings import Buildings, MutableBuildings, bounds_of
 from flab2bp.layout.buildings import Kind as BuildingKind
 from flab2bp.layout.coater_mode import coater_mode
-from flab2bp.layout.geometric_router import Deadline as _GeometricDeadline
-from flab2bp.layout.geometric_router import inside as _inside_route_box
-from flab2bp.layout.geometric_router import overhead_path
-from flab2bp.layout.geometric_world import FlatScreen, GeometricWorld
+from flab2bp.layout.geometric_world import GeometricWorld
+from flab2bp.layout.projection_world import FlatScreen
+from flab2bp.layout.routing_proposals import Deadline as _GeometricDeadline
+from flab2bp.layout.routing_proposals import inside as _inside_route_box
+from flab2bp.layout.routing_proposals import overhead_path
 from flab2bp.layout.piling import LaneLoad, MergePlan, PilerPlan, plan_merges
 from flab2bp.layout.route_feedback import (
     Cell,
@@ -253,74 +255,9 @@ _REPAIR_MAX_VICTIMS = 16
 #: happening is one negotiation should price rather than one repair should churn.
 _REPAIR_PASSES = 4
 
-#: Above this many goals, the A* heuristic switches from exact
-#: distance-to-nearest-goal to distance-to-goal-bounding-box.  Both are
-#: admissible; the box is weaker but O(1) instead of O(|goals|) per node.
-_EXACT_HEURISTIC_GOALS = 64
 
-#: INFLATING THAT HEURISTIC WAS TRIED AND IS WORSE.  Kept because the diagnosis
-#: under it is right and only the remedy was wrong.
-#:
-#: The observation: the heuristic charges 1.0 per step, the cheapest an edge can
-#: be, while a negotiating step costs ``1 + level_toll + history * pressure``
-#: with ``pressure = 0.5 * 1.6**round``, so by the fifth round a contested cell
-#: costs four to twenty times what the heuristic assumes.  Expansions per net
-#: per round on `universe-matrix` climb accordingly, with micro-seconds per
-#: expansion FLAT at 4-6 across every round -- the search loses its guide, the
-#: loop does not get slower:
-#:
-#:   no-proliferator h=69 power=1   5295 -> 5344 -> 8315 -> 12507 -> 15078
-#:   no-proliferator h=69 power=0   3424 -> 3841 -> 6901 -> 7951
-#:   max-proliferation h=72 power=1 1365 -> 1688 -> 2413 -> 3742
-#:
-#: The remedy that does not work is multiplying the heuristic by a constant.  An
-#: inflated heuristic is INCONSISTENT, and this search re-opens a settled cell
-#: whenever a cheaper way to it turns up, so the re-expansions cost more than
-#: the guidance saves.  Measured on a fixed pack (deterministic CP-SAT, so the
-#: only difference is the weight), 30 height-cells at each weight:
-#:
-#:   weight 1.0 -- 12 of 30 wired, round times 2.5/3.6/5.3/6.1s
-#:   weight 1.5 --  3 of 30 wired, round times 2.8/4.4/12.6s, expansions UP
-#:   weight 2.5 --  3 of 30 wired, round times 2.5/6.7/3.9/9.9s, expansions UP
-#:
-#: The real gap is not the scale of the estimate, it is that Manhattan cannot
-#: see an obstacle: measured `exp/pathlen` is 50.7 median (p90 127) on
-#: no-proliferator h=69 and 77.5 median on h=185, with `_MAX_EXPANSIONS` never
-#: reached.  An 85-cell path costs 4322 expansions because A* settles every cell
-#: whose Manhattan estimate is under the true detour.  That wants a heuristic
-#: that knows where the machines are, not a bigger multiplier.  See
-#: :data:`_ALT_LANDMARKS`.
-
-#: Landmarks for the DIFFERENTIAL heuristic, which is what does know where the
-#: machines are.  Zero falls back to plain Manhattan.
-#:
-#: For a landmark ``L`` with known distances to every cell, the triangle
-#: inequality gives ``d(n, g) >= |d(L, n) - d(L, g)|`` -- a lower bound that
-#: costs two array reads and is large exactly where Manhattan is worst, because
-#: a wall between ``n`` and ``g`` moves them apart on some landmark's dial even
-#: though their coordinates are close.  Taking the max over several landmarks
-#: and over Manhattan keeps it admissible and can only tighten it.
-#:
-#: THE DISTANCES ARE ON THE 2D PROJECTION of the canvas, where a column is
-#: passable if any of its levels is, and they count STEPS rather than cost.
-#: That is what makes them a valid bound on a 3D search with ramps: a plain step
-#: moves one column and costs at least 1.0, a ramp moves two columns and costs
-#: 3.0, so cost is never below the number of columns crossed, and the projection
-#: is more permissive than any single level.  They are built from ``base`` --
-#: the occupancy before any path commits, with port reservations still open --
-#: so committing paths can only make the true distance longer, never shorter,
-#: and one build serves every round of the pass.
-#:
-#: Four, from farthest-point selection.  Each is one breadth-first sweep of the
-#: projection, ~26k columns on a `universe-matrix` canvas, and the whole build
-#: is paid ONCE per routing pass against the tens of seconds the pass costs.
-_ALT_LANDMARKS = 4
-
-#: Hard cap on A* node expansions for a single net.  Exceeding it reports
-#: budget exhaustion, which the caller treats as a route failure and handles by
-#: ripping up and retrying -- so this degrades routing quality rather than
-#: correctness.  Without it a hard net explores every reachable cell x level and
-#: the whole layout appears to hang.
+#: Per-query work cap: newly prepared cells plus processed active intervals.
+#: Exhaustion refuses the route; it never relaxes physical admission.
 _MAX_EXPANSIONS = 200_000
 
 #: Total A* expansions across ALL nets and ALL rip-up rounds of one routing
@@ -404,15 +341,6 @@ _BLAME_MAX_WALL = 64
 #: weights 0 and 12 leave one net with no path at all and 40 leaves none, and 80
 #: buys nothing further.
 _BLAME_WEIGHT = 40.0
-
-#: A* expansions between wall-clock checks.
-#:
-#: ``time.monotonic()`` costs about as much as an expansion, so calling it on
-#: every one would be a measurable tax on the hot loop for a deadline that is
-#: seconds away.  Four thousand expansions is a few milliseconds of overshoot at
-#: the rates measured here (~180k expansions/second), which is nothing against a
-#: 15-second wall and cheap enough to disappear.
-_DEADLINE_CHECK_EVERY = 4096
 
 #: Rings of ground reserved around the packed block, decided BEFORE anything
 #: routes.
@@ -1077,52 +1005,6 @@ def _staged_static_clearance_key(
 #: clearing on overflow costs recomputation and keeps the answer exact.
 _STAGED_CLEARANCE_KEYS_MEMO: dict[tuple[object, ...], frozenset[StagedStaticClearanceKey]] = {}
 _STAGED_CLEARANCE_KEYS_MEMO_LIMIT = 65536
-
-#: The ``Strip`` fields the memo key above holds, and the ones it deliberately
-#: leaves out.  Together they must PARTITION ``dataclasses.fields(Strip)``,
-#: which ``test_staged_clearance_key_classifies_every_strip_field`` enforces: a
-#: new field is a test failure until somebody decides which side it belongs
-#: on.  ``cargo_domain`` and ``physical_variant`` gate the memo rather than
-#: feed it, so they sit in the unread set despite being read; ``machine_row``
-#: and ``row_of_input`` are derived properties/methods, not ``Strip`` fields,
-#: so they cannot appear in either set even though the key reads them too.
-_STAGED_CLEARANCE_KEY_FIELDS: frozenset[str] = frozenset(
-    {
-        "item_id",
-        "model_index",
-        "mw",
-        "mh",
-        "yaw",
-        "pw",
-        "machines",
-        "west_channel",
-    }
-)
-_UNREAD_BY_STAGED_CLEARANCE: frozenset[str] = frozenset(
-    {
-        "group_key",
-        "recipe_id",
-        "cargo_domain",
-        "ph",
-        "in_above",
-        "out_lanes",
-        "in_below",
-        "lane_plan",
-        "attachment_plan",
-        "box_height",
-        "physical_variant",
-        "port_dock_plan",
-        "mode_params",
-        "flank_outputs",
-        # Read only by the row map's FLANKED branch, and a flanked strip has no
-        # `physical_variant` -- the gate above returns before any key is built.
-        "drain_outermost",
-        "family_id",
-        "machine_start",
-        "tail_extension",
-        "pilers",
-    }
-)
 
 
 def _staged_static_clearance_keys(
@@ -4296,91 +4178,32 @@ def _routing_transitions(
     return tuple(by_level)
 
 
-def _relaxed_goal_costs(
-    levels: int,
-    vertical_construction: bool,
-    maximum_distance: int,
-    goal_level: int,
-    *,
-    reverse: bool = False,
-    deadline: float | None = None,
-) -> array[float] | None:
-    """Lower bounds on the obstacle-free distance/altitude movement graph.
 
-    Every ordinary move projects onto an edge here with its real base cost.
-    Free increases of distance make the bound monotone, so a goal rectangle
-    may safely underestimate XY distance. No physical connector is modeled.
+
+def _cut_loops(path: list[Cell], *, ramped: bool) -> list[Cell]:
+    """Remove loops without changing the surviving cells' physical altitudes.
+
+    A ramp's via uses the departing lattice level but is emitted half a level
+    away. Equal lattice cells are therefore not necessarily equal physical
+    cells. The successor level distinguishes their ramp contexts; a splice
+    must preserve that context as well as the cell itself.
     """
-    if _expired(deadline):
-        return None
-    stride = maximum_distance + 1
-    incoming: list[dict[tuple[int, int], float]] = [{} for _ in range(levels)]
-    for level, moves in enumerate(
-        _routing_transitions(3 * levels, levels, vertical_construction, reverse)
-    ):
-        for target, _via, dx, dy, cost in moves:
-            target_level = level + target - (3 * dx + dy) * levels
-            distance = abs(dx) + abs(dy)
-            for delta in range(-distance, distance + 1, 2):
-                incoming[target_level][level, delta] = cost
-    for level in range(levels):
-        incoming[level][level, -1] = 0.0
-    predecessors = tuple(
-        tuple((level, delta, cost) for (level, delta), cost in sorted(row.items()))
-        for row in incoming
-    )
-    costs = array("d", [math.inf]) * (levels * stride)
-    origin = goal_level * stride
-    costs[origin] = 0.0
-    queue = [(0.0, origin)]
-    popped = 0
-    while queue:
-        cost, index = heapq.heappop(queue)
-        if cost != costs[index]:
-            continue
-        popped += 1
-        if popped % 1024 == 0 and _expired(deadline):
-            return None
-        level, distance = divmod(index, stride)
-        for previous_level, delta, edge_cost in predecessors[level]:
-            previous_distance = distance + delta
-            if not 0 <= previous_distance < stride:
-                continue
-            previous = previous_level * stride + previous_distance
-            candidate = cost + edge_cost
-            if candidate < costs[previous]:
-                costs[previous] = candidate
-                heapq.heappush(queue, (candidate, previous))
-    return costs
-
-
-def _cut_loops(path: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
-    """Remove any cell that appears twice, keeping the walk connected.
-
-    A ramp edge occupies an extra "run" cell, spliced in from ``via`` during
-    reconstruction.  That cell can already lie on the path -- the route leaves
-    it, wanders, and comes back to climb from it -- and then the same tile
-    appears twice.  Committing such a path fails: the second occurrence finds
-    the cell already built and the whole net is dropped, silently until
-    ``_commit_paths`` learned to count.  Measured on the magnetic-ring chain, 3
-    of 19 routed paths had a repeat.
-
-    Cutting the loop between the two occurrences is safe, and cheaper than
-    rerouting: consecutive cells in the walk are adjacent (or a ramp pair) by
-    construction, so splicing out everything between a repeat and its first
-    occurrence leaves a walk whose consecutive cells were already consecutive.
-    The result is also shorter, which is strictly better.
-    """
-    first: dict[tuple[int, int, int], int] = {}
-    out: list[tuple[int, int, int]] = []
-    for cell in path:
-        seen_at = first.get(cell)
+    first: dict[Cell | tuple[Cell, int], int] = {}
+    keys: list[Cell | tuple[Cell, int]] = []
+    out: list[Cell] = []
+    for index, cell in enumerate(path):
+        key: Cell | tuple[Cell, int] = (
+            (cell, path[index + 1][2] if index + 1 < len(path) else cell[2]) if ramped else cell
+        )
+        seen_at = first.get(key)
         if seen_at is not None:
-            for dropped in out[seen_at + 1 :]:
+            for dropped in keys[seen_at + 1 :]:
                 first.pop(dropped, None)
+            del keys[seen_at + 1 :]
             del out[seen_at + 1 :]
             continue
-        first[cell] = len(out)
+        first[key] = len(out)
+        keys.append(key)
         out.append(cell)
     return out
 
@@ -4600,9 +4423,13 @@ class _Grid:
     necessarily free -- it may sit outside ``bounds``, which a start cell is
     allowed to do.  Restoring the byte it actually had cannot get that wrong.
 
-    The X-major index preserves lexicographic ``(x, y, level)`` ordering.
-    Ordinary A* orders its heap by ``(f, -g, index)``: deeper equal-estimate
-    paths advance first, with cell order as the final deterministic tie-break.
+    THE LAYOUT IS X-MAJOR ON PURPOSE.  ``heapq`` breaks a tie on ``(f, cost)`` by
+    comparing the third element, so the cell's own ordering decides which of two
+    equal-cost paths is taken.  ``x``, then ``y``, then ``lvl`` makes integer
+    order the SAME total order as tuple order, so every tie falls the way it did
+    when cells were tuples.  A level-major index -- the obvious layout -- is
+    measurably a different router: injected as a fault it left the expansion
+    count byte-identical and moved the committed paths.
 
     ``span`` is the indexed extent and is padded two cells beyond anything the
     search may touch, because a ramp travels two tiles and index arithmetic from
@@ -4630,24 +4457,9 @@ class _Grid:
     #: ``(index, port)`` for every reserved cell inside the box.
     reserved: tuple[tuple[int, tuple[int, int, int]], ...]
     #: Congestion history as a flat array, or ``None`` on a round that has none.
-    #: An :class:`array.array` when :meth:`refresh_history` built it, so the
-    #: compiled loop can take a buffer of it without a copy; ``_route_all``'s
-    #: crossing-repair path assigns a plain list, which :func:`_astar` converts
-    #: once per search.
+    #: Array-backed negotiated histories and list-backed crossing histories are
+    #: both borrowed by the geometric query without copying.
     hist: array[float] | list[float] | None
-    #: Landmark distance fields over the 2D projection, indexed
-    #: ``(x - gx0) * gh + (y - gy0)``, with ``-1`` for a column the landmark
-    #: cannot reach.  Empty until :meth:`build_landmarks` is called, which only
-    #: :func:`_route_all` does -- see :data:`_ALT_LANDMARKS`.
-    alt: tuple[list[int], ...] = ()
-    #: ``alt`` concatenated band-major into one buffer, for the compiled loop.
-    #: Kept in step with ``alt`` by :meth:`build_landmarks`, which is the only
-    #: thing that sets either.
-    alt_flat: array[int] = field(default_factory=lambda: array("q"))
-    #: Obstacle-independent fields survive occupancy changes and repair clones.
-    cost_fields: dict[tuple[int, bool, int, int, bool], array[float]] = field(
-        default_factory=dict, repr=False, compare=False
-    )
 
     def index(self, cell: tuple[int, int, int]) -> int:
         x, y, lvl = cell
@@ -4664,88 +4476,6 @@ class _Grid:
         """Undo :meth:`block` -- back to whatever the cell was before routing."""
         at = self.index(cell)
         self.occ[at] = self.base[at]
-
-    def _passable_columns(self) -> bytearray:
-        """The 2D projection of ``base``: a column is open if any level is.
-
-        Built by OR-ing the altitude-strided views of ``base`` together as one
-        big integer, because a Python loop over 26k columns is 15ms and this is
-        microseconds.  ``base`` is already zero outside the routing box and in
-        the two-cell pad, so the pad keeps ``p +- 1`` and ``p +- gh`` in range
-        for every passable column and no neighbour test needs a bounds check.
-        """
-        mv = memoryview(self.base)
-        acc = int.from_bytes(bytes(mv[0 :: self.levels]), "big")
-        for lvl in range(1, self.levels):
-            acc |= int.from_bytes(bytes(mv[lvl :: self.levels]), "big")
-        npro = self.size // self.levels
-        return bytearray(acc.to_bytes(npro, "big"))
-
-    def _sweep(self, source: int, passable: bytearray) -> list[int]:
-        """Breadth-first step distances from one column. ``-1`` is unreachable."""
-        gh = self.gh
-        dist = [-1] * len(passable)
-        dist[source] = 0
-        frontier = [source]
-        step = 0
-        while frontier:
-            step += 1
-            nxt: list[int] = []
-            push = nxt.append
-            for p in frontier:
-                for q in (p - 1, p + 1, p - gh, p + gh):
-                    if passable[q] and dist[q] < 0:
-                        dist[q] = step
-                        push(q)
-            frontier = nxt
-        return dist
-
-    def build_landmarks(self, count: int) -> None:
-        """Choose ``count`` landmarks farthest-point and sweep each one.
-
-        Farthest-point rather than corners: the point of a landmark is to sit
-        somewhere whose dial separates cells a wall separates, and the corners of
-        a rectangle mostly reproduce Manhattan.  Each round picks the column
-        farthest from everything chosen so far, which is the standard
-        construction and needs no knowledge of the pack.
-        """
-        if count <= 0:
-            return
-        passable = self._passable_columns()
-        seed = passable.find(1)
-        if seed < 0:
-            return
-        # One throwaway sweep first: starting farthest-point from an ARBITRARY
-        # column would put the first landmark wherever the pack's first free
-        # column happens to be.
-        far = self._sweep(seed, passable)
-        best_at, best_d = seed, 0
-        for p, d in enumerate(far):
-            if d > best_d:
-                best_at, best_d = p, d
-        fields: list[list[int]] = []
-        reach: list[int] = []
-        for _ in range(count):
-            field_ = self._sweep(best_at, passable)
-            fields.append(field_)
-            if not reach:
-                reach = field_[:]
-            else:
-                for p, d in enumerate(field_):
-                    prev = reach[p]
-                    if d >= 0 and (prev < 0 or d < prev):
-                        reach[p] = d
-            best_at, best_d = -1, -1
-            for p, d in enumerate(reach):
-                if d > best_d:
-                    best_at, best_d = p, d
-            if best_at < 0:
-                break
-        self.alt = tuple(fields)
-        flat = array("q")
-        for field_ in fields:
-            flat.extend(field_)
-        self.alt_flat = flat
 
     def refresh_history(self, history: Mapping[tuple[int, int, int], float]) -> None:
         """Re-flatten ``history``, which changes once per rip-up round."""
@@ -4918,211 +4648,16 @@ def _routing_flags(
 
 @dataclass(frozen=True, slots=True)
 class _PathSearchResult:
+    """Detailed result; ``expansions`` records charged geometric work units."""
+
     path: tuple[Cell, ...] | None
     kind: RouteFailureKind | None
     wall: tuple[Cell, ...]
     expansions: int
 
 
-def _kernel_margin_holds(
-    grid: _Grid,
-    cells: Sequence[tuple[int, int, int]],
-) -> bool:
-    """Keep the native fast path on the routing box's two-cell padded domain.
-
-    Both loops now guard movement indices explicitly. Retaining the existing
-    margin-based dispatch also preserves grid reuse for callers with seeds in
-    the pad: falling back to Python must not rebuild or discard landmarks.
-    """
-    gx0, gy0, gx1, gy1 = grid.span
-    lo_x, lo_y, hi_x, hi_y = grid.box
-    if not (gx0 + 2 <= lo_x and hi_x <= gx1 - 2 and gy0 + 2 <= lo_y and hi_y <= gy1 - 2):
-        return False
-    for cx, cy, clvl in cells:
-        if not (gx0 + 2 <= cx <= gx1 - 2 and gy0 + 2 <= cy <= gy1 - 2 and 0 <= clvl < grid.levels):
-            return False
-    return True
 
 
-def _astar_python_loop(
-    flags: bytearray,
-    hist: Sequence[float] | None,
-    pressure: float,
-    goal_flag: bytearray,
-    start_indices: Sequence[int],
-    h: Callable[[int], float],
-    size: int,
-    gh: int,
-    xstep: int,
-    budget: dict[str, int] | None,
-    start_left: int,
-    deadline: float | None,
-    levels: int,
-    transitions: tuple[tuple[_RoutingTransition, ...], ...],
-    extra_edges: dict[int, tuple[tuple[int, float], ...]],
-    deadline_check_every: int | None = None,
-    cell_heuristic: bool = False,
-) -> tuple[list[int] | None, int, int, list[int]]:
-    """The A* expansion loop, in Python.
-
-    Returns ``(path indices oldest first, expansions, kind, settled)``, where
-    ``kind`` is 0 found / 1 budget / 2 sealed and ``settled`` is the reachable
-    pocket in index order -- populated only when the heap emptied, which is the
-    one ending that proves the pocket is sealed.
-
-    This is the reference implementation.  ``_route_kernel.astar_flat`` is a
-    compiled transcription of it, and the two are held to the same replay digest
-    by :mod:`scripts.route_bench`; a change here is a change there.
-    """
-    negotiating = hist is not None
-    if hist is None:
-        hist = []
-
-    width = size // xstep
-    deadline_every = _DEADLINE_CHECK_EVERY if deadline_check_every is None else deadline_check_every
-
-    expansions = 0
-    heappush = heapq.heappush
-    heappop = heapq.heappop
-    inf = math.inf
-
-    # ONE COUNTER AND ONE COMPARE PER EXPANSION, where there were three guards
-    # and two dict operations.
-    #
-    # The cap, the deadline check and the shared budget all fire at expansion
-    # counts that are known in advance, so the soonest of the three is computed
-    # once and re-derived only when it is reached.  `budget` is read into a
-    # local and written back at every exit, because a `budget["left"] -= 1` is a
-    # hash, a lookup and a store on the hottest line in this router -- 1.25M of
-    # them in one `quantum-chip` routing pass.
-    #
-    # It is the same arithmetic, not an approximation of it.  The budget was
-    # charged for an expansion only AFTER the cap and the deadline had let that
-    # expansion through, so an exit on either of those has charged one fewer;
-    # that is why the two write-backs differ by one.  Get it wrong and the pass
-    # spends a different number of nodes on every later net.
-    checkpoint = _MAX_EXPANSIONS + 1
-    if checkpoint > deadline_every:
-        checkpoint = deadline_every
-    if start_left < checkpoint:
-        checkpoint = start_left
-
-    # Ordinary cost bounds depend on altitude as well as XY. Connector searches
-    # retain the existing column-only bound and its smaller cache.
-    hcache = [-1.0] * (size if cell_heuristic else size // levels)
-
-    open_heap: list[tuple[float, float, int]] = []
-    best = [inf] * size
-    prev = [-1] * size
-    #: Ramp moves span two cells.  The intermediate "run" cell is recorded here
-    #: rather than in ``prev``, because giving it a predecessor of its own lets a
-    #: later ramp clobber a predecessor the normal step expansion already set --
-    #: which can point a cell's chain back through itself and make ``prev`` cyclic.
-    via: dict[int, int] = {}
-    via_get = via.get
-    for si in start_indices:
-        best[si] = 0.0
-        prev[si] = -1
-        heappush(open_heap, (h(si if cell_heuristic else si // levels), 0.0, si))
-
-    while open_heap:
-        _, negative_g, cur = heappop(open_heap)
-        g = -negative_g
-        if g > best[cur]:
-            continue
-        expansions += 1
-        if expansions >= checkpoint:
-            if expansions > _MAX_EXPANSIONS:
-                if budget is not None:
-                    budget["left"] = start_left - expansions + 1
-                return None, expansions, 1, []
-            if expansions % deadline_every == 0 and _expired(deadline):
-                if budget is not None:
-                    budget["left"] = start_left - expansions + 1
-                return None, expansions, 1, []
-            if expansions >= start_left:
-                if budget is not None:
-                    budget["left"] = start_left - expansions
-                return None, expansions, 1, []
-            checkpoint = _MAX_EXPANSIONS + 1
-            due = (expansions // deadline_every + 1) * deadline_every
-            if due < checkpoint:
-                checkpoint = due
-            if start_left < checkpoint:
-                checkpoint = start_left
-        if goal_flag[cur]:
-            walk: list[int] = []
-            node = cur
-            # ``prev`` must be acyclic; walking a cycle here previously spun at
-            # 100% CPU while ``path`` grew without bound.  Guard it rather than
-            # trusting it, so a regression fails loudly instead of hanging.
-            seen: set[int] = set()
-            while node != -1:
-                if node in seen:
-                    q, lvl = divmod(node, levels)
-                    px, py = divmod(q, gh)
-                    raise AssertionError(
-                        f"cycle in A* predecessor chain at "
-                        f"grid-local {(px, py, lvl)}; "
-                        "a ramp move corrupted an existing predecessor"
-                    )
-                seen.add(node)
-                walk.append(node)
-                run = via_get(node, -1)
-                if run != -1:
-                    walk.append(run)
-                node = prev[node]
-            if budget is not None:
-                budget["left"] = start_left - expansions
-            walk.reverse()
-            return walk, expansions, 0, []
-        q, lvl = divmod(cur, levels)
-        x, y = divmod(q, gh)
-        for target_offset, via_offset, dx, dy, base_cost in transitions[lvl]:
-            if not (0 <= x + dx < width and 0 <= y + dy < gh):
-                continue
-            nxt = cur + target_offset
-            if not 0 <= nxt < size or not flags[nxt]:
-                continue
-            run = cur + via_offset if via_offset else -1
-            if run != -1 and (not 0 <= run < size or not flags[run]):
-                continue
-            cost = g + base_cost
-            if negotiating:
-                cost += hist[nxt] * pressure
-            if cost < best[nxt]:
-                best[nxt] = cost
-                prev[nxt] = cur
-                if run == -1:
-                    via.pop(nxt, None)
-                else:
-                    via[nxt] = run
-                col = nxt if cell_heuristic else nxt // levels
-                far = hcache[col]
-                if far < 0.0:
-                    far = hcache[col] = h(col)
-                heappush(open_heap, (cost + far, -cost, nxt))
-        for nxt, base_cost in extra_edges.get(cur, ()):
-            if not flags[nxt]:
-                continue
-            cost = g + base_cost
-            if negotiating:
-                cost += hist[nxt] * pressure
-            if cost < best[nxt]:
-                best[nxt] = cost
-                prev[nxt] = cur
-                via.pop(nxt, None)
-                col = nxt if cell_heuristic else nxt // levels
-                far = hcache[col]
-                if far < 0.0:
-                    far = hcache[col] = h(col)
-                heappush(open_heap, (cost + far, -cost, nxt))
-
-    # THE HEAP EMPTIED, which is the one ending that proves no path exists -- the
-    # Budget exits above do not say the pocket is sealed.
-    if budget is not None:
-        budget["left"] = start_left - expansions
-    return None, expansions, 2, [i for i, seen_at in enumerate(best) if seen_at != inf]
 
 
 def _astar(
@@ -5142,73 +4677,18 @@ def _astar(
     blocking_owners: Mapping[Cell, int] | None = None,
     *,
     extra_edges: dict[int, tuple[tuple[int, float], ...]] | None = None,
-    deadline_check_every: int | None = None,
-    reverse: bool = False,
 ) -> _PathSearchResult:
-    """Cheapest free-cell path, with congestion history folded into the cost.
+    """Cheapest admitted directed interval path with landing congestion cost.
 
-    The history term is what makes rip-up-and-reroute converge: a cell that
-    several nets have fought over becomes progressively more expensive, so they
-    negotiate rather than oscillate.
+    Starts may lie outside ``bounds`` on the external entry ring. Exact owned
+    junction guards and released tentative starts are the only admission
+    exceptions; forbidden cells stay closed. The caller's matching grid and
+    history are borrowed only for this query.
 
-    ``blame`` is how a search that finds NOTHING still says something.  A
-    committed path is ``blocked`` here rather than expensive, so nets never
-    overlap and the plain history term only ever records that a cell was used,
-    never that using it walled somebody in.  When the heap empties -- and only
-    then -- the settled set is the reachable pocket and its blocked neighbours
-    are the wall; the committed cells among them are recorded here and priced by
-    :func:`_route_all`.  See :data:`_BLAME_MAX_WALL` for why only a small wall
-    is worth accusing.
-
-    ``deadline`` is the caller's wall clock, checked every
-    :data:`_DEADLINE_CHECK_EVERY` expansions unless ``deadline_check_every``
-    overrides that cadence for a bounded subcall. A single hard net can spend
-    ``_MAX_EXPANSIONS`` nodes, which is seconds on its own, so a deadline that
-    only the callers looked at would be a deadline the router could sail past.
-    Running out of clock reports :attr:`RouteFailureKind.BUDGET`, which is the
-    route-failure path -- and a route failure is a REFUSAL, since ``_sweep``
-    discards any pack with an unrouted net.  A deadline can therefore cost a
-    placement but can never degrade one.
-
-    ``bounds`` is the INCLUSIVE box the path may occupy.  It used to be the
-    block's bounding box with two tiles of slack added here, which meant the
-    caller could not say where the router was allowed to go -- and the router
-    going two tiles past a boundary the caller had already promised to somebody
-    else is what walled in the external entry lanes.  Start cells are exempt:
-    an external input run begins on the entry ring, outside the routing box, and
-    works inward.
-
-    THE SEARCH RUNS ON FLAT INTEGER CELL INDICES, not on ``(x, y, level)``
-    tuples -- see :class:`_Grid`, which is where the index and its constraints
-    are written down.  It is worth roughly 1.8x on this loop, because the wall
-    here has always been the interpreter rather than the algorithm and a tuple
-    key charges for it twice: once to build the tuple and once to hash it.
-
-    ``grid`` is the caller's, and passing one is the difference between building
-    that flattening once for a routing pass and building it 589 times.  Omitting
-    it is correct and merely costs a build; :func:`_route_all` passes one and
-    keeps it current.
-
-    ``owned_starts`` names exact junction-guard cells reserved for this source
-    sibling.  ``released_starts`` names exact tentative path cells a repair's
-    open grid has deliberately made passable. ``forbidden`` names exact cells
-    where this net's earlier path failed real-altitude commit. Only those
-    initial exceptions are admitted; every guard, settled path, and rejected
-    commit cell remains impassable.
-
-    ``extra_edges`` are physically admitted direct connectors indexed against
-    ``grid``. The caller retains their physical witnesses. Costs must dominate
-    XY displacement; landmark distances are disabled because a connector may
-    bypass an obstacle that the landmark projection cannot cross.
-
-    ``reverse`` makes a bounded ordinary-path proposal from the destinations
-    using the transposed movement graph, then returns source-to-destination
-    cells. Ramp intermediates and original endpoint permissions are preserved.
-    It is a feasibility proposal, not a congestion-optimality or sealed-pocket
-    proof; physical admission still belongs to the caller.
+    Work charges newly prepared cells plus processed active intervals against
+    both the per-query cap and shared ledger. Only complete exhaustion supplies
+    wall evidence. Budget or deadline termination never proves infeasibility.
     """
-    if reverse and extra_edges:
-        raise ValueError("reverse proposals require the ordinary movement graph")
     forbidden_cells = frozenset(forbidden)
     goals = {goal for goal in goals if 0 <= goal[2] < canvas.levels}
     starts = [start for start in starts if 0 <= start[2] < canvas.levels]
@@ -5248,14 +4728,6 @@ def _astar(
     # cells of pad -- so they are indexable by construction.  Checked anyway,
     # because an index that silently lands in the wrong column is exactly the
     # kind of fault that reads green.
-    #
-    # THIS TEST IS CONTAINMENT IN `span`, and it decides GRID REUSE ONLY.  The
-    # compiled loop needs a stronger property -- two cells of margin, see
-    # :func:`_kernel_margin_holds` -- but reuse is the wrong lever for it: a
-    # rebuilt grid is a landmark-free grid, so refusing reuse here would weaken
-    # the heuristic and move the expansion counts of both backends, including
-    # the Python one, which must stay byte-identical to the pre-kernel router.
-    # The margin decides which loop runs, and nothing else.
     flat = (
         grid
         if grid is not None
@@ -5284,7 +4756,7 @@ def _astar(
     gx0, gy0, gh, xstep, size = flat.gx0, flat.gy0, flat.gh, flat.xstep, flat.size
     levels = flat.levels
     ystep = levels
-    transitions = _routing_transitions(xstep, levels, flat.vertical_construction, reverse)
+    transitions = _routing_transitions(xstep, levels, flat.vertical_construction)
     admitted_edges = {} if extra_edges is None else extra_edges
     for source, edges in admitted_edges.items():
         if not 0 <= source < size:
@@ -5310,362 +4782,106 @@ def _astar(
         if sx0 <= cell[0] <= sx1 and sy0 <= cell[1] <= sy1 and 0 <= cell[2] < levels:
             flags[flat.index(cell)] = 0
 
-    forward_flags: bytes | None = None
-    if reverse:
-        admitted_starts = [
-            start
-            for start in starts
-            if start not in forbidden_cells
-            and (canvas.free(start) or start in owned or start in released)
-        ]
-        forward_flags = bytes(flags)
-        starts = [goal for goal in goal_list if flags[flat.index(goal)]]
-        goal_list = admitted_starts
-        if not starts or not goal_list:
-            return _PathSearchResult(None, RouteFailureKind.BUDGET, (), 0)
-        # A forward seed may lie on the entry ring or a released path. It may
-        # terminate this reverse query, but cannot become a forward interior
-        # cell: check that distinction against the untouched flags on return.
-        for goal in goal_list:
-            flags[flat.index(goal)] = 1
-
-    # Round one of rip-up has no history yet, and round one is the round that
-    # usually succeeds. Skipping the array and the multiply there costs one
-    # branch on the rounds that do have history.
-    hist = flat.hist
-    negotiating = hist is not None
-    if hist is None:
-        hist = []
-
-    # Heuristic: Manhattan distance to the NEAREST goal, in grid-local
-    # coordinates so a popped cell's decoded position can be used directly.
-    #
-    # This used to use the goals' centroid, which is not admissible when the
-    # goals are spread out and -- worse -- never reaches 0 at an actual goal.
-    # That turned A* into a badly-guided Dijkstra that expanded in every
-    # direction, which is what made routing take tens of seconds.
-    #
-    # Exact min is best but costs O(|goals|) per node, so fall back to distance
-    # to the goals' bounding box once that would dominate. The box distance is
-    # still admissible (it under-estimates), just weaker.
-    if len(goal_list) == 1:
-        # By far the commonest shape -- a port with one free neighbour -- and
-        # the generator, the `min` and the `float` around them were 17% of the
-        # profile between them. One goal needs none of the three.
-        only_x = goal_list[0][0] - gx0
-        only_y = goal_list[0][1] - gy0
-
-        def h(p: int) -> float:
-            x, y = divmod(p, gh)
-            dx = x - only_x
-            dy = y - only_y
-            return (dx if dx >= 0 else -dx) + (dy if dy >= 0 else -dy)
-
-    elif len(goal_list) <= _EXACT_HEURISTIC_GOALS:
-        # A LOOP, not `min` over a generator.  Same value, and the generator was
-        # measured at 3.1s of a 15.8s routing pass for 996k calls -- 3.1us each,
-        # against 0.9us for the composite that wraps it.  Building and draining
-        # a generator frame per NODE is most of that; the goal set here is a
-        # handful of cells and duplicates in x or y are pointless work, so the
-        # list is deduplicated once instead.
-        near = tuple({(c[0] - gx0, c[1] - gy0) for c in goal_list})
-
-        def h(p: int) -> float:
-            x, y = divmod(p, gh)
-            best_d = 1 << 30
-            for fx, fy in near:
-                dx = x - fx
-                dy = y - fy
-                d = (dx if dx >= 0 else -dx) + (dy if dy >= 0 else -dy)
-                if d < best_d:
-                    best_d = d
-            return best_d
-
-    else:
-        bx0 = min(c[0] for c in goal_list) - gx0
-        bx1 = max(c[0] for c in goal_list) - gx0
-        by0 = min(c[1] for c in goal_list) - gy0
-        by1 = max(c[1] for c in goal_list) - gy0
-
-        def h(p: int) -> float:
-            x, y = divmod(p, gh)
-            return float(max(0, bx0 - x, x - bx1) + max(0, by0 - y, y - by1))
-
-    # AND THE PART THAT KNOWS WHERE THE MACHINES ARE -- see `_ALT_LANDMARKS`.
-    #
-    # For each landmark, the goals occupy a band ``[lo, hi]`` on its dial, and a
-    # cell at ``d`` is at least ``lo - d`` or ``d - hi`` steps from the nearest
-    # of them.  Reducing the goal set to a band rather than taking a minimum per
-    # goal is what keeps this O(landmarks) instead of O(landmarks x goals): it
-    # is weaker, and it is the same weakening the bounding box above already
-    # makes.
-    #
-    # A landmark that cannot reach one of the goals is DROPPED, not clamped.
-    # Its band would then cover only the goals it can see, and a cell measured
-    # against that band could be charged more than its distance to the goal the
-    # band left out -- which is the one way this could stop being a lower bound.
-    bands: list[tuple[list[int], int, int]] = []
-    for field_ in () if admitted_edges or reverse else flat.alt:
-        lo = hi = -1
-        for c in goal_list:
-            at = (c[0] - gx0) * gh + (c[1] - gy0)
-            dial = field_[at]
-            if dial < 0:
-                lo = -1
-                break
-            if lo < 0 or dial < lo:
-                lo = dial
-            if dial > hi:
-                hi = dial
-        if lo >= 0:
-            bands.append((field_, lo, hi))
-
-    if bands and len(goal_list) == 1:
-        # THE SINGLE-GOAL DISTANCE IS INLINED HERE, and only here.
-        #
-        # One goal is by far the commonest shape and it is the case the wrapper
-        # cost the most, because the whole body it was calling is four
-        # subtractions: a Python frame per node to save nothing.  Profiled on
-        # `universe-matrix/no-proliferator` power=1 at h=185, the composite ran
-        # 2.71M times in one routing pass.  Identical values -- this is the same
-        # expression, not an approximation of it.
-        def h(p: int) -> float:  # noqa: F811
-            x, y = divmod(p, gh)
-            dx = x - only_x
-            dy = y - only_y
-            far: float = (dx if dx >= 0 else -dx) + (dy if dy >= 0 else -dy)
-            at = p
-            for field_, lo, hi in bands:
-                dial = field_[at]
-                if dial < 0:
-                    continue
-                gap = lo - dial
-                if gap > far:
-                    far = gap
-                gap = dial - hi
-                if gap > far:
-                    far = gap
-            return far
-
-    elif bands:
-        plain = h
-
-        def h(p: int) -> float:  # noqa: F811
-            far = plain(p)
-            at = p
-            for field_, lo, hi in bands:
-                dial = field_[at]
-                if dial < 0:
-                    continue
-                gap = lo - dial
-                if gap > far:
-                    far = gap
-                gap = dial - hi
-                if gap > far:
-                    far = gap
-            return far
-
-    # A BYTE PER CELL rather than a set of cell indices: the goal test is on the
-    # expansion path, so it runs once per node popped, and a `bytearray(size)` is
-    # a 1.4us calloc against the 290us a list of that length costs.  Every goal
-    # index is inside the span -- the caller's grid was checked against it above,
-    # and a one-off grid is built from `_span_for`, which covers the goals.
-    goal_flag = bytearray(size)
-    for c in goal_list:
-        goal_flag[(c[0] - gx0) * xstep + (c[1] - gy0) * ystep + c[2]] = 1
-
-    # The admitted starts, as flat indices, computed once: both loops seed the
-    # heap from this list and neither re-derives it.
+    # Admit starts once using the same source exceptions as the physical caller.
     start_indices = [
         (s[0] - gx0) * xstep + (s[1] - gy0) * ystep + s[2]
         for s in starts
-        if reverse
-        or not (
+        if not (
             s in forbidden_cells or (not canvas.free(s) and s not in owned and s not in released)
         )
     ]
     if not start_indices:
         return _PathSearchResult(None, RouteFailureKind.DYNAMIC_ACCESS, (), 0)
 
-    # `budget` is read into a local and written back at every exit, because a
-    # `budget["left"] -= 1` is a hash, a lookup and a store on the hottest line
-    # in this router -- 1.25M of them in one `quantum-chip` routing pass.
+    # The kernel returns its exact charge on every normal exit.
     start_left = budget["left"] if budget is not None else 1 << 62
 
-    height_targets: list[tuple[int, int, int, int, int]] = []
-    height_costs = array("d")
-    height_stride = size // xstep + gh - 1
-    search_heuristic: Callable[[int], float] = h
-    if not admitted_edges:
-        offsets: dict[int, int] = {}
-        for goal_level in sorted({cell[2] for cell in goal_list}):
-            key = (levels, flat.vertical_construction, height_stride - 1, goal_level, reverse)
-            costs = flat.cost_fields.get(key)
-            if costs is None:
-                costs = _relaxed_goal_costs(
-                    levels,
-                    flat.vertical_construction,
-                    height_stride - 1,
-                    goal_level,
-                    reverse=reverse,
-                    deadline=deadline,
-                )
-                if costs is None:
-                    return _PathSearchResult(None, RouteFailureKind.BUDGET, (), 0)
-                flat.cost_fields[key] = costs
-            offsets[goal_level] = len(height_costs)
-            height_costs.extend(costs)
-        if len(goal_list) <= _EXACT_HEURISTIC_GOALS:
-            height_targets = [
-                (x - gx0, y - gy0, x - gx0, y - gy0, offsets[level])
-                for x, y, level in sorted(set(goal_list))
-            ]
-        else:
-            for goal_level, offset in offsets.items():
-                columns = [(x - gx0, y - gy0) for x, y, level in goal_list if level == goal_level]
-                height_targets.append(
-                    (
-                        min(x for x, _y in columns),
-                        min(y for _x, y in columns),
-                        max(x for x, _y in columns),
-                        max(y for _x, y in columns),
-                        offset,
-                    )
-                )
-
-        def height_bound(index: int) -> float:
-            column, level = divmod(index, levels)
-            x, y = divmod(column, gh)
-            best = math.inf
-            for x0, y0, x1, y1, offset in height_targets:
-                distance = max(0, x0 - x, x - x1) + max(0, y0 - y, y - y1)
-                best = min(best, height_costs[offset + level * height_stride + distance])
-            return max(h(column), best)
-
-        search_heuristic = height_bound
-
-    path_indices: Sequence[int] | None
-    settled: Sequence[int]
-    if route_kernel._compiled_astar is not None and _kernel_margin_holds(
-        flat, (*starts, *goal_list)
-    ):
-        # The compiled loop takes the heuristic apart rather than calling back
-        # into `h`: which of the three plain terms applies, the deduplicated
-        # goal columns the exact term needs, the bounding box the weak term
-        # needs, and the landmark fields, all as buffers.  It re-derives the
-        # same bands `h` closed over, from the same goal columns.
-        near = tuple({(c[0] - gx0, c[1] - gy0) for c in goal_list})
-        goal_columns = array("q", [v for pair in near for v in pair])
-        goal_box = (
-            min(c[0] for c in goal_list) - gx0,
-            min(c[1] for c in goal_list) - gy0,
-            max(c[0] for c in goal_list) - gx0,
-            max(c[1] for c in goal_list) - gy0,
+    world = GeometricWorld.from_grid(flat, flags, transitions)
+    result = geometric_router.route(
+        geometric_router.GeometricQuery(
+            world=world,
+            starts=tuple(start_indices),
+            goals=tuple(flat.index(cell) for cell in goal_list),
+            pressure=pressure,
+            max_work=min(_MAX_EXPANSIONS, start_left),
+            deadline=deadline,
+            extra_edges=admitted_edges,
         )
-        if not negotiating:
-            hist_buffer = array("d")
-        elif isinstance(hist, array):
-            hist_buffer = hist
-        else:
-            hist_buffer = array("d", hist)
-        # The extension is typed by `_route_kernel.pyi`, but the backend holds it
-        # as a `Callable[..., object]` so a missing extension is a None rather
-        # than an import error; the shape it returns is that stub's.
-        path_indices, expansions, kind, settled, left = cast(
-            "tuple[Sequence[int] | None, int, int, Sequence[int], int]",
-            route_kernel._compiled_astar(
-                flags,
-                hist_buffer,
-                pressure,
-                array("q") if admitted_edges or reverse else flat.alt_flat,
-                0 if admitted_edges or reverse else len(flat.alt),
-                goal_flag,
-                goal_columns,
-                len(goal_list) <= _EXACT_HEURISTIC_GOALS,
-                goal_box,
-                array("q", start_indices),
-                gh,
-                xstep,
-                levels,
-                array("d"),
-                _MAX_EXPANSIONS,
-                start_left,
-                _DEADLINE_CHECK_EVERY if deadline_check_every is None else deadline_check_every,
-                deadline,
-                _expired,
-                transitions,
-                admitted_edges,
-                array("q", [value for target in height_targets for value in target]),
-                height_costs,
-                height_stride if height_targets else 0,
-            ),
-        )
-        if budget is not None:
-            budget["left"] = left
-    else:
-        path_indices, expansions, kind, settled = _astar_python_loop(
-            flags,
-            hist if negotiating else None,
-            pressure,
-            goal_flag,
-            start_indices,
-            search_heuristic,
-            size,
-            gh,
-            xstep,
-            budget,
-            start_left,
-            deadline,
-            levels,
-            transitions,
-            admitted_edges,
-            deadline_check_every,
-            bool(height_targets),
-        )
-
-    if kind == 1:
+    )
+    expansions = result.metrics["charged_work"]
+    if budget is not None:
+        budget["left"] = start_left - expansions
+    if result.kind in ("budget", "cancelled"):
         return _PathSearchResult(None, RouteFailureKind.BUDGET, (), expansions)
-    if kind == 0:
+    path_indices = result.path
+    if result.kind == "routed":
         assert path_indices is not None
         cells = []
         for index in path_indices:
             q, lvl = divmod(index, levels)
             px, py = divmod(q, gh)
             cells.append((px + gx0, py + gy0, lvl))
-        if reverse:
-            cells.reverse()
-            assert forward_flags is not None
-            if any(not forward_flags[flat.index(cell)] for cell in cells[1:]):
-                return _PathSearchResult(None, RouteFailureKind.BUDGET, (), expansions)
-        return _PathSearchResult(tuple(_cut_loops(cells)), None, (), expansions)
-    if reverse:
-        return _PathSearchResult(None, RouteFailureKind.BUDGET, (), expansions)
+        return _PathSearchResult(
+            tuple(_cut_loops(cells, ramped=canvas.ramped)), None, (), expansions
+        )
 
-    # THE HEAP EMPTIED, which is the one ending that proves no path exists -- the
-    # Budget exits above do not say the pocket is sealed. The settled cells are
-    # exactly the free space this net could reach and the blocked cells touching
-    # them are its wall. Only tentative cells have a routing-net owner.
+    # Forward exhaustion keeps its existing cardinal ownership frontier.
+    # Reverse exhaustion instead exposes predecessors of the goal component;
+    # a directed ramp's via remains on its original source level.
+    reached = result.reachable if result.co_reachable is None else result.co_reachable
+
+    def boundary_cells() -> Iterator[Cell]:
+        settled = (
+            (x * world.ny + y) * world.nz + z for y, z, lo, hi in reached for x in range(lo, hi + 1)
+        )
+        if result.co_reachable is None:
+            for index in settled:
+                x, y, level = world.cell(index)
+                for dx, dy in _STEPS:
+                    cell = (x + dx, y + dy, level)
+                    if (
+                        sx0 <= cell[0] <= sx1
+                        and sy0 <= cell[1] <= sy1
+                        and not flags[flat.index(cell)]
+                    ):
+                        yield cell
+            return
+        incoming: list[list[tuple[int, int, int, bool]]] = [[] for _ in range(levels)]
+        for source_level, row in enumerate(world.transitions):
+            for dx, dy, dz, via, _cost in row:
+                target_level = source_level + dz
+                if 0 <= target_level < levels:
+                    incoming[target_level].append((dx, dy, source_level, via))
+        goal_component = frozenset(settled)
+        for index in goal_component:
+            x, y, level = world.cell(index)
+            for dx, dy, source_level, via in incoming[level]:
+                source = (x - dx, y - dy, source_level)
+                if not (sx0 <= source[0] <= sx1 and sy0 <= source[1] <= sy1):
+                    continue
+                if not flags[flat.index(source)]:
+                    yield source
+                ramp_via = (x - dx // 2, y - dy // 2, source_level)
+                if via and not flags[flat.index(ramp_via)]:
+                    yield ramp_via
+        for goal in goal_list:
+            if not flags[flat.index(goal)]:
+                yield goal
+        for source_index, edges in admitted_edges.items():
+            if not flags[source_index] and any(target in goal_component for target, _cost in edges):
+                yield world.cell(source_index)
+
     if blocking_owners is not None:
         owner_get = blocking_owners.get
         wall_by_owner: dict[int, Cell] = {}
         too_diffuse = False
-        for index in settled:
-            q, level = divmod(index, levels)
-            x, y = divmod(q, gh)
-            x += gx0
-            y += gy0
-            for dx, dy in _STEPS:
-                cell = (x + dx, y + dy, level)
-                if not (sx0 <= cell[0] <= sx1 and sy0 <= cell[1] <= sy1):
-                    continue
-                blocker = owner_get(cell)
-                if blocker is None or flags[flat.index(cell)]:
-                    continue
-                wall_by_owner.setdefault(blocker, cell)
-                if len(wall_by_owner) > _BLAME_MAX_WALL:
-                    too_diffuse = True
-                    break
-            if too_diffuse:
+        for cell in boundary_cells():
+            blocker = owner_get(cell)
+            if blocker is None:
+                continue
+            wall_by_owner.setdefault(blocker, cell)
+            if len(wall_by_owner) > _BLAME_MAX_WALL:
+                too_diffuse = True
                 break
         owner_wall_cells = () if too_diffuse else tuple(sorted(wall_by_owner.values()))
         if blame is not None:
@@ -5678,20 +4894,12 @@ def _astar(
             expansions,
         )
     wall_cells: tuple[Cell, ...] = ()
-    if len(settled) <= _BLAME_MAX_POCKET:
+    if sum(hi - lo + 1 for _, _, lo, hi in reached) <= _BLAME_MAX_POCKET:
         blocked_get = canvas.blocked.get
         wall: set[Cell] = set()
-        for i in settled:
-            q, blvl = divmod(i, levels)
-            bx, by = divmod(q, gh)
-            bx += gx0
-            by += gy0
-            for dx, dy in _STEPS:
-                cell = (bx + dx, by + dy, blvl)
-                if not (sx0 <= cell[0] <= sx1 and sy0 <= cell[1] <= sy1):
-                    continue
-                if blocked_get(cell) == _TENTATIVE and not flags[flat.index(cell)]:
-                    wall.add(cell)
+        for cell in boundary_cells():
+            if blocked_get(cell) == _TENTATIVE:
+                wall.add(cell)
         if len(wall) <= _BLAME_MAX_WALL:
             wall_cells = tuple(sorted(wall))
             if blame is not None:
@@ -6763,7 +5971,7 @@ def _route_all(
 
     history: dict[tuple[int, int, int], float] = defaultdict(float)
     primitives = RoutePrimitives(canvas.belt_rules)
-    geometry_world: GeometricWorld | None = None
+    geometry_world: projection_world.GeometricWorld | None = None
     geometry_screen: FlatScreen | None = None
     #: The live routing -- net index to path -- and the same cells the other way
     #: round.  ``owner`` is what makes a TARGETED rip-up possible: a repair
@@ -7247,10 +6455,6 @@ def _route_all(
     grid_box = _route_box(canvas, bounds)
     grid = _make_grid(canvas, grid_box, _canvas_span(canvas, grid_box), history)
     corridor_reservations = _CorridorReservations(canvas, grid, owner)
-    # The landmark sweeps go here and NOT in `_make_grid`, because they are only
-    # worth their build to a caller that will make hundreds of searches against
-    # one grid.  Everybody else routes a handful of nets and gets Manhattan.
-    grid.build_landmarks(_ALT_LANDMARKS)
 
     # Nets that end at the same physical lane share destination topology even
     # when they carry different items.  Entry lanes are deliberately mixed:
@@ -7564,7 +6768,14 @@ def _route_all(
             del guard_claims[cell]
             if cell not in permanent_guard:
                 canvas.guard.discard(cell)
-            if cell not in owner and canvas.free(cell):
+            # Reservations belong to per-query flags, not hard occupancy.
+            # A foreign reservation must not keep a withdrawn guard blocked.
+            if (
+                cell not in owner
+                and cell not in canvas.guard
+                and cell not in canvas.blocked
+                and _inside_grid(cell)
+            ):
                 grid.restore(cell)
         source_hint.pop(index, None)
         sink_hint.pop(index, None)
@@ -8047,7 +7258,7 @@ def _route_all(
         nonlocal geometry_world, geometry_screen
         try:
             if geometry_world is None:
-                geometry_world = GeometricWorld(canvas, deadline=query_deadline)
+                geometry_world = projection_world.GeometricWorld(canvas, deadline=query_deadline)
             world = geometry_world
             world.history = search_history
             world.pressure = pressure
@@ -8162,7 +7373,6 @@ def _route_all(
                 forbidden=blocked,
                 blocking_owners=owner,
                 extra_edges=None,
-                deadline_check_every=64,
             )
             search_budget["left"] -= ordinary_remaining - private["left"]
             ordinary_remaining = private["left"]
@@ -8170,40 +7380,13 @@ def _route_all(
             if result.path is not None:
                 return result
             if result.kind is RouteFailureKind.BUDGET and (
-                result.expansions > _MAX_EXPANSIONS or ordinary_remaining <= 0
+                result.expansions >= _MAX_EXPANSIONS or ordinary_remaining <= 0
             ):
                 capped_ordinary = result
             return None
 
         try:
             ordinary = probe_ordinary(starts, forbidden)
-            if not ordinary_only and ordinary is None and capped_ordinary is not None:
-                # A second direction must not consume the quota retained for
-                # connector enrichment and later nets.
-                reverse_allowance = min(connector_reserve, max(0, search_budget["left"]) // 2)
-                if reverse_allowance >= 2 and not _expired(ordinary_deadline):
-                    reverse_budget = {"left": reverse_allowance}
-                    try:
-                        proposal = _astar(
-                            canvas,
-                            starts,
-                            goals,
-                            search_history,
-                            pressure,
-                            bounds,
-                            budget=reverse_budget,
-                            deadline=ordinary_deadline,
-                            grid=search_grid,
-                            owned_starts=owned_starts,
-                            released_starts=released_starts,
-                            forbidden=forbidden,
-                            reverse=True,
-                        )
-                    finally:
-                        search_budget["left"] -= reverse_allowance - reverse_budget["left"]
-                    total_expansions += proposal.expansions
-                    if proposal.path is not None:
-                        ordinary = proposal
             # Large first passes spend only their ordinary share. Optional physical
             # enrichment belongs to repair, after every net has had an opportunity.
             for retry in range(5):
@@ -10191,10 +9374,8 @@ class _CorridorReservations:
         for cell in (corridor.access, corridor.exit):
             fresh = cell not in self.canvas.reserved
             self.canvas.reserved[cell] = key
-            if self.grid is not None:
-                self.grid.block(cell)
-                if fresh:
-                    added.append((self.grid.index(cell), key))
+            if self.grid is not None and fresh:
+                added.append((self.grid.index(cell), key))
         if self.grid is not None:
             self.grid.reserved = tuple(sorted((*self.grid.reserved, *added)))
 
@@ -13954,8 +13135,17 @@ class _SelectionPrefix:
     member: PlacedBuilding | None
     extent: _SelectionExtent
     children: dict[PlacedBuilding, _SelectionPrefix] = field(default_factory=dict)
-    frame_verdicts: dict[_JunctionProjectionFrame, bool] = field(default_factory=dict)
     verdict: bool | None = None
+
+
+@dataclass(slots=True)
+class _FramePairChecks:
+    """Frame-local identities and exact ordered-pair compatibility proofs."""
+
+    indices: dict[PlacedBuilding, int] = field(default_factory=dict)
+    members: list[PlacedBuilding] = field(default_factory=list)
+    compatible: list[int] = field(default_factory=list)
+    incompatible: list[int] = field(default_factory=list)
 
 
 class _CompositionProjection:
@@ -14036,9 +13226,7 @@ class _CompositionProjection:
             None, None, _SelectionExtent(None, None, self._bounds)
         )
         self._member_verdicts: dict[tuple[PlacedBuilding, _JunctionProjectionFrame], bool] = {}
-        self._pair_verdicts: dict[
-            tuple[PlacedBuilding, PlacedBuilding, _JunctionProjectionFrame], bool
-        ] = {}
+        self._frame_pair_checks: dict[_JunctionProjectionFrame, _FramePairChecks] = {}
         self._coater_context_verdicts: dict[
             tuple[PlacedBuilding, tuple[planet.Band, int, float, int, bool, float, float]], bool
         ] = {}
@@ -14378,10 +13566,6 @@ class _CompositionProjection:
     def _pair_clear(
         self, left: PlacedBuilding, right: PlacedBuilding, frame: _JunctionProjectionFrame
     ) -> bool:
-        key = (left, right, frame)
-        verdict = self._pair_verdicts.get(key)
-        if verdict is not None:
-            return verdict
         index = self._addition_obstacles.get(left)
         if index is None:
             index = _ProjectedObstacleIndex.build(((0, left),), cancelled=self.cancelled)
@@ -14399,7 +13583,6 @@ class _CompositionProjection:
             )
             is not None
         ):
-            self._pair_verdicts[key] = False
             return False
         left_power = catalog.building(left.item_id).power_node
         right_power = catalog.building(right.item_id).power_node
@@ -14410,62 +13593,44 @@ class _CompositionProjection:
             )
             for projection in frame.projections:
                 if self._projection_cache.power_failure(nodes, projection) is not None:
-                    self._pair_verdicts[key] = False
                     return False
-        self._pair_verdicts[key] = True
         return True
 
     def _frame_clear(
         self, additions: tuple[PlacedBuilding, ...], frame: _JunctionProjectionFrame
     ) -> bool:
-        # Infill may enlarge the routed canvas. Every verdict includes the
-        # exact new frame, so earlier objects retain no old-frame exemption.
-        nodes = self._selection_nodes(additions)
-        start = 0
-        for offset in range(len(nodes) - 1, -1, -1):
-            if self.cancelled():
-                raise _PreparationDeadline
-            known = nodes[offset].frame_verdicts.get(frame)
-            if known is False:
-                return False
-            if known is True:
-                start = offset + 1
-                break
-        if start == 0 and not self._base_clear(frame):
+        # Frame-local proofs survive selection changes, never an extent change.
+        if not self._base_clear(frame):
             return False
-        addition_obstacles: _ProjectedObstacleIndex | None = None
-        power_indices: tuple[int, ...] = ()
-        for offset in range(start, len(additions)):
+        checks = self._frame_pair_checks.get(frame)
+        if checks is None:
+            checks = _FramePairChecks()
+            self._frame_pair_checks[frame] = checks
+        prior = 0
+        for building in additions:
             if self.cancelled():
                 raise _PreparationDeadline
-            building = additions[offset]
-            clear = self._member_clear(building, frame)
-            if clear and offset:
-                if addition_obstacles is None:
-                    addition_obstacles = _ProjectedObstacleIndex.build(
-                        tuple(enumerate(additions)), cancelled=self.cancelled
-                    )
-                    power_indices = tuple(
-                        index
-                        for index, member in enumerate(additions)
-                        if catalog.building(member.item_id).power_node.is_power_node
-                    )
-                peers = addition_obstacles.candidates_for_bands(
-                    building, self._frame_bands[frame], cancelled=self.cancelled
-                )
-                if catalog.building(building.item_id).power_node.is_power_node:
-                    # Collider bounds do not cover the separate power-spacing gate.
-                    peers = tuple(sorted(set(peers).union(power_indices)))
-                clear = all(
-                    self._pair_clear(additions[index], building, frame)
-                    for index in peers
-                    if index < offset
-                )
-            if self.cancelled():
-                raise _PreparationDeadline
-            nodes[offset].frame_verdicts[frame] = clear
-            if not clear:
+            position = checks.indices.get(building)
+            if position is None:
+                if not self._member_clear(building, frame):
+                    return False
+                position = len(checks.members)
+                checks.indices[building] = position
+                checks.members.append(building)
+                checks.compatible.append(0)
+                checks.incompatible.append(0)
+            if prior & checks.incompatible[position]:
                 return False
+            unchecked = prior & ~checks.compatible[position]
+            while unchecked:
+                bit = unchecked & -unchecked
+                previous = checks.members[bit.bit_length() - 1]
+                if not self._pair_clear(previous, building, frame):
+                    checks.incompatible[position] |= bit
+                    return False
+                checks.compatible[position] |= bit
+                unchecked ^= bit
+            prior |= 1 << position
         return True
 
 
@@ -14609,35 +13774,6 @@ def _projection_envelope(
     return tuple(projections)
 
 
-def _power_projection_envelope(
-    canvas: _Canvas,
-    policy: BandPolicy,
-    *,
-    capacity: tuple[int, int, int, int] | None = None,
-    cancelled: Callable[[], bool] | None = None,
-) -> tuple[planet.Projection, ...]:
-    """Projection union down to geometry no cleanup eligibility can remove."""
-    if cancelled is not None and cancelled():
-        raise _PreparationDeadline
-    occupied = _core_bounds(canvas)
-    cleanup_inner = (
-        finalize._cleanup_survivor_bounds(
-            Placement(buildings=tuple(canvas.buildings)),
-        )
-        if cancelled is None
-        else finalize._cleanup_survivor_bounds(
-            Placement(buildings=tuple(canvas.buildings)),
-            cancelled=cancelled,
-        )
-    )
-    return _projection_envelope(
-        cleanup_inner,
-        capacity if capacity is not None else canvas.limit or occupied,
-        policy,
-        cancelled=cancelled,
-    )
-
-
 def _power_reservation(tower: catalog.Building) -> tuple[int, int, int, int]:
     """Cell offsets enclosing the collider clearance about the real footprint.
 
@@ -14659,6 +13795,9 @@ def _power_plan(
     *,
     policy: BandPolicy,
     additional_demand: Collection[tuple[int, int]] = (),
+    complete_plan_failure: Callable[
+        [tuple[PlacedBuilding, ...]], finalize.ProjectionFailure | None
+    ] | None = None,
     staged_static_cache: _StagedStaticCache | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> list[tuple[int, int]]:
@@ -14934,8 +14073,18 @@ def _power_plan(
             if 0 <= gx < shape[0] and 0 <= gy < shape[1]:
                 free[gx, gy] = False
 
-    projections = _power_projection_envelope(
-        canvas,
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    static_buildings = list(enumerate(canvas.buildings))
+    cleanup_prefix = finalize._CleanupSurvivorGraph(
+        Placement(buildings=tuple(building for _, building in static_buildings)),
+        cancelled=cancelled,
+        _operations=staged_static_cache.cleanup_operations,
+    )
+    cleanup_bounds = cleanup_prefix.snapshot_bounds()
+    projections = _projection_envelope(
+        cleanup_bounds,
+        canvas.limit or _core_bounds(canvas),
         policy,
         cancelled=cancelled,
     )
@@ -14945,18 +14094,11 @@ def _power_plan(
             key=lambda band: band.area_segments,
         )
     )
-    static_buildings = list(enumerate(canvas.buildings))
     static_by_index = dict(static_buildings)
     obstacle_index = _ProjectedObstacleIndex.build(
         static_buildings,
         cancelled=cancelled,
     )
-    cleanup_prefix = finalize._CleanupSurvivorGraph(
-        Placement(buildings=tuple(building for _, building in static_buildings)),
-        cancelled=cancelled,
-        _operations=staged_static_cache.cleanup_operations,
-    )
-    cleanup_bounds = cleanup_prefix.snapshot_bounds()
     static_frames_by_bounds: dict[
         tuple[int, int, int, int],
         tuple[_JunctionProjectionFrame, ...],
@@ -15023,6 +14165,10 @@ def _power_plan(
         ]
 
     remaining = dark.copy()
+    remaining_count = (
+        int(np.count_nonzero(remaining)) if complete_plan_failure is not None else 0
+    )
+    deferred_sites: list[tuple[int, int]] = []
     # `score` is maintained incrementally. Rebuilding it every round is the same
     # answer and was measured at 0.9s on `universe-matrix`, which is real money
     # against a 15s deadline; only the cells within two radii of a new tower can
@@ -15283,6 +14429,26 @@ def _power_plan(
                     cache=staged_static_cache,
                     cancelled=cancelled,
                 )
+        if (
+            candidate_failure is None
+            and complete_plan_failure is not None
+            and int(score[gx, gy]) == remaining_count
+        ):
+            candidate_failure = complete_plan_failure(
+                (
+                    *(building for index, building, _ in power_nodes if index >= len(canvas.buildings)),
+                    candidate[1],
+                )
+            )
+            if candidate_failure is not None:
+                # Complete geometry can change its primary frame when a later
+                # required tower changes the bounds. Revisit only after that
+                # prefix changes, not repeatedly against the same placement.
+                deferred_sites.append((gx, gy))
+                if projected_refusal is None:
+                    projected_refusal = candidate_failure
+                free[gx, gy] = False
+                continue
         if candidate_failure is not None:
             if projected_refusal is None:
                 projected_refusal = candidate_failure
@@ -15299,6 +14465,11 @@ def _power_plan(
         peer_centres.append(candidate_centre)
         cleanup_bounds = candidate_bounds
         cleanup_prefix = candidate_cleanup
+        if complete_plan_failure is not None:
+            remaining_count -= int(score[gx, gy])
+            for deferred_x, deferred_y in deferred_sites:
+                free[deferred_x, deferred_y] = True
+            deferred_sites.clear()
 
         # The cell itself AND every cell inside the paste's power-node spacing
         # rule.  Marking only the cell is what shipped a blueprint the game
@@ -15329,6 +14500,8 @@ def _power_plan(
             lo_y, hi_y = gy - 2 * reach, gy + 2 * reach + 1
             for dx, dy in disc:
                 score[lo_x:hi_x, lo_y:hi_y] -= covered[lo_x + dx : hi_x + dx, lo_y + dy : hi_y + dy]
+        if complete_plan_failure is not None and remaining_count == 0:
+            break
     else:
         raise _Unpowerable(
             "tower placement did not converge",
@@ -16302,8 +15475,14 @@ def _prepare_transport_inventory(
     belt_rules: catalog.BeltAltitudeRules = _DEFAULT_BELT_RULES,
     cancelled: Callable[[], bool] | None = None,
     coater_node_sites: Mapping[tuple[int, str], tuple[int, int]] | None = None,
+    coater_envelope: finalize.BandPolicySearchEnvelope | None = None,
 ) -> _RoutingInventory:
-    """Share physical emission and directed producer allocation across routers."""
+    """Share physical emission and directed producer allocation across routers.
+
+    A real packed scene supplies ``coater_envelope`` before automatic node
+    placement. Native template inventories instead supply explicit node sites
+    on a disjoint capture canvas; their final frame is chosen at composition.
+    """
     belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
     belt_model = catalog.building(belt_id).model_index
     power_building = catalog.power_tower_building(spec.power_tower_item_id)
@@ -16447,6 +15626,7 @@ def _prepare_transport_inventory(
     # packer is untouched and only the router sees the extra net.
     coater_node_links: list[tuple[str, _Port, _Port]] = []
     if coater_mode().is_node:
+        node_core = _core_bounds(canvas)
         for strip_index, s in enumerate(strips):
             if s.cargo_domain is not CargoDomain.REQUIRES_SPRAY:
                 continue
@@ -16455,7 +15635,12 @@ def _prepare_transport_inventory(
                 if consumer_port is None:
                     continue
                 site = (
-                    _coater_node_site(canvas, (consumer_port.x, consumer_port.y))
+                    _coater_node_site(
+                        canvas,
+                        (consumer_port.x, consumer_port.y),
+                        core=node_core,
+                        envelope=coater_envelope,
+                    )
                     if coater_node_sites is None
                     else coater_node_sites.get((strip_index, item))
                 )
@@ -16479,6 +15664,12 @@ def _prepare_transport_inventory(
                     belt_model=belt_model,
                     machines=consumer_port.machines,
                     owner_strip=strip_index,
+                )
+                node_core = (
+                    min(node_core[0], site[0]),
+                    min(node_core[1], site[1] - 1),
+                    max(node_core[2], site[0] + _COATER_NODE_TILES - 1),
+                    max(node_core[3], site[1]),
                 )
                 for belt in node_in.tiles:
                     strip_of_belt[belt] = strip_index
@@ -16736,8 +15927,14 @@ def _prepare_routing_problem(
     """Build immutable exact geometry shared by both routing engines."""
     if staged_static_cache is None:
         staged_static_cache = _StagedStaticCache()
+    envelope = finalize.band_policy_search_envelope(policy, perimeter=_ENTRY_RING)
     inventory = _prepare_transport_inventory(
-        spec, strips, pack, belt_rules=belt_rules, cancelled=cancelled
+        spec,
+        strips,
+        pack,
+        belt_rules=belt_rules,
+        cancelled=cancelled,
+        coater_envelope=envelope,
     )
     belt_id = inventory.belt_id
     belt_model = inventory.belt_model
@@ -16909,10 +16106,6 @@ def _prepare_routing_problem(
     # empty by construction, which is what makes an entry belt reachable from
     # outside no matter what else the router does.
     core = _core_bounds(canvas)
-    envelope = finalize.band_policy_search_envelope(
-        policy,
-        perimeter=_ENTRY_RING,
-    )
     core = _extend_core_for_unique_proliferator_roots(
         core,
         coater_count=len(coater_list),
@@ -17670,6 +16863,8 @@ def _coater_node_site(
     canvas: _Canvas,
     near: tuple[int, int],
     *,
+    core: tuple[int, int, int, int],
+    envelope: finalize.BandPolicySearchEnvelope | None,
     radius: int = 48,
 ) -> tuple[int, int] | None:
     """Free ground for one node, nearest the lane head it feeds.
@@ -17677,12 +16872,13 @@ def _coater_node_site(
     Variant C's whole placement rule.  Candidates are ordered by Chebyshev
     ring and, within a ring, by how far the node's OUT port ends up from the
     lane head it must reach -- a node whose east end is beside its consumer is
-    a short net, and a short net is the only thing the router cares about
-    here.  West-of-and-level-with the head therefore wins whenever it is free,
-    which is the same cell today's inline coater already occupies.
+    a short net. The full node, including its transverse supply approach, must
+    keep the shared routing envelope within an allowed latitude frame.
+    Explicit template inventories have no final frame yet and pass no envelope.
     """
     hx, hy = near
     best: tuple[int, int, int] | None = None
+    fitting_extents: dict[tuple[int, int], bool] = {}
     for ring in range(0, radius + 1):
         found: list[tuple[int, int, int]] = []
         if ring == 0:
@@ -17698,6 +16894,17 @@ def _coater_node_site(
             # The node's east tile is the one that has to reach the head.
             ox = hx + dx - _COATER_NODE_TILES
             oy = hy + dy
+            if envelope is not None:
+                extent = (
+                    max(core[2], ox + _COATER_NODE_TILES - 1) - min(core[0], ox) + 1,
+                    max(core[3], oy) - min(core[1], oy - 1) + 1,
+                )
+                fits = fitting_extents.get(extent)
+                if fits is None:
+                    fits = bool(envelope.frame_candidates(*extent))
+                    fitting_extents[extent] = fits
+                if not fits:
+                    continue
             if not _coater_node_site_is_clear(canvas, ox, oy):
                 continue
             out_x = ox + _COATER_NODE_TILES - 1

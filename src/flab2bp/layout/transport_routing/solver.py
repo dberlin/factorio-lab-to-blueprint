@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from bisect import bisect_left, bisect_right, insort
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from itertools import combinations
@@ -24,6 +25,7 @@ from .paths import (
     _middle,
     _owned,
     _path_error,
+    _Segment,
     domains,
 )
 from .repair import Neighborhood
@@ -124,14 +126,14 @@ class CellIndex:
                 row = events.setdefault(key, {})
                 spans.sort()
                 lo, hi = spans[0]
-                for start, end in spans[1:]:
+                for span_start, span_end in spans[1:]:
                     budget.charge("predicates")
-                    if start <= hi + 1:
-                        hi = max(hi, end)
+                    if span_start <= hi + 1:
+                        hi = max(hi, span_end)
                     else:
                         row[lo] = row.get(lo, 0) ^ bit
                         row[hi + 1] = row.get(hi + 1, 0) ^ bit
-                        lo, hi = start, end
+                        lo, hi = span_start, span_end
                 budget.charge("predicates")
                 row[lo] = row.get(lo, 0) ^ bit
                 row[hi + 1] = row.get(hi + 1, 0) ^ bit
@@ -207,13 +209,13 @@ class DomainIndex:
                         target[coordinate] = target.get(coordinate, 0) ^ bit
                         occupied = bool(mask)
                 assert not occupied
-        for key, row in events.items():
-            coordinates = tuple(sorted(row))
+        for key, row_events in events.items():
+            coordinates = tuple(sorted(row_events))
             active = 0
             masks: list[int] = []
             for coordinate in coordinates:
                 budget.charge("predicates")
-                active ^= row[coordinate]
+                active ^= row_events[coordinate]
                 masks.append(active)
             assert active == 0
             self.middle[key] = IntervalRow(coordinates, tuple(masks))
@@ -392,6 +394,156 @@ def _overlapping_cells(
     return (left_off_level & right) | (left & right_off_level)
 
 
+_RUN_FIXED_AXES = ((1, 2), (0, 2), (0, 1))
+
+type _RunLine = dict[tuple[int, int, int], int]
+
+
+@dataclass(slots=True)
+class _RunPlane:
+    coordinates: list[int] = field(default_factory=list)
+    lines: dict[int, _RunLine] = field(default_factory=dict)
+
+
+class _SelectedRuns:
+    """Exact selected-path contacts, indexed by orthogonal runs rather than cells."""
+
+    def __init__(self, count: int) -> None:
+        self.rows: list[dict[tuple[int, int], _RunLine]] = [{}, {}, {}]
+        self.planes: list[tuple[dict[int, _RunPlane], dict[int, _RunPlane]]] = [
+            ({}, {}) for _ in range(3)
+        ]
+        self.paths: list[tuple[_Segment, ...]] = [() for _ in range(count)]
+        self.bits: tuple[int, ...] = tuple(1 << i for i in range(count))
+        self.words: int = max(1, (count + 63) // 64)
+
+    @staticmethod
+    def _axis(segment: _Segment) -> int:
+        if segment.lo[0] != segment.hi[0]:
+            return 0
+        return 1 if segment.lo[1] != segment.hi[1] else 2
+
+    def _remove(self, segment: _Segment, owner: int, budget: WorkBudget) -> None:
+        axis = self._axis(segment)
+        b, c = _RUN_FIXED_AXES[axis]
+        key = segment.lo[b], segment.lo[c]
+        row = self.rows[axis][key]
+        record = segment.lo[axis], segment.hi[axis], owner
+        budget.charge("predicates", 7)
+        count = row[record]
+        if count > 1:
+            row[record] = count - 1
+            return
+        del row[record]
+        if row:
+            return
+        del self.rows[axis][key]
+        for side in range(2):
+            view = self.planes[axis][side]
+            plane = view[key[side]]
+            coordinate = key[1 - side]
+            budget.charge(
+                "predicates", 3 + len(plane.coordinates) + len(plane.coordinates).bit_length()
+            )
+            del plane.lines[coordinate]
+            del plane.coordinates[bisect_left(plane.coordinates, coordinate)]
+            if not plane.coordinates:
+                del view[key[side]]
+
+    def _insert(
+        self,
+        axis: int,
+        key: tuple[int, int],
+        low: int,
+        high: int,
+        owner: int,
+        budget: WorkBudget,
+    ) -> None:
+        budget.charge("predicates", 5)
+        row = self.rows[axis].get(key)
+        if row is None:
+            row = {}
+            self.rows[axis][key] = row
+            for side in range(2):
+                view = self.planes[axis][side]
+                plane = view.get(key[side])
+                if plane is None:
+                    plane = _RunPlane()
+                    view[key[side]] = plane
+                coordinate = key[1 - side]
+                budget.charge(
+                    "predicates", 3 + len(plane.coordinates) + len(plane.coordinates).bit_length()
+                )
+                insort(plane.coordinates, coordinate)
+                plane.lines[coordinate] = row
+        record = low, high, owner
+        row[record] = row.get(record, 0) + 1
+
+    def _partners(
+        self, segment: _Segment, axis: int, key: tuple[int, int], budget: WorkBudget
+    ) -> int:
+        result = 0
+        low, high = segment.lo[axis], segment.hi[axis]
+        budget.charge("predicates", 3)
+        row = self.rows[axis].get(key)
+        if row is not None:
+            for start, end, owner in row:
+                budget.charge("predicates", 2)
+                if start <= high and end >= low:
+                    budget.charge("predicates", self.words)
+                    result |= self.bits[owner]
+        # Perpendicular runs share the remaining coordinate. Query only rows
+        # within this run's interval, then test the other run's interval.
+        for target in range(3):
+            if target == axis:
+                continue
+            shared = 3 - axis - target
+            side = 0 if _RUN_FIXED_AXES[target][0] == shared else 1
+            budget.charge("predicates", 4)
+            plane = self.planes[target][side].get(segment.lo[shared])
+            if plane is None:
+                continue
+            coordinates = plane.coordinates
+            budget.charge("predicates", 2 * len(coordinates).bit_length())
+            begin, end = bisect_left(coordinates, low), bisect_right(coordinates, high)
+            fixed = segment.lo[target]
+            for offset in range(begin, end):
+                budget.charge("predicates", 2)
+                for start, finish, owner in plane.lines[coordinates[offset]]:
+                    budget.charge("predicates", 2)
+                    if start <= fixed <= finish:
+                        budget.charge("predicates", self.words)
+                        result |= self.bits[owner]
+        return result
+
+    def pairs(
+        self, geometries: list[_Geometry], changed: list[bool], budget: WorkBudget
+    ) -> Iterator[tuple[int, int]]:
+        changed_indices = [i for i, moved in enumerate(changed) if moved]
+        budget.charge("predicates", len(changed))
+        for owner in changed_indices:
+            for segment in self.paths[owner]:
+                self._remove(segment, owner, budget)
+            self.paths[owner] = geometries[owner].segments
+        # Only unchanged and already inserted changed owners are visible, so
+        # each changed/changed pair is visited once, by its later endpoint.
+        for owner in changed_indices:
+            partners = 0
+            for segment in geometries[owner].segments:
+                axis = self._axis(segment)
+                b, c = _RUN_FIXED_AXES[axis]
+                key = segment.lo[b], segment.lo[c]
+                partners |= self._partners(segment, axis, key, budget)
+                self._insert(axis, key, segment.lo[axis], segment.hi[axis], owner, budget)
+            partners &= ~self.bits[owner]
+            while partners:
+                budget.charge("predicates", 1 + self.words)
+                bit = partners & -partners
+                other = bit.bit_length() - 1
+                partners ^= bit
+                yield (owner, other) if owner < other else (other, owner)
+
+
 def select(
     problem: TemplateProblem,
     budget: WorkBudget,
@@ -448,7 +600,11 @@ def select(
     fixed_occupied_cells = frozenset(fixed_owners_by_cell)
     static_cuts: set[tuple[int, Cell]] = set()
     validated_choices: dict[int, tuple[int, _Geometry, set[Cell], set[Cell]]] = {}
+    # Keep compact static certificates when SAT revisits an earlier choice.
+    # Expanded cell sets stay only on each domain's current choice.
+    validated_geometries: dict[tuple[int, int], _Geometry] = {}
     active_conflicts: set[tuple[int, int]] = set()
+    selected_runs = _SelectedRuns(len(ds))
     previous_selected: tuple[int, ...] | None = None
     neighborhood = Neighborhood(budget)
     with Cadical195(use_timer=True) as solver:
@@ -465,8 +621,22 @@ def select(
         stats.primary_variables = factors.primary_variables
         stats.auxiliary_variables = factors.top_id - factors.primary_variables
         for di, rejected in enumerate(rejected_entries):
-            for ci in members(rejected):
-                factors.exclude(di, ci)
+            factors.exclude_mask(di, rejected)
+        # Seed both encodings consistently: positive height literals alone leave
+        # default-true thresholds steering every route onto the highest plane.
+        # These are only phase preferences: every original height remains legal.
+        phases: list[int] = []
+        for index, heights in enumerate(factors.height):
+            preferred = index % len(heights)
+            budget.charge("predicates", 2 * len(heights))
+            phases.extend(
+                literal if level == preferred else -literal for level, literal in enumerate(heights)
+            )
+            for level in range(1, len(heights)):
+                threshold = factors.thresholds[index][level]
+                assert not isinstance(threshold, bool)
+                phases.append(threshold if level <= preferred else -threshold)
+        solver.set_phases(phases)
         stats.preparation_seconds = time.monotonic() - stats.started
         for _ in range(MAXIMUM_ROUNDS):
             budget.charge("assignments")
@@ -515,13 +685,22 @@ def select(
                     occupied.append(cached_choice[2])
                     off_level_occupied.append(cached_choice[3])
                     continue
-                geometry = domain._decode(choice, budget)
+                known_geometry = validated_geometries.get((di, choice))
+                geometry = known_geometry or domain._decode(choice, budget)
                 geometries.append(geometry)
                 sequence = list(cells(geometry.path.points))
                 budget.charge("audit_cells", len(sequence))
                 occupied.append(set(sequence))
                 budget.charge("predicates", len(occupied[-1]))
                 off_level_occupied.append({cell for cell in occupied[-1] if cell[2] != level})
+                if known_geometry is not None:
+                    validated_choices[di] = (
+                        choice,
+                        geometry,
+                        occupied[-1],
+                        off_level_occupied[-1],
+                    )
+                    continue
                 path_error = _path_error(geometry, budget)
                 if path_error:
                     factors.exclude(di, selected[di])
@@ -552,12 +731,12 @@ def select(
                     mask = indexes[di].occupants(cell, budget)
                     if not mask & (1 << selected[di]):
                         raise AssertionError("cell index misses selected static collision")
-                    for ci in members(mask):
-                        factors.exclude(di, ci)
+                    factors.exclude_mask(di, mask)
                     static_cuts.add((di, cell))
                     stats.static_cuts += 1
                     rejected = True
                 else:
+                    validated_geometries[di, choice] = geometry
                     validated_choices[di] = (
                         choice,
                         geometry,
@@ -574,42 +753,39 @@ def select(
                 for i, choice in enumerate(selected)
             ]
             budget.charge("predicates", len(selected))
-            changed_indices = [i for i, moved in enumerate(changed) if moved]
-            for i in range(len(ds)):
-                partners = (
-                    range(i + 1, len(ds)) if changed[i] else (j for j in changed_indices if j > i)
-                )
-                for j in partners:
+            budget.charge("predicates", 2 * len(active_conflicts))
+            active_conflicts = {
+                (i, j) for i, j in active_conflicts if not changed[i] and not changed[j]
+            }
+            for i, j in selected_runs.pairs(geometries, changed, budget):
+                budget.charge("predicates", 2)
+                pair = i, j
+                same_level = selected_levels[i] == selected_levels[j]
+                if not same_level:
                     budget.charge("predicates", 2)
-                    pair = i, j
-                    same_level = selected_levels[i] == selected_levels[j]
-                    if not same_level:
-                        budget.charge("predicates", 2)
-                    overlap = _overlapping_cells(
-                        occupied[i],
-                        occupied[j],
-                        off_level_occupied[i],
-                        off_level_occupied[j],
-                        same_level=same_level,
-                    )
-                    cell = next(
-                        (
-                            cell
-                            for cell in sorted(overlap)
-                            if not _owned(geometries[i].path, geometries[j].path, cell, budget)
-                        ),
-                        None,
-                    )
-                    # Certify every conflict before it can justify a cut.
-                    # Clear pairs receive the independent complete-model audit
-                    # below, rather than repeating that audit on provisional models.
-                    if cell is not None and _compatible(geometries[i], geometries[j], budget):
-                        raise AssertionError("independent selected-path collision disagreement")
-                    if cell is None:
-                        active_conflicts.discard(pair)
-                    else:
-                        budget.charge("predicates")
-                        active_conflicts.add(pair)
+                overlap = _overlapping_cells(
+                    occupied[i],
+                    occupied[j],
+                    off_level_occupied[i],
+                    off_level_occupied[j],
+                    same_level=same_level,
+                )
+                collision_cell = next(
+                    (
+                        cell
+                        for cell in sorted(overlap)
+                        if not _owned(geometries[i].path, geometries[j].path, cell, budget)
+                    ),
+                    None,
+                )
+                # Certify every conflict before it can justify a cut.
+                # Clear pairs receive the independent complete-model audit
+                # below, rather than repeating that audit on provisional models.
+                if collision_cell is not None and _compatible(geometries[i], geometries[j], budget):
+                    raise AssertionError("independent selected-path collision disagreement")
+                if collision_cell is not None:
+                    budget.charge("predicates")
+                    active_conflicts.add(pair)
             previous_selected = tuple(selected)
             conflicts = sorted(active_conflicts)
             stats.last_conflict_pairs = len(conflicts)
@@ -632,7 +808,7 @@ def select(
                     stats.guard_variables = factors.guard_count
                     stats.auxiliary_variables = factors.top_id - factors.primary_variables
                 if not emitted:
-                    raise AssertionError("an existing exact family failed to exclude its witness")
+                    raise AssertionError("an existing collision cut failed to exclude its witness")
                 stats.families += 1
                 new_cuts += emitted
                 # Re-solve before learning more conflicts incident to this pair.
