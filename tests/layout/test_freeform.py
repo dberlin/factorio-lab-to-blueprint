@@ -8,6 +8,7 @@ would let a rates regression masquerade as a layout one.
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import itertools
 import math
 import random
@@ -21263,10 +21264,9 @@ def _capture_can_junction(
 ) -> list[tuple[_Canvas, Callable[[int, int, int], bool]]]:
     """Hand the test `_route_all`'s live search canvas and `_can_junction` gate.
 
-    It is a closure, so the only way to hold one is to intercept somewhere it
-    is passed by value, and `_ends` hands it to `_merge_frontier` on every
-    endpoint query.  A live handle is what lets one probe ask the same
-    question inside run 1, inside run 2, and after the pass.
+    The endpoint predicate owns geometry for just one frontier. Extract its
+    canonical gate and projection policy instead: these probes deliberately
+    query live admission inside run 1, inside run 2, and after the pass.
     """
     captured: list[tuple[_Canvas, Callable[[int, int, int], bool]]] = []
     original = routing_domain._merge_frontier
@@ -21279,7 +21279,14 @@ def _capture_can_junction(
         **kwargs: object,
     ) -> set[Cell]:
         if junctionable is not None:
-            captured.append((merge_canvas, junctionable))
+            context = inspect.getclosurevars(junctionable).nonlocals
+            can_junction = cast(Callable[..., bool], context["_can_junction"])
+            project_taps = cast(frozenset[Cell], context["project_taps"])
+
+            def live_gate(x: int, y: int, level: int) -> bool:
+                return can_junction(x, y, level, project=(x, y, level) in project_taps)
+
+            captured.append((merge_canvas, live_gate))
         return original(
             merge_canvas,
             merge_paths,

@@ -14,6 +14,12 @@ setup(
                 language="c++",
                 extra_compile_args=["-std=c++17", "-ffp-contract=off"],
             ),
+            Extension(
+                "flab2bp.layout._junction_neighborhood",
+                ["src/flab2bp/layout/_junction_neighborhood.pyx"],
+                language="c++",
+                extra_compile_args=["-std=c++17"],
+            ),
             # `-ffp-contract=off` forbids fusing `a * b + c` into an FMA.  The
             # kernel has to round exactly where the Python reference rounds, and
             # an FMA rounds *less* -- which would disagree at the boundary, the

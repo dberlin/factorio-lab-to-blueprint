@@ -1221,31 +1221,23 @@ def test_a_job_is_capped_at_its_own_budget_when_it_starts_not_when_the_round_did
 
 def test_a_budget_too_small_to_fund_a_round_still_attempts_the_seed_round(
     chain_spec: BuildSpec,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The seed round is never refused for funding, even under the reserve.
+    """A reserve larger than the wall must not leave seed blocks unattempted."""
 
-    At 1.0 s the settlement reserve alone (5.0 s) exceeds the whole budget --
-    the OLD pre-attempt funding check would have refused here before a
-    placer ever saw a block.  The new rule floors the seed round's share to
-    `BLOCK_BUDGET_MIN_S` and runs it anyway; each block's own deadline
-    (still clipped to the parent's) is what actually refuses it, and the
-    build then runs out of the zero re-cut rounds this budget's wall allows.
+    def always_refuse(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        return (
+            {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
+            None,
+        )
 
-    THE REAL SPAWNED POOL IS DELIBERATE HERE, and it is the one test in this
-    file that must NOT set `_executor_factory = ThreadPoolExecutor` (final
-    review raised the omission as an oversight; it is not).  What makes the
-    refusal deterministic is that a spawned `ProcessPoolExecutor`'s start-up
-    alone outlasts the 1.0 s parent deadline every block's own clock is
-    clipped to, so every block refuses on time and the build lands on the
-    out-of-re-cut-rounds refusal this asserts.  On threads there is no
-    start-up to outlast it: `chain_spec` is four machines, the real placers
-    finish inside the second, and this test PLACES instead of refusing --
-    measured, not supposed.  Swapping the pool would not make the test cheaper,
-    it would make it assert the opposite of its own name on a fast box and
-    flip back on a loaded one.
-    """
-    with pytest.raises(NoValidLayout, match=r"out of re-cut round\(s\)"):
-        _layout().lay_out(chain_spec, time_budget_s=1.0)
+    monkeypatch.setattr(strategy, "_solve_block", always_refuse)
+    layout = _layout()
+    layout._executor_factory = ThreadPoolExecutor
+    with pytest.raises(NoValidLayout) as caught:
+        layout.lay_out(chain_spec, time_budget_s=1.0)
+
+    assert caught.value.stats["blocks_unattempted"] == 0.0
 
 
 def test_a_dead_pool_is_a_refusal_not_a_crash(chain_spec: BuildSpec) -> None:

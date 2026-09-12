@@ -50,6 +50,7 @@ from flab2bp.layout import (
     projection_world,
     slots,
 )
+from flab2bp.layout._junction_neighborhood import JunctionNeighborhood
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import Facing, NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.buildings import Buildings, MutableBuildings, bounds_of
@@ -6533,7 +6534,14 @@ def _route_all(
             for member in _splitter_stack_geometry(*candidate)
         )
 
-    def _can_junction(x: int, y: int, level: int, *, project: bool = True) -> bool:
+    def _can_junction(
+        x: int,
+        y: int,
+        level: int,
+        *,
+        project: bool = True,
+        neighborhood: JunctionNeighborhood | None = None,
+    ) -> bool:
         cell = (x, y, level)
         planned_here = planned_taps.get(cell, ())
         if len(planned_here) >= 2:
@@ -6551,13 +6559,20 @@ def _route_all(
         # stay as they are, now over the cluster's own taps alone.
         if cell in canvas.guard and not planned_here and not relaxed_junctions:
             return False
+        peers: Iterable[Cell] = planned_taps
+        if neighborhood is not None:
+            try:
+                peers = neighborhood.nearby(cell)
+            except TimeoutError as error:
+                # Interrupted filtering is not evidence of impossibility.
+                raise _PreparationDeadline from error
         if any(
             (tx, ty, tz) != cell
             and abs(tx - x) <= 3
             and abs(ty - y) <= 3
             and abs(tz - level) <= 3
             and _junction_stacks_collide((tx, ty, tz), cell)
-            for tx, ty, tz in planned_taps
+            for tx, ty, tz in peers
         ):
             return False
         got = junction_ok.get(cell)
@@ -7070,11 +7085,33 @@ def _route_all(
                 and catalog.is_belt(canvas.buildings[feeder].item_id)
             ):
                 source_feeds[sibling] = feeder
+        # This owner lives for exactly one frontier. No tap is staked or
+        # unstaked while _merge_frontier calls its admission predicate.
+        # Construct lazily so an empty/ranged/witness-expired frontier does
+        # not prepare geometry that it will never query.
+        neighborhood: JunctionNeighborhood | None = None
+
+        def frontier_junctionable(x: int, y: int, level: int) -> bool:
+            nonlocal neighborhood
+            if neighborhood is None:
+                try:
+                    neighborhood = JunctionNeighborhood(planned_taps, deadline=deadline)
+                except TimeoutError as error:
+                    # Incomplete preparation publishes no admission answer.
+                    raise _PreparationDeadline from error
+            return _can_junction(
+                x,
+                y,
+                level,
+                project=(x, y, level) in project_taps,
+                neighborhood=neighborhood,
+            )
+
         frontier = _merge_frontier(
             canvas,
             paths,
             siblings,
-            lambda x, y, level: _can_junction(x, y, level, project=(x, y, level) in project_taps),
+            frontier_junctionable,
             provenance=source_provenance,
             belt_prefab=(belt_id, belt_model),
             tentative_ok=tentative_ok,
