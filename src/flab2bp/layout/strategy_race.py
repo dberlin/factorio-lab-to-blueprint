@@ -38,9 +38,10 @@ if TYPE_CHECKING:
     from multiprocessing.connection import _ConnectionBase
 
     from flab2bp.layout import validate
+    from flab2bp.layout.compact_seed import CompactSeedConfig
     from flab2bp.layout.freeform import FreeformLayout
     from flab2bp.layout.hierarchy.strategy import HierarchicalLayout
-    from flab2bp.layout.sequence_solver import SequencePairLayout
+    from flab2bp.layout.sequence_solver import SequencePairLayout, SequenceSolverConfig
     from flab2bp.layout.transport_routing.runtime import TransportRoutingKernel
 
     class _OwnedQueueEndpoints(Protocol):
@@ -59,14 +60,12 @@ from flab2bp.layout.base import (
     PlacementCompletion,
     ProjectionFailureRecord,
 )
-from flab2bp.layout.compact_seed import CompactSeedConfig
 from flab2bp.layout.observe import (
     TRACE_CHILD_SAMPLE_INTERVAL_S,
     SampledObserver,
     SearchObserver,
 )
 from flab2bp.layout.observe_channel import install_trace_channel, trace_channel
-from flab2bp.layout.sequence_solver import SequenceSolverConfig, _validate_sequence_islands
 from flab2bp.layout.strip_variants import StripInstanceId
 from flab2bp.spec import BuildSpec
 
@@ -347,8 +346,9 @@ class _StrategyRaceRequest:
     workers: int
     arrangements: int | None
     sequence_islands: int
-    config: SequenceSolverConfig
-    compact_seed_config: CompactSeedConfig
+    #: Only the sequence-pair backend consumes these concrete configurations.
+    config: SequenceSolverConfig | None
+    compact_seed_config: CompactSeedConfig | None
     share: bool
     #: Whether a trace queue was installed for this race. A plain bool, not the
     #: queue itself: a ``multiprocessing.Queue`` cannot be pickled as a task
@@ -598,17 +598,16 @@ def _build_layout(
     before it publishes, and trace must never inherit that cost. All three
     hooks -- portfolio, publish, and observer -- coexist.
     """
-    from flab2bp.layout.freeform import FreeformLayout
-    from flab2bp.layout.hierarchy.strategy import HierarchicalLayout
-    from flab2bp.layout.sequence_solver import SequencePairLayout
-    from flab2bp.layout.transport_routing.runtime import TransportRoutingKernel
-
     if request.strategy == "transport-routing":
+        from flab2bp.layout.transport_routing.runtime import TransportRoutingKernel
+
         return TransportRoutingKernel(
             band_policy=request.band_policy,
             belt_rules=request.belt_rules,
         )
     if request.strategy == "hierarchical":
+        from flab2bp.layout.hierarchy.strategy import HierarchicalLayout
+
         return HierarchicalLayout(
             band_policy=request.band_policy,
             belt_rules=request.belt_rules,
@@ -616,6 +615,8 @@ def _build_layout(
         )
 
     if request.strategy == "freeform":
+        from flab2bp.layout.freeform import FreeformLayout
+
         return FreeformLayout(
             band_policy=request.band_policy,
             workers=request.workers,
@@ -625,6 +626,8 @@ def _build_layout(
             publish_incumbent=publish_incumbent,
             observer=observer,
         )
+    from flab2bp.layout.sequence_solver import SequencePairLayout
+
     return SequencePairLayout(
         band_policy=request.band_policy,
         belt_rules=request.belt_rules,
@@ -963,7 +966,9 @@ def run_strategy_race(
     A validator-clean result does not stop its competitors: the pipeline keeps
     the smallest valid result, with its existing deterministic tie-breaks.
     """
+    from flab2bp.layout.compact_seed import CompactSeedConfig
     from flab2bp.layout.freeform import packing_workers
+    from flab2bp.layout.sequence_solver import SequenceSolverConfig, _validate_sequence_islands
 
     if time_budget_s <= 0:
         raise ValueError("racing requires a positive time budget")

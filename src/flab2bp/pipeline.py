@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from pathlib import Path
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast, overload
 
 from flab2bp.dsp import catalog, codec
 from flab2bp.lab.capture import UrlValidator, capture_flow_csv
@@ -48,11 +48,7 @@ from flab2bp.layout.base import (
     ProjectionFailureRecord,
     SpecInfeasible,
 )
-from flab2bp.layout.freeform import FreeformLayout
-from flab2bp.layout.hierarchy import HierarchicalLayout
 from flab2bp.layout.observe import SearchObserver
-from flab2bp.layout.sequence_solver import SequencePairLayout, _validate_sequence_islands
-from flab2bp.layout.transport_routing.strategy import TransportRoutingLayout
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.rates.candidates import (
     DEFAULT_CANDIDATE_POLICIES,
@@ -62,6 +58,12 @@ from flab2bp.rates.candidates import (
 from flab2bp.rates.machine_choice import MachineRank
 from flab2bp.rates.solve import InfeasibleError, UnsupportedObjectiveError, supplied_rates
 from flab2bp.spec import BuildSpec, BuildSpecSet
+
+if TYPE_CHECKING:
+    from flab2bp.layout.freeform import FreeformLayout
+    from flab2bp.layout.hierarchy import HierarchicalLayout
+    from flab2bp.layout.sequence_solver import SequencePairLayout
+    from flab2bp.layout.transport_routing.strategy import TransportRoutingLayout
 
 ExplicitStrategyName = Literal["freeform", "sequence-pair", "hierarchical", "transport-routing"]
 StrategyName = Literal["best", "freeform", "sequence-pair", "hierarchical", "transport-routing"]
@@ -217,6 +219,43 @@ def _strategy_names(strategy: StrategyName) -> tuple[ExplicitStrategyName, ...]:
     return (strategy,)
 
 
+@overload
+def _layout_type(strategy: Literal["freeform"]) -> type[FreeformLayout]: ...
+
+
+@overload
+def _layout_type(strategy: Literal["sequence-pair"]) -> type[SequencePairLayout]: ...
+
+
+@overload
+def _layout_type(strategy: Literal["hierarchical"]) -> type[HierarchicalLayout]: ...
+
+
+@overload
+def _layout_type(strategy: Literal["transport-routing"]) -> type[TransportRoutingLayout]: ...
+
+
+def _layout_type(
+    strategy: ExplicitStrategyName,
+) -> type[FreeformLayout | SequencePairLayout | HierarchicalLayout | TransportRoutingLayout]:
+    """Resolve only the selected backend's dependencies, without constructing it."""
+    if strategy == "transport-routing":
+        from flab2bp.layout.transport_routing.strategy import TransportRoutingLayout
+
+        return TransportRoutingLayout
+    if strategy == "hierarchical":
+        from flab2bp.layout.hierarchy import HierarchicalLayout
+
+        return HierarchicalLayout
+    if strategy == "freeform":
+        from flab2bp.layout.freeform import FreeformLayout
+
+        return FreeformLayout
+    from flab2bp.layout.sequence_solver import SequencePairLayout
+
+    return SequencePairLayout
+
+
 def _new_layout(
     strategy: ExplicitStrategyName,
     *,
@@ -237,23 +276,23 @@ def _new_layout(
     processes and the search-visualization branch deferred that view (G6).
     """
     if strategy == "transport-routing":
-        return TransportRoutingLayout(belt_rules=belt_rules, band_policy=band_policy)
+        return _layout_type(strategy)(belt_rules=belt_rules, band_policy=band_policy)
     if strategy == "hierarchical":
         # No island argument: islands live inside the sequence-pair backend, and
         # the hierarchical one runs its own children with one each.
-        return HierarchicalLayout(
+        return _layout_type(strategy)(
             belt_rules=belt_rules,
             band_policy=band_policy,
             workers=workers,
         )
     if strategy == "freeform":
-        return FreeformLayout(
+        return _layout_type(strategy)(
             belt_rules=belt_rules,
             band_policy=band_policy,
             workers=workers,
             observer=observer,
         )
-    return SequencePairLayout(
+    return _layout_type(strategy)(
         belt_rules=belt_rules,
         islands=sequence_islands,
         band_policy=band_policy,
@@ -676,6 +715,8 @@ def build(
     # An EXPLICIT request is judged before it is resolved, so an illegal one is
     # refused rather than quietly replaced by the default.
     if sequence_islands is not None:
+        from flab2bp.layout.sequence_solver import _validate_sequence_islands
+
         _validate_sequence_islands(sequence_islands)
         # Islands now live INSIDE the sequence-pair racer, so `best` may ask for
         # them: the raced sequence-pair child constructs its own
@@ -863,6 +904,10 @@ def build(
     # Counted here, after the flow filter, so a progress report never promises a
     # pair that was already dropped.
     total_pairs = len(spec_set.candidates) * len(wanted)
+    # Dependency imports preceded every attempt clock when all backends were
+    # eager. Preserve that scope without loading unrelated explicit strategies.
+    for sname in wanted:
+        _layout_type(sname)
 
     attempts: list[Attempt] = []
     refused: list[LayoutAttemptFailure] = []

@@ -28,21 +28,62 @@ from .routing import RoutingRun, TemplateConstructor
 _BOUNDARY_CLEARANCE = 2 + 1 + 2
 
 
+def _tree_rows(
+    inventory: Inventory,
+    families: dict[int, list[TransportDemand]],
+    strip_belts: dict[int, list[int]],
+    nodes: dict[int, list[int]],
+    side: int,
+    budget: WorkBudget,
+) -> dict[int, int]:
+    """Seat complete trees beside a module when their fixed access fits there."""
+    rows: dict[int, int] = {}
+    for strip, belts in nodes.items():
+        module = inventory.modules[strip]
+        next_row = 2
+        for belt in belts:
+            endpoint = families[belt][0].source if side > 0 else families[belt][0].sink
+            assert endpoint is not None
+            extent = junctions.tree_extent(len(families[belt]))
+            x = endpoint.x + 4 * side
+            beside = x - 2 >= module.width if side > 0 else x + 2 < 0
+            row = max(next_row, 2 if beside else module.height + 2)
+            other_rows = []
+            for other in strip_belts[strip]:
+                if other == belt:
+                    continue
+                port = families[other][0].source if side > 0 else families[other][0].sink
+                assert port is not None
+                other_rows.append(port.y)
+            while True:
+                budget.check()
+                # Reserve every directed dock, including unused ones, and the
+                # ranked ground approaches on this side of the module.
+                if not any(row - 2 <= y <= row + extent - 4 for y in other_rows) and not (
+                    row <= endpoint.y <= row + extent - 6
+                ):
+                    break
+                row += 1
+            rows[belt] = row
+            next_row = row + extent
+    return rows
+
+
 def _sink_terminals(
     constructor: Constructor,
-    inventory: Inventory,
     sink_families: dict[int, list[TransportDemand]],
     physical: dict[int, rd._Port],
     rates: dict[int, Fraction],
     origins: dict[int, tuple[int, int]],
     sink_access: dict[int, int],
-    sink_nodes: dict[int, list[int]],
+    node_rows: dict[int, int],
 ) -> dict[int, Terminal]:
     sinks: dict[int, Terminal] = {}
     for belt, family in sink_families.items():
         port = physical[belt]
         if len(family) == 1:
-            if distance := (2 * sink_access[belt]):
+            distance = 2 * sink_access[belt] if family[0].role == "local-coating" else 0
+            if distance:
                 terminal = constructor.belt((port.x - distance, port.y, port.z), family[0].item)
                 constructor.connect(
                     terminal,
@@ -57,14 +98,9 @@ def _sink_terminals(
             continue
         endpoint = family[0].sink
         assert endpoint is not None
-        rank = sink_nodes[endpoint.strip].index(belt)
-        offset = sum(
-            junctions.tree_extent(len(sink_families[previous]))
-            for previous in sink_nodes[endpoint.strip][:rank]
-        )
         node = constructor.splitter(
             port.x - 4,
-            origins[endpoint.strip][1] + inventory.modules[endpoint.strip].height + 2 + offset,
+            origins[endpoint.strip][1] + node_rows[belt],
             family[0].item,
         )
         outlet = constructor.dock(node, (1, 0), feed=False)
@@ -269,11 +305,9 @@ def _bank_shelves(
         supply_bounds = plan_proliferator_banks(inventory, limit).bounds
         supply_width = 0 if supply_bounds is None else max(0, 10 - supply_bounds[0])
         supply_height = 0 if supply_bounds is None else 4 + supply_bounds[3]
-        # The boxes already contain every mandatory launch/landing cell.
-        # One additional column carries a through track between adjacent banks.
-        used_width = (
-            sum(bank_widths) + len(banks) - 1 + boundary.width + _BOUNDARY_CLEARANCE + supply_width
-        )
+        # The disjoint boxes already contain every mandatory launch/landing cell.
+        # Their shared boundary can supply a candidate track without an empty column.
+        used_width = sum(bank_widths) + boundary.width + _BOUNDARY_CLEARANCE + supply_width
         used_height = max(max(used_heights), boundary.height, supply_height)
         score = (used_width * used_height, used_height, used_width, limit)
         if used_width <= width and used_height <= height + 12 and (best is None or score < best):
@@ -332,7 +366,11 @@ def construct(
         endpoint = family[0].source
         assert endpoint is not None
         source_access[belt] = len(strip_sources[endpoint.strip])
-        extension = 2 * source_access[belt]
+        # Global singleton paths choose their own exact adapter in the solver.
+        # Only fixed local interfaces require the ranked ground prefix.
+        extension = (
+            2 * source_access[belt] if len(family) > 1 or family[0].role == "local-coating" else 0
+        )
         if family[0].role == "local-coating":
             extension += max(0, inventory.modules[endpoint.strip].width - endpoint.x)
         source_extensions[belt] = extension
@@ -358,13 +396,20 @@ def construct(
         strip_sinks[endpoint.strip].append(belt)
         if len(family) > 1:
             sink_nodes[endpoint.strip].append(belt)
+    source_rows = _tree_rows(inventory, source_families, strip_sources, source_nodes, 1, budget)
+    sink_rows = _tree_rows(inventory, sink_families, strip_sinks, sink_nodes, -1, budget)
     sizes: list[tuple[int, int]] = []
     west_edges: list[int] = []
     for i, module in enumerate(inventory.modules):
-        access = sum(junctions.tree_extent(len(source_families[belt])) for belt in source_nodes[i])
-        access = max(
-            access, sum(junctions.tree_extent(len(sink_families[belt])) for belt in sink_nodes[i])
-        )
+        height = module.height
+        for belt in source_nodes[i]:
+            height = max(
+                height, source_rows[belt] + junctions.tree_extent(len(source_families[belt])) - 2
+            )
+        for belt in sink_nodes[i]:
+            height = max(
+                height, sink_rows[belt] + junctions.tree_extent(len(sink_families[belt])) - 2
+            )
         # Pack the complete fixed access envelope, not just strip/coater bodies.
         # Ranked approaches must not meet a neighboring bank's launch risers.
         west, east = 0, module.width
@@ -380,15 +425,19 @@ def construct(
             endpoint = sink_families[belt][0].sink
             assert endpoint is not None
             reach = max(
-                2 * (sink_access[belt] + 1),
+                (
+                    2 * (sink_access[belt] + 1)
+                    if len(sink_families[belt]) > 1
+                    or sink_families[belt][0].role == "local-coating"
+                    else 2
+                ),
                 6 if len(sink_families[belt]) > 1 else 0,
             )
             west = min(west, endpoint.x - reach)
         west_edges.append(west)
-        # The last junction is at height + 2 + 6 * (nodes - 1), and
-        # its final north leaf ends two cells later. One spare row remains
-        # in `access`; strips without junctions need no extra south apron.
-        sizes.append((east - west, module.height + access))
+        # Every tree's actual side seat includes its complete directed access
+        # envelope; no full-width apron is needed below an independently seated tree.
+        sizes.append((east - west, height))
     band_height, band_width = max(
         (height, width)
         for height, width in BAND_DIMENSIONS
@@ -405,7 +454,7 @@ def construct(
         for i in bank:
             origins[i] = (x - west_edges[i], y)
             y += sizes[i][1]
-        x += width + 1
+        x += width
     x_tracks = tuple(
         ((left[1] + right[0]) // 2 for left, right in zip(bank_edges, bank_edges[1:], strict=False))
     )
@@ -522,15 +571,8 @@ def construct(
             continue
         endpoint = family[0].source
         assert endpoint is not None
-        rank = source_nodes[endpoint.strip].index(belt)
         ox, oy = origins[endpoint.strip]
-        offset = sum(
-            junctions.tree_extent(len(source_families[previous]))
-            for previous in source_nodes[endpoint.strip][:rank]
-        )
-        node = constructor.splitter(
-            port.x + 4, oy + inventory.modules[endpoint.strip].height + 2 + offset, family[0].item
-        )
+        node = constructor.splitter(port.x + 4, oy + source_rows[belt], family[0].item)
         inlet = constructor.dock(node, (-1, 0), feed=True)
         constructor.flight(
             Terminal(port, (1, 0)),
@@ -546,7 +588,7 @@ def construct(
         )
         sources.update(((d.ordinal, leaf) for d, leaf in zip(family, leaves, strict=True)))
     sinks = _sink_terminals(
-        constructor, inventory, sink_families, physical, rates, origins, sink_access, sink_nodes
+        constructor, sink_families, physical, rates, origins, sink_access, sink_rows
     )
     supply_sources, supply_roots = _proliferator_terminals(constructor, inventory, bank_height)
     flight_index = 0

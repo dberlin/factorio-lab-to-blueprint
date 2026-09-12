@@ -9,8 +9,6 @@ from flab2bp.dsp import catalog
 from flab2bp.layout import strategy_race
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout, Placement
-from flab2bp.layout.compact_seed import CompactSeedConfig
-from flab2bp.layout.sequence_solver import SequenceSolverConfig
 from flab2bp.spec import BuildSpec
 
 _DEFAULT_BAND_POLICY = BandPolicy("portable")
@@ -62,8 +60,8 @@ class TransportRoutingLayout:
             workers=1,
             arrangements=None,
             sequence_islands=1,
-            config=SequenceSolverConfig(),
-            compact_seed_config=CompactSeedConfig(),
+            config=None,
+            compact_seed_config=None,
             share=False,
         )
         futures, executor = strategy_race._pool_submit((request,), {})

@@ -239,7 +239,7 @@ def entry_rejections(
     fixed_cells: list[set[Cell]],
     budget: WorkBudget,
 ) -> list[int]:
-    """Exclude only candidates whose actual ground adapter or riser is blocked."""
+    """Exclude exact blocked entries and middle segments outside routing bounds."""
     fixed_at: dict[Cell, list[FixedPath]] = {}
     for path, occupied in zip(problem.fixed_paths, fixed_cells, strict=True):
         for cell in occupied:
@@ -250,6 +250,10 @@ def entry_rejections(
 
     def forbidden(cell: Cell, representative: FixedPath, owned_cells: set[Cell]) -> bool:
         budget.charge("predicates")
+        if problem.bounds is not None:
+            min_x, min_y, max_x, max_y = problem.bounds
+            if not (min_x <= cell[0] <= max_x and min_y <= cell[1] <= max_y):
+                return True
         if cell in problem.blocked and cell not in owned_cells:
             return True
         return any(
@@ -264,6 +268,18 @@ def entry_rejections(
         }
 
         rejected = 0
+        if problem.bounds is not None:
+            all_levels = (1 << len(index.domain.levels)) - 1
+            for (axis, fixed), row in index.middle.items():
+                inside_fixed = problem.bounds[1 - axis] <= fixed <= problem.bounds[3 - axis]
+                for position in range(len(row.coordinates) - 1):
+                    budget.charge("predicates")
+                    if (
+                        not inside_fixed
+                        or row.coordinates[position] < problem.bounds[axis]
+                        or row.coordinates[position + 1] - 1 > problem.bounds[axis + 2]
+                    ):
+                        rejected |= row.masks[position] * all_levels
         for cell, mask in index.ground.items():
             if forbidden(cell, representative, owned_cells):
                 rejected |= mask
@@ -717,10 +733,13 @@ def select(
                 bad_cells = (occupied[-1] - owned) & problem.blocked
                 if problem.bounds is not None:
                     min_x, min_y, max_x, max_y = problem.bounds
-                    budget.charge("predicates", len(occupied[-1]))
+                    # An orthogonal segment lies in a closed rectangle exactly
+                    # when its vertices do. Retain each outside vertex as a real
+                    # occupied-cell witness for the same sound static cuts.
+                    budget.charge("predicates", len(geometry.path.points))
                     bad_cells.update(
                         cell
-                        for cell in occupied[-1]
+                        for cell in geometry.path.points
                         if not (min_x <= cell[0] <= max_x and min_y <= cell[1] <= max_y)
                     )
                 for cell in occupied[-1] & fixed_occupied_cells:
