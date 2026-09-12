@@ -67,6 +67,7 @@ def _keepout(model_index: int, yaw: float) -> tuple[tuple[int, int, int], ...]:
     return tuple(sorted(dsp_colliders.belt_keepout_offsets(model_index, yaw)))
 
 
+@lru_cache(maxsize=4096, typed=True)
 def keepout_cells(
     x: int,
     y: int,
@@ -80,6 +81,9 @@ def keepout_cells(
     ``level`` is the member's blueprint anchor, not necessarily the carry
     level.  Model 40 carries its straight run on ports one level above that
     anchor and its orthogonal branch on the anchor plane.
+
+    Only immutable translated geometry is retained. Selection, reservations,
+    ownership, and whether a cell is currently admissible remain caller state.
     """
     model = (
         catalog.building(catalog.SPLITTER_ID).model_index if model_index is None else model_index
