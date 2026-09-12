@@ -12785,6 +12785,30 @@ class TestPowerClaimsItsGroundBeforeRouting:
                 f"{(x, y)} was placed outside the core, onto ground the input runs need"
             )
 
+    def test_power_plan_preserves_an_elevated_terminal_corridor(self) -> None:
+        bounds = (0, 0, 10, 10)
+        canvas = _Canvas(limit=bounds)
+        key, access, exit_cell = (4, 5, 1), (5, 5, 1), (6, 5, 1)
+        corridor = routing_domain.PortAccessCorridor(
+            access, exit_cell, routing_domain.PortAccessKind.INTERNAL_ARRIVAL
+        )
+        demand = routing_domain.PortAccessDemand(
+            key, routing_domain.PortAccessKind.INTERNAL_ARRIVAL, "iron-ore", 0, 0, 1
+        )
+        routing_domain._CorridorReservations(canvas).hold({demand: corridor})
+        canvas.routing_ports = frozenset((key,))
+        before = routing_domain._astar(canvas, [exit_cell], {access}, {}, 0.0, bounds)
+        assert before.path == (exit_cell, access)
+
+        sites = _power_plan(canvas, (5, 5, 5, 5), policy=BandPolicy("portable"))
+
+        after = routing_domain._astar(canvas, [exit_cell], {access}, {}, 0.0, bounds)
+        assert after.path == before.path
+        assert routing_domain._buildings_are_powered(
+            (junction.make_splitter(5, 5),),
+            routing_domain._power_coverage_discs((), sites),
+        )
+
     def test_every_powered_tile_is_covered_by_the_plan(self) -> None:
         """The guarantee, checked as a guarantee rather than as an outcome.
 
@@ -18746,9 +18770,11 @@ def test_prepared_junction_ban_cancels_inside_cell_level_scan(
     def checked_collider(
         buildings: Sequence[PlacedBuilding],
         candidate: PlacedBuilding,
+        *,
+        geometry: dict[int, routing_domain._ColliderGeometry] | None = None,
     ) -> tuple[int, ...]:
         nonlocal checked
-        result = collider_hits(buildings, candidate)
+        result = collider_hits(buildings, candidate, geometry=geometry)
         checked = True
         return result
 

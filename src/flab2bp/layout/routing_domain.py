@@ -2148,6 +2148,7 @@ def _cancellable_junction_ban_offsets(
     centre_y = (height - 1) / 2.0
     banned: set[Cell] = set()
     obstacles = (obstacle,)
+    geometry: dict[int, _ColliderGeometry] = {}
     even_top = _splitter_stack_geometry(0, 0, 0)[-1]
     odd_top = _splitter_stack_geometry(0, 0, 1)[-1]
     for x in range(
@@ -2169,13 +2170,17 @@ def _cancellable_junction_ban_offsets(
                 # distinct member once, retaining model 40's different top.
                 even_hit = bool(
                     _building_collider_hits(
-                        obstacles, replace(even_top, x=x, y=y, z=Fraction(anchor))
+                        obstacles,
+                        replace(even_top, x=x, y=y, z=Fraction(anchor)),
+                        geometry=geometry,
                     )
                 )
                 if even_hit:
                     banned.add((x, y, anchor))
                 if anchor + 1 < levels and _building_collider_hits(
-                    obstacles, replace(odd_top, x=x, y=y, z=Fraction(anchor))
+                    obstacles,
+                    replace(odd_top, x=x, y=y, z=Fraction(anchor)),
+                    geometry=geometry,
                 ):
                     banned.add((x, y, anchor + 1))
                 if even_hit:
@@ -6941,6 +6946,7 @@ def _route_all(
         tentative_ok: bool = False,
         project_taps: frozenset[Cell] = frozenset(),
         witnessed_taps: dict[Cell, bool] | None = None,
+        witness_ports: frozenset[Cell] | None = None,
     ) -> tuple[
         list[Cell],
         set[Cell],
@@ -6973,6 +6979,9 @@ def _route_all(
                 (net.dst.x, net.dst.y, net.dst.z),
             }
         )
+        if witness_ports is not None:
+            assert witnessed_taps is not None
+            canvas.routing_ports &= witness_ports
         # THE LANE TILE IS ONLY FREE FOR THE FIRST NET TO LEAVE IT.  Its port is
         # the lane's END, which has no onward link, so the first tap merely
         # points it at the branch. Every later one finds that link in place and
@@ -7220,23 +7229,60 @@ def _route_all(
             future: dict[Cell, Cell] = {}
             checked: dict[Cell, bool] = {}
             path_cells = frozenset(path)
-            for sibling in src_group.get(index, ()):
-                if sibling in paths:
-                    continue
-                starts, _goals, sibling_offers = _ends(
-                    sibling, witnessed_taps=checked, tentative_ok=tentative_ok
+            remaining = tuple(
+                sibling for sibling in src_group.get(index, ()) if sibling not in paths
+            )
+            shared: tuple[Cell, Cell] | None = None
+            if len(remaining) > 1 and (
+                flow_limits is None
+                or all(
+                    flow_limits.rates[sibling] == flow_limits.rates[remaining[0]]
+                    for sibling in remaining[1:]
                 )
-                witnessed = False
-                for start in starts:
+            ):
+                # Prove one offer with only the reservation exemptions common
+                # to every remaining sibling. Each actual query is less
+                # restrictive. The staked topology and source family stay
+                # fixed until this transaction's finally block; an unrouted
+                # sibling owns no path or conditional guard to distinguish it.
+                common_ports: set[Cell] | None = None
+                for sibling in remaining:
+                    net = nets[sibling]
+                    ports = {
+                        (net.source.x, net.source.y, net.source.z),
+                        (net.dst.x, net.dst.y, net.dst.z),
+                    }
+                    common_ports = ports if common_ports is None else common_ports & ports
+                assert common_ports is not None
+                starts, _goals, shared_offers = _ends(
+                    remaining[0],
+                    witnessed_taps=checked,
+                    tentative_ok=tentative_ok,
+                    witness_ports=frozenset(common_ports),
+                )
+                if starts:
+                    shared = starts[0], shared_offers[2][starts[0]]
+            for sibling in remaining:
+                if _expired(deadline):
+                    return {}
+                if (
+                    shared is not None
+                    and shared[0] not in rejected_starts[sibling]
+                    and shared[1] not in rejected_source_hints[sibling]
+                ):
+                    start, tap = shared
+                else:
+                    starts, _goals, sibling_offers = _ends(
+                        sibling, witnessed_taps=checked, tentative_ok=tentative_ok
+                    )
+                    if not starts:
+                        return {}
+                    start = starts[0]
                     source = nets[sibling].source
                     tap = sibling_offers[2].get(start, (source.x, source.y, source.z))
-                    assert checked[tap]
-                    witnessed = True
-                    if tap in path_cells or not future:
-                        future = {start: tap}
-                    break
-                if not witnessed:
-                    return {}
+                assert checked[tap]
+                if tap in path_cells or not future:
+                    future = {start: tap}
             return future
         finally:
             _unstake(index)
@@ -13907,6 +13953,8 @@ def _power_plan(
     # asked `canvas.blocked` up to LEVELS times per tile.  The set of blocked
     # columns answers the same question once, for the whole fill.
     blocked_columns = {(bx, by) for (bx, by, _level) in canvas.blocked}
+    # Power keep-outs span every level, including elevated terminal access.
+    blocked_columns.update((x, y) for x, y, _level in canvas.reserved)
 
     open_ground = np.zeros(shape, dtype=bool)
     for x in range(min_x, max_x + 1):
