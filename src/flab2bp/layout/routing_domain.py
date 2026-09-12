@@ -6898,7 +6898,7 @@ def _route_all(
                 else:
                     direct_ports.add(carry_port)
             for sibling in sorted(set(siblings) | planned_taps.get(tap, set())):
-                sibling_path = paths.get(sibling)
+                sibling_path = paths.path(sibling)
                 if not sibling_path:
                     continue
                 sibling_source = nets[sibling].source
