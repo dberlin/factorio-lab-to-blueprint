@@ -7,20 +7,10 @@ belt-collision rules that query it.
 `layout/validate.py` reaches both, from `game.belt_crossing` and
 `game.belt_collide`, in one validation pass over one `Context`.
 
-Deviation from this task's brief and from controller ruling P-8's own
-suggested fallback, found while implementing against the real source (ruling
-P-2): both assumed the two rules are handed the SAME ``previews`` object, and
-that memoizing on `id(previews)` therefore dedupes the rebuild. They are not.
-`validate.py:_belt_collide_findings` calls `_paste_previews(ctx)` -- a plain,
-unmemoized function -- independently for each of the two checks, so it builds
-a NEW `tuple[Preview, ...]` every time, even within one validation pass over
-one `ctx`. `id()`-keyed caching would never hit in production.
-
-`Preview` is `@dataclass(frozen=True)` and therefore hashable, and equal
-`ctx.placement.buildings` input produces value-equal (if not identical)
-`Preview` tuples across the two calls. This module keys its cache on the
-VALUE of ``previews`` instead of its identity, which is what actually
-achieves the dedup `_belt_collide_findings`'s real call pattern needs. A
+The validator shares one immutable preview tuple within each ``Context``.
+Other callers and later validation calls can supply distinct value-equal
+tuples, so this cache remains keyed by value rather than object identity.
+``Preview`` is ``@dataclass(frozen=True)`` and therefore hashable. A
 caller that hands an unhashable sequence (a plain `list`, which existing
 tests in `tests/dsp/test_colliders.py` do use directly against
 `_belt_overlap_candidates`) still works correctly -- it is simply never

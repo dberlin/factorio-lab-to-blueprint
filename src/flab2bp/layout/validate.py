@@ -311,6 +311,7 @@ class _Cache:
     belts_by_tile: dict[tuple[int, int], tuple[int, ...]] | None = None
     addon_area_belts: dict[tuple[PlacedBuilding, int], int | None] = field(default_factory=dict)
     addon_crossing_reach: dict[tuple[int, int, int], int] = field(default_factory=dict)
+    paste_previews: tuple[dsp_colliders.Preview, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -2916,8 +2917,12 @@ def _paste_previews(ctx: Context) -> tuple[dsp_colliders.Preview, ...]:
 
     Index-preserving, because a ``Finding`` names building indices and because
     the excusal at 147451 is expressed in preview links, which are indices too.
+    The immutable tuple is shared only by checks on this same Context.
     """
-    return tuple(
+    cached = ctx.cache.paste_previews
+    if cached is not None:
+        return cached
+    cached = tuple(
         dsp_colliders.Preview(
             b.model_index,
             *codec.tile_to_local_offset(b.x, b.y, b.z, b.width, b.height),
@@ -2931,6 +2936,8 @@ def _paste_previews(ctx: Context) -> tuple[dsp_colliders.Preview, ...]:
         )
         for i, b in enumerate(ctx.placement.buildings)
     )
+    ctx.cache.paste_previews = cached
+    return cached
 
 
 def _probe_inside(belt: dsp_colliders.Preview, other: dsp_colliders.Preview) -> bool:
