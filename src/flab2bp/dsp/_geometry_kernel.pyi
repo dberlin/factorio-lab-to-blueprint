@@ -22,6 +22,13 @@ class ProjectedBeltProbe:
     ) -> None: ...
     def __call__(self, x: float, y: float, z: float) -> Vec3: ...
 
+class ProjectedBeltInputs:
+    def __init__(
+        self,
+        previews: tuple[Preview, ...],
+        cancelled: Callable[[], bool] | None = None,
+    ) -> None: ...
+
 class ProjectedBeltScan:
     def __init__(
         self,
@@ -36,6 +43,8 @@ class ProjectedBeltScan:
         previews: Sequence[Preview],
         start: int,
         cancelled: Callable[[], bool] | None = None,
+        *,
+        _packed: ProjectedBeltInputs | None = None,
     ) -> tuple[int, tuple[int, ...]]:
         """Scan up to 256 previews, stopping on the first raw-hit belt.
 

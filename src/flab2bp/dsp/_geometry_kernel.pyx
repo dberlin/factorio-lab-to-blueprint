@@ -287,6 +287,48 @@ cdef class ProjectedBeltProbe:
         return (out[0], out[1], out[2])
 
 
+cdef struct CBeltInput:
+    bint is_belt
+    double x
+    double y
+    double z
+
+
+cdef class ProjectedBeltInputs:
+    """Owned immutable preview snapshot; no catalog or projection values."""
+    cdef tuple previews
+    cdef CBeltInput* values
+
+    def __cinit__(self, tuple previews, cancelled=None):
+        cdef Py_ssize_t count = len(previews)
+        cdef Py_ssize_t index
+        from flab2bp.dsp.planet import ProjectionCancelled
+
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        self.previews = previews
+        if <size_t>count > (<size_t>-1) // sizeof(CBeltInput):
+            raise OverflowError("preview input allocation exceeds addressable memory")
+        if count:
+            self.values = <CBeltInput*>malloc(<size_t>count * sizeof(CBeltInput))
+            if self.values == NULL:
+                raise MemoryError
+        for index in range(count):
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            preview = previews[index]
+            self.values[index].is_belt = bool(preview.is_belt)
+            if self.values[index].is_belt:
+                self.values[index].x = preview.x
+                self.values[index].y = preview.y
+                self.values[index].z = preview.z
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+
+    def __dealloc__(self):
+        free(self.values)
+
+
 cdef class ProjectedBeltScan:
     """Frame-owned packed targets; broadphase bounds still come from _belt_cells."""
     cdef ProjectedBeltProbe probe
@@ -295,11 +337,17 @@ cdef class ProjectedBeltScan:
     cdef Py_ssize_t* offsets
     cdef tuple target_indices
     cdef dict grid
+    cdef bint bounded
+    cdef double grid_lower[3]
+    cdef double grid_upper[3]
 
     def __cinit__(self, ProjectedBeltProbe probe, double radius, targets, cells, target_indices):
         cdef Py_ssize_t target_count = len(targets)
         cdef Py_ssize_t box_count = 0
         cdef Py_ssize_t index, offset = 0
+        cdef int axis
+        cdef double edge
+        cdef bint first = True
         if len(cells) != target_count or len(target_indices) != target_count:
             raise ValueError("targets, cells and target_indices must have equal lengths")
         self.probe = probe
@@ -326,12 +374,33 @@ cdef class ProjectedBeltScan:
                 self.grid.setdefault(cell, []).append(index)
         self.offsets[target_count] = offset
         self.grid = {key: tuple(indices) for key, indices in self.grid.items()}
+        # These are bounds of the existing lookup keys, not physical bounds.
+        # Restrict the shortcut to exact small integer keys: multiplying by
+        # eight and adding one cell are then exactly representable doubles.
+        self.bounded = bool(self.grid)
+        for key in self.grid:
+            if (
+                type(key) is not tuple or len(key) != 3
+                or any(type(value) is not int or abs(value) > (1 << 48) for value in key)
+            ):
+                self.bounded = False
+                break
+            for axis in range(3):
+                edge = key[axis] * 8
+                if first or edge < self.grid_lower[axis]:
+                    self.grid_lower[axis] = edge
+                if first or edge + 8.0 > self.grid_upper[axis]:
+                    self.grid_upper[axis] = edge + 8.0
+            first = False
 
     def __dealloc__(self):
         free(self.boxes)
         free(self.offsets)
 
-    def scan(self, previews, Py_ssize_t start, cancelled=None):
+    def scan(
+        self, previews, Py_ssize_t start, cancelled=None, *,
+        ProjectedBeltInputs _packed=None,
+    ):
         """Return (next offset, hits), stopping at the first raw-hit belt.
 
         At most 256 previews are examined. Cancellation is checked before each
@@ -341,6 +410,8 @@ cdef class ProjectedBeltScan:
         from flab2bp.dsp.planet import ProjectionCancelled
 
         cdef Py_ssize_t count = len(previews)
+        if _packed is not None and _packed.previews is not previews:
+            raise ValueError("packed inputs must own this exact immutable preview tuple")
         if start < 0 or start > count:
             raise ValueError("start must be within the previews sequence")
         cdef Py_ssize_t stop = start + min(256, count - start)
@@ -349,10 +420,37 @@ cdef class ProjectedBeltScan:
         for index in range(start, stop):
             if cancelled is not None and cancelled():
                 raise ProjectionCancelled
-            preview = previews[index]
-            if not preview.is_belt:
+            if _packed is None:
+                preview = previews[index]
+                if not preview.is_belt:
+                    continue
+                self.probe._probe(preview.x, preview.y, preview.z, centre)
+            else:
+                if not _packed.values[index].is_belt:
+                    continue
+                self.probe._probe(
+                    _packed.values[index].x,
+                    _packed.values[index].y,
+                    _packed.values[index].z,
+                    centre,
+                )
+            # For finite doubles in this range, canonical Python // 8.0 maps
+            # [8*k, 8*(k+1)) to k, including signed zero and subnormals.
+            # Outside one exact grid interval its original key cannot exist.
+            # Nonfinite/extreme coordinates and noncanonical keys keep the
+            # original path, including its original conversion exceptions.
+            if (
+                self.bounded
+                and fabs(centre[0]) <= 4503599627370496.0
+                and fabs(centre[1]) <= 4503599627370496.0
+                and fabs(centre[2]) <= 4503599627370496.0
+                and (
+                    centre[0] < self.grid_lower[0] or centre[0] >= self.grid_upper[0]
+                    or centre[1] < self.grid_lower[1] or centre[1] >= self.grid_upper[1]
+                    or centre[2] < self.grid_lower[2] or centre[2] >= self.grid_upper[2]
+                )
+            ):
                 continue
-            self.probe._probe(preview.x, preview.y, preview.z, centre)
             # Keep Python float floor division, including signed/subnormal
             # boundary behavior; cdivision=True must not rewrite these keys.
             key = (

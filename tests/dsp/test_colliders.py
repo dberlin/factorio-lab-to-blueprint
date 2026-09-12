@@ -1294,8 +1294,8 @@ def test_projected_belt_batch_keeps_sparse_target_ids_flags_and_rescue(
 def test_projected_belt_first_hit_precedes_later_cancellation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Scanning an entire batch before returning its first raw hit would observe
-    # the later cancellation and discard a finding that is already available.
+    # A consumer may cancel after receiving the first finding. Query setup
+    # must not determine when that external cancellation becomes visible.
     previews = (
         C.Preview(69, 13.0, 8.0, 0.0),
         C.Preview(36, 8.0, 8.0, 1.0, is_belt=True),
@@ -1303,18 +1303,18 @@ def test_projected_belt_first_hit_precedes_later_cancellation(
     )
     projection = planet.Projection(planet.bands_by_segment()[160], -130, 200, 200.0)
     compiled = geometry_kernel._compiled_projected_belt_scan
+
+    def cancelled() -> bool:
+        return stop
+
     for backend in (compiled, None):
         monkeypatch.setattr(geometry_kernel, "_compiled_projected_belt_scan", backend)
-        calls = 0
-
-        def cancelled() -> bool:
-            nonlocal calls
-            calls += 1
-            return calls > len(previews) + 2
+        stop = False
 
         findings = C.StableBeltCollisionQuery(previews).collisions(
             projection=projection, cancelled=cancelled
         )
         assert next(findings) == C.StableBeltCollision(1, 0)
+        stop = True
         with pytest.raises(planet.ProjectionCancelled):
             next(findings)

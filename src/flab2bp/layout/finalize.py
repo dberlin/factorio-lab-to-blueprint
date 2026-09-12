@@ -333,14 +333,6 @@ type _StaticFailureCache = Callable[
 
 type _FailureCache = Callable[..., ProjectionFailure | None]
 type _CoaterBoxCache = dict[tuple[colliders.Placed, planet.Projection], tuple[colliders.Box, ...]]
-type _BeltProjectionContext = tuple[
-    tuple[colliders.Preview, ...],
-    tuple[tuple[float, float], ...],
-    planet.Band,
-    int,
-    float,
-    int,
-]
 
 
 @dataclass(slots=True)
@@ -362,15 +354,9 @@ class _ProjectionCache:
     ] = field(default_factory=dict)
     coater_boxes: _CoaterBoxCache = field(default_factory=dict)
     belt_failures: dict[
-        tuple[tuple[colliders.Preview, ...], planet.Projection],
+        tuple[colliders.StableBeltCollisionQuery, planet.Projection],
         ProjectionFailure | None,
     ] = field(default_factory=dict)
-    belt_shapes: dict[tuple[colliders.Preview, ...], tuple[colliders.Preview, ...]] = field(
-        default_factory=dict
-    )
-    belt_context_failures: dict[_BeltProjectionContext, ProjectionFailure | None] = field(
-        default_factory=dict
-    )
     _sorter_misses: int = field(init=False, default=0)
     _static_misses: int = field(init=False, default=0)
     _power_misses: int = field(init=False, default=0)
@@ -390,40 +376,15 @@ class _ProjectionCache:
     ) -> ProjectionFailure | None:
         if self.cancelled is not None and self.cancelled():
             raise ProjectionCancelled
-        previews = query.previews
-        key = (previews, projection)
+        # The query owns one immutable complete preview value. Identity keeps
+        # its geometry, flags, and rescue topology together without hashing
+        # every building for every distinct latitude projection.
+        key = (query, projection)
         if key in self.belt_failures:
             return self.belt_failures[key]
-        shape = self.belt_shapes.get(previews)
-        if shape is None:
-            # Flags and link indices are part of collision rescue, not merely
-            # geometry. Preserve the complete preview except its XY position.
-            shape = tuple(replace(preview, x=0.0, y=0.0) for preview in previews)
-            self.belt_shapes[previews] = shape
-        coordinates = tuple(
-            (preview.y, projection.anchor_row + preview.x)
-            if projection.rotated
-            else (preview.x, projection.anchor_row + preview.y)
-            for preview in previews
-        )
-        # These are exactly Projection.direction's arithmetic inputs. Keep
-        # absolute longitude and raw latitude, even at the poles: congruent
-        # configurations need not have identical floating-point predicates.
-        context = (
-            shape,
-            coordinates,
-            projection.band,
-            projection.segment,
-            projection.radius,
-            projection.quadrant,
-        )
-        if context in self.belt_context_failures:
-            failure = self.belt_context_failures[context]
-        else:
-            failure = _projected_belt_failure(query, projection, cancelled=self.cancelled)
-            if self.cancelled is not None and self.cancelled():
-                raise ProjectionCancelled
-            self.belt_context_failures[context] = failure
+        failure = _projected_belt_failure(query, projection, cancelled=self.cancelled)
+        if self.cancelled is not None and self.cancelled():
+            raise ProjectionCancelled
         self.belt_failures[key] = failure
         return failure
 
