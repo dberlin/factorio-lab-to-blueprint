@@ -184,11 +184,9 @@ export function appendMesh(target: RibbonMesh, source: RibbonMesh): void {
  * Turns each altitude change into a short, very steep riser instead of a long
  * ramp, so a level change reads as a step up rather than a slope.
  *
- * The riser leans along travel by `RISER_LEAN` and is never exactly vertical.
- * A strictly vertical segment makes the strip's top and bottom faces coplanar
- * -- they occupy the same plane, offset only in Y -- and they z-fight into a
- * flickering fringe. The lean is far too small to see and removes the
- * degeneracy completely.
+ * Where the endpoints differ in plan, the riser leans along travel by
+ * `RISER_LEAN`. Stacked endpoints keep their exact centreline; ribbonMesh
+ * rotates the strip's thickness with travel so vertical spans stay solid.
  */
 const RISER_LEAN = 0.05;
 
@@ -198,12 +196,12 @@ export function steppedClimb(points: readonly Vec3[]): Vec3[] {
   for (let i = 1; i < points.length; i++) {
     const a = points[i - 1] as Vec3;
     const b = points[i] as Vec3;
-    if (Math.abs(b[1] - a[1]) > 0.02) {
+    const d = Math.abs(b[1] - a[1]) > 0.02 ? horizontalDir(a, b) : null;
+    if (d) {
       const mx = (a[0] + b[0]) / 2;
       const mz = (a[2] + b[2]) / 2;
-      const d = horizontalDir(a, b);
-      const ox = d ? d[0] * RISER_LEAN : 0;
-      const oz = d ? d[2] * RISER_LEAN : 0;
+      const ox = d[0] * RISER_LEAN;
+      const oz = d[2] * RISER_LEAN;
       out.push([mx - ox, a[1], mz - oz]);
       out.push([mx + ox, b[1], mz + oz]);
     }
@@ -264,12 +262,10 @@ export interface RibbonMesh {
  * every vertex so a turn is a single continuous surface rather than two boxes
  * overlapping.
  *
- * Triangles are emitted non-indexed with an explicit normal each. `pushTri`
- * reverses a triangle whose winding disagrees with that normal: the materials
- * are DoubleSide and three.js flips the shading normal on a back-facing
- * fragment, so a top face wound the wrong way is lit as though the sun were
- * under the floor. That bug is invisible in a wireframe and obvious the moment
- * anything is lit -- it made every strip read as unlit dark grey.
+ * Thickness is perpendicular to travel and the across-strip offset, not
+ * always world-up: a world-up thickness collapses vertically stacked belts
+ * into coplanar faces. Shared cross-sections keep the joins closed. Explicit
+ * outward normals let pushTri correct winding for either travel direction.
  */
 export function ribbonMesh(
   points: readonly Vec3[],
@@ -280,23 +276,43 @@ export function ribbonMesh(
   if (points.length < 2) return mesh;
 
   const offsets = mitreOffsets(points, width / 2);
-  const half = thickness / 2;
-  const lt = (i: number): Vec3 => shift(points[i] as Vec3, offsets[i] as Vec3, half);
-  const rt = (i: number): Vec3 => shift(points[i] as Vec3, negate(offsets[i] as Vec3), half);
-  const lb = (i: number): Vec3 => shift(points[i] as Vec3, offsets[i] as Vec3, -half);
-  const rb = (i: number): Vec3 => shift(points[i] as Vec3, negate(offsets[i] as Vec3), -half);
+  const depth = points.map((_, i): Vec3 => {
+    const tangent = sub(
+      points[Math.min(i + 1, points.length - 1)] as Vec3,
+      points[Math.max(i - 1, 0)] as Vec3,
+    );
+    const across = offsets[i] as Vec3;
+    const normal: Vec3 = [
+      tangent[1] * across[2],
+      tangent[2] * across[0] - tangent[0] * across[2],
+      -tangent[1] * across[0],
+    ];
+    const magnitude = length(normal);
+    return magnitude < 1e-12 ? [0, thickness / 2, 0] : scale(normal, thickness / (2 * magnitude));
+  });
+  const corner = (i: number, across: number, up: number): Vec3 => {
+    const p = points[i] as Vec3;
+    const w = offsets[i] as Vec3;
+    const d = depth[i] as Vec3;
+    return [p[0] + across * w[0] + up * d[0], p[1] + up * d[1], p[2] + across * w[2] + up * d[2]];
+  };
+  const lt = (i: number): Vec3 => corner(i, 1, 1);
+  const rt = (i: number): Vec3 => corner(i, -1, 1);
+  const lb = (i: number): Vec3 => corner(i, 1, -1);
+  const rb = (i: number): Vec3 => corner(i, -1, -1);
 
   for (let i = 0; i < points.length - 1; i++) {
     const outward = normalize(offsets[i] as Vec3);
-    pushQuad(mesh, lt(i), lt(i + 1), rt(i + 1), rt(i), UP);
-    pushQuad(mesh, lb(i), lb(i + 1), rb(i + 1), rb(i), DOWN);
+    const top = normalize(add(depth[i] as Vec3, depth[i + 1] as Vec3));
+    pushQuad(mesh, lt(i), lt(i + 1), rt(i + 1), rt(i), top);
+    pushQuad(mesh, lb(i), lb(i + 1), rb(i + 1), rb(i), negate(top));
     pushQuad(mesh, lt(i), lt(i + 1), lb(i + 1), lb(i), outward);
     pushQuad(mesh, rt(i), rt(i + 1), rb(i + 1), rb(i), negate(outward));
   }
 
   const last = points.length - 1;
-  const head = horizontalDir(points[0] as Vec3, points[1] as Vec3) ?? [0, 0, 1];
-  const tail = horizontalDir(points[last - 1] as Vec3, points[last] as Vec3) ?? head;
+  const head = normalize(sub(points[1] as Vec3, points[0] as Vec3));
+  const tail = normalize(sub(points[last] as Vec3, points[last - 1] as Vec3));
   pushQuad(mesh, lt(0), rt(0), rb(0), lb(0), negate(head));
   pushQuad(mesh, lt(last), rt(last), rb(last), lb(last), tail);
   return mesh;
@@ -527,9 +543,6 @@ function horizontalDir(a: Vec3, b: Vec3): Vec3 | null {
 }
 function perpendicular(d: Vec3): Vec3 {
   return [d[2], 0, -d[0]];
-}
-function shift(p: Vec3, offset: Vec3, dy: number): Vec3 {
-  return [p[0] + offset[0], p[1] + dy, p[2] + offset[2]];
 }
 
 function pushTri(mesh: RibbonMesh, a: Vec3, b: Vec3, c: Vec3, n: Vec3): void {

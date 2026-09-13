@@ -1,5 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { expect, test } from '@rstest/core';
+import {
+  BufferGeometry,
+  Float32BufferAttribute,
+  Mesh,
+  MeshBasicMaterial,
+  Raycaster,
+  Vector3,
+} from 'three';
 import { parseBlueprint } from '../../src/format/index';
 import { arrowIsDark, runColor, type Vec3 } from '../../src/model/beltRibbons';
 import type { BeltRun } from '../../src/model/beltGraph';
@@ -194,4 +202,36 @@ test('arrows point along travel on a straight run, through an L-turn and past a 
   }
   // Something is drawn beyond the level change, so the climb does not end the run.
   expect(scene.arrows.some((a) => a.at[0] > 14)).toBe(true);
+});
+
+test('stacked ascending and descending belts remain visible from both sides at every level', () => {
+  const bp = parseBlueprint(
+    readFileSync('tests/fixtures/stacked-belt-ascent-descent.txt', 'utf8').trim(),
+  );
+  const sceneModel = buildSceneModel(bp, realCatalog);
+  const scene = buildRibbonScene(sceneModel);
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new Float32BufferAttribute(scene.positions, 3));
+  const material = new MeshBasicMaterial();
+  const mesh = new Mesh(geometry, material);
+  mesh.updateMatrixWorld();
+  try {
+    for (const x of [-2, 2]) {
+      // FrontSide is also the renderer's material default. A vertical strip
+      // must have two separate outward-facing surfaces, not a coplanar pair
+      // whose visibility reverses when the belt descends.
+      for (const height of [0.5, 1.5, 2.5]) {
+        for (const side of [-1, 1]) {
+          const ray = new Raycaster(new Vector3(x, height, side * 5), new Vector3(0, 0, -side));
+          const hit = ray.intersectObject(mesh)[0];
+          expect(hit).toBeDefined();
+          expect((hit?.point.z ?? 0) * side).toBeGreaterThan(0);
+          expect(Math.abs(hit?.point.z ?? Infinity)).toBeLessThan(0.2);
+        }
+      }
+    }
+  } finally {
+    geometry.dispose();
+    material.dispose();
+  }
 });
